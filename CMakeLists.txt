@@ -16,6 +16,7 @@ target_include_directories(cheri INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/source
     ${CMAKE_CURRENT_SOURCE_DIR}/src/diagnostics
     ${CMAKE_CURRENT_SOURCE_DIR}/src/lexer
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/parser
     ${CMAKE_CURRENT_SOURCE_DIR}/src/driver
 )
 
@@ -34,7 +35,10 @@ if(CHERI_BUILD_TESTS)
   FetchContent_MakeAvailable(Catch2)
 
   enable_testing()
-  add_executable(cheri_tests tests/unit/lexer/test_lexer.cpp)
+  add_executable(cheri_tests 
+    tests/unit/lexer/test_lexer.cpp
+    tests/unit/parser/test_parser.cpp
+  )
   target_link_libraries(cheri_tests PRIVATE cheri Catch2::Catch2WithMain)
 
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
