@@ -10,10 +10,17 @@ struct Span {
     size_t length() const { return end - start; }
 };
 
-// errors will have a message and a location
+// notes point at a second location that explains an error: "'x' was declared here"
+struct Note {
+    std::string message;
+    Span span;
+};
+
+// errors will have a message, a location, and any notes that go with it
 struct Diagnostic {
     std::string error;
     Span span;
+    std::vector<Note> notes;
 };
 
 // diagnostic engine holds source manager and a vector of diagnostics (errors)
@@ -24,21 +31,19 @@ public:
     explicit DiagnosticEngine(SourceManager& m) : manager(m) {}
     SourceManager& get_manager() { return manager; }
     
-    // calculates line and col for offset loc, then formats and prints error and line where it happened
-    std::string get_error_n(size_t n) {
-        if (n >= diagnostics.size()) return "";
-        auto [error, span] = diagnostics[n];
+    // calculates line and col for offset loc, then formats the line(s) where it happened with the span underlined, then the message
+    std::string render(std::string_view label, std::string_view message, Span span) {
         LineCol start_lc = manager.get_line_col(span.start);
         LineCol end_lc   = manager.get_line_col(span.end);
         std::string out;
-        // writes the line(s) the error happened at
+        // writes the line(s) the span is on
         if (start_lc.line == end_lc.line) {
-            out += "error at line " + std::to_string(start_lc.line) + ":\n";
+            out += std::string(label) + " at line " + std::to_string(start_lc.line) + ":\n";
         } else {
-            out += "error at lines " + std::to_string(start_lc.line)
+            out += std::string(label) + " at lines " + std::to_string(start_lc.line)
                 + "-" + std::to_string(end_lc.line) + ":\n";
         }
-        // loops through all the lines, underline portions belonging to the error span
+        // loops through all the lines, underline portions belonging to the span
         for (uint32_t ln = start_lc.line; ln <= end_lc.line; ln++) {
             std::string_view line = manager.get_line_n(ln);
             out += line;
@@ -57,14 +62,23 @@ public:
             out.append(carets, '^');
             out += '\n';
         }
-        out += error;
+        out += message;
         out += '\n';
+        return out;
+    }
+
+    // formats the nth error followed by each of its notes
+    std::string get_error_n(size_t n) {
+        if (n >= diagnostics.size()) return "";
+        auto& [error, span, notes] = diagnostics[n];
+        std::string out = render("error", error, span);
+        for (auto& note : notes) out += render("note", note.message, note.span);
         return out;
     }
     
     // makes diagnostic, adds to vector, then prints formatted error to stdout
-    void print_error(std::string_view error, Span span) {
-        diagnostics.push_back({std::string(error), span});
+    void print_error(std::string_view error, Span span, std::vector<Note> notes = {}) {
+        diagnostics.push_back({std::string(error), span, std::move(notes)});
         std::cout << get_error_n(diagnostics.size() - 1) << std::endl;
     }
 

@@ -9,6 +9,8 @@
 #include "pattern.hpp"
 
 class Stmt;
+class SemaType;
+struct Symbol;
 
 enum class ExprKind {
     // ---- Sentinel ----
@@ -56,11 +58,12 @@ enum class ExprKind {
     Chunk,
 };
 
-// an expression holds its span and the kind of expression it is
+// an expression holds its span and the kind of expression it is, and sema fills in its type
 class Expr {
 public:
     ExprKind kind;
     Span span;
+    SemaType* type = nullptr;
     Expr(ExprKind k, Span s) : kind(k), span(s) {}
     virtual ~Expr() = default;
 };
@@ -92,10 +95,11 @@ public:
     CharLiteralExpr(std::string_view l, Span s) : Expr(ExprKind::CharLiteral, s), literal(l) {}
 };
 
-// identifiers hold their name as well
+// identifiers hold their name as well, and sema fills in the symbol it resolves to
 class IdentifierExpr : public Expr {
 public:
     std::string_view name;
+    Symbol* decl = nullptr;
     IdentifierExpr(std::string_view n, Span s) : Expr(ExprKind::Identifier, s), name(n) {}
 };
 
@@ -247,15 +251,15 @@ public:
 class AnnExpr : public Expr {
 public:
     std::unique_ptr<Expr> expr;
-    std::unique_ptr<Type> type;
-    AnnExpr(std::unique_ptr<Expr> e, std::unique_ptr<Type> t, Span s) : Expr(ExprKind::Ann, s), expr(std::move(e)), type(std::move(t)) {}
+    std::unique_ptr<Type> annotation;
+    AnnExpr(std::unique_ptr<Expr> e, std::unique_ptr<Type> a, Span s) : Expr(ExprKind::Ann, s), expr(std::move(e)), annotation(std::move(a)) {}
 };
 
 // type expressions are a type in value position, which then gets called: the i32 in i32(x), the arr mut T in arr mut T(n)
 class TypeExprExpr : public Expr {
 public:
-    std::unique_ptr<Type> type;
-    TypeExprExpr(std::unique_ptr<Type> t, Span s) : Expr(ExprKind::TypeExpr, s), type(std::move(t)) {}
+    std::unique_ptr<Type> typeExpr;
+    TypeExprExpr(std::unique_ptr<Type> t, Span s) : Expr(ExprKind::TypeExpr, s), typeExpr(std::move(t)) {}
 };
 
 /*

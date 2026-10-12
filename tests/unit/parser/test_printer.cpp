@@ -290,10 +290,10 @@ public:
             }
             case ExprKind::Ann: {
                 auto& a = static_cast<const AnnExpr&>(e);
-                return "(" + expr(*a.expr, depth, false) + " :: " + type(*a.type, depth) + ")";
+                return "(" + expr(*a.expr, depth, false) + " :: " + type(*a.annotation, depth) + ")";
             }
             case ExprKind::TypeExpr:
-                return type(*static_cast<const TypeExprExpr&>(e).type, depth);
+                return type(*static_cast<const TypeExprExpr&>(e).typeExpr, depth);
             case ExprKind::Closure: {
                 auto& c = static_cast<const ClosureExpr&>(e);
                 std::string s = c.captures.empty() ? "" : "[" + list(c.captures, depth) + "] ";
