@@ -644,12 +644,20 @@ class Parser {
         return std::nullopt;
     }
 
-    // parses match name (subject) { arms }, where a subjectless match's arms are (condition) or _
+    // parses match name (equality, subject) { arms }, where a subjectless match's arms are (condition) or _, deep by default
     std::unique_ptr<Expr> parseMatch(const Token& start) {
         auto name = parseScopeName(TokenKind::LParen, TokenKind::LBrace);
         std::unique_ptr<Expr> subject = nullptr;
+        std::optional<Token> equality = std::nullopt;
         if (peek().kind == TokenKind::LParen) {
             advance();
+            if (peek().op != nullptr && peekAt(1).kind == TokenKind::Comma) {
+                equality = advance();
+                advance();
+                if (equality->kind != TokenKind::Eq && equality->kind != TokenKind::EqEq) {
+                    engine.printError("cherimoya requires a match's equality to be '=' or '==', please write 'match (=, subject)' or 'match (==, subject)'", tokSpan(*equality));
+                }
+            }
             subject = parseNested();
             expect(TokenKind::RParen, "')' after the subject in 'match (subject) { arms }'");
         }
@@ -674,7 +682,7 @@ class Parser {
             arms.push_back(MatchArm{std::move(pattern), std::move(body), Span{armStart, prevEnd()}});
         }
         expect(TokenKind::RBrace, "'}' after the arms in 'match (subject) { arms }'");
-        return std::make_unique<MatchExpr>(name, std::move(subject), std::move(arms), Span{start.loc, prevEnd()});
+        return std::make_unique<MatchExpr>(name, equality, std::move(subject), std::move(arms), Span{start.loc, prevEnd()});
     }
 
     // parses all three kinds of loop: (binder) <- source is for-each, (cond) alone is while, and nothing is infinite
@@ -746,8 +754,7 @@ class Parser {
         return tok.kind == TokenKind::Identifier || (tok.op != nullptr && tok.op->isOverloadable);
     }
 
-    // parses everything after let in [generics] (inputs) -> name -> (outputs) wit {obligations} body
-    // a member has no body, an extern ends with ;, and anything else has a block
+    // parses everything after let in [generics] (inputs) -> name -> (outputs) wit {obligations} body, where a member has no body, an extern ends with ;, and anything else has a block
     std::unique_ptr<FnDecl> parseFnDecl(const Token& start, bool member) {
         std::vector<GenericParam> generics;
         if (peek().kind == TokenKind::LBracket) generics = parseGenericParams();
