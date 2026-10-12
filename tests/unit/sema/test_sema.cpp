@@ -19,6 +19,20 @@ static size_t semaErrors(const std::string& input) {
     return diag.error_count();
 }
 
+// checks input as a whole program and returns how many warnings it produced
+static size_t semaWarnings(const std::string& input) {
+    SourceManager sm;
+    sm.load_string(input);
+    DiagnosticEngine diag(sm);
+    Lexer lexer(diag);
+    auto tokens = lexer.lex();
+    Parser parser(tokens, diag);
+    auto program = parser.parseProgram();
+    Sema sema(diag);
+    sema.check(program);
+    return diag.warning_count();
+}
+
 // checks input as a whole program and returns the type of the last symbol named name, or "" if there isn't one
 static std::string symbolType(const std::string& input, std::string_view name) {
     SourceManager sm;
@@ -60,18 +74,17 @@ TEST_CASE("Sema: name resolution and lexical scopes", "[sema]") {
     CHECK(symbolType("let x <- 1; { let x <- true; let y <- x; }", "y") == "bool");
 }
 
-// checks the passes over a list of statements: functions are visible before they're defined, function bodies see every
-// name around them, and lets elsewhere are only visible after
+// checks the passes over a list of statements: functions are visible before they're defined, function bodies see every name around them, and lets elsewhere are only visible after
 TEST_CASE("Sema: functions and the two-pass top level", "[sema]") {
-    CHECK(symbolType("let (a :: int, b :: int) -> f -> (r :: bool) { }", "f") == "(int, int) : bool");
+    CHECK(symbolType("let (a :: int, b :: int) -> f -> (r :: bool) { a < b -| }", "f") == "(int, int) : bool");
     CHECK(symbolType("let () -> f -> () { }", "f") == "() : void");
-    CHECK(symbolType("let (a :: int) -> f -> (r :: int) { let y <- a; }", "y") == "int");
+    CHECK(symbolType("let (a :: int) -> f -> (r :: int) { let y <- a; y -| }", "y") == "int");
     CHECK(semaErrors("let () -> f -> () { h(); } let () -> h -> () { }") == 0);
     CHECK(semaErrors("let () -> f -> () { let y <- LIMIT; } let LIMIT <- 4;") == 0);
     CHECK(semaErrors("let y <- LIMIT; let LIMIT <- 4;") == 1);
     CHECK(semaErrors("let (a) -> f -> () { }") == 1);
     CHECK(semaErrors("let () -> f -> () { } let () -> f -> () { }") == 1);
-    CHECK(semaErrors("let () -> f -> (r :: int) { let y <- r; }") == 1);
+    CHECK(semaErrors("let () -> f -> (r :: int) { let y <- r; 0 -| }") == 1);
 }
 
 // checks that nested functions are hoisted in their block but can't reach the locals of the function around them
@@ -87,8 +100,8 @@ TEST_CASE("Sema: refinements and contracts", "[sema]") {
     CHECK(semaErrors("let (a :: int {a >= 0}) -> f -> () { }") == 0);
     CHECK(semaErrors("let (a :: int {b >= 0}) -> f -> () { }") == 1);
     CHECK(semaErrors("let (a :: int {a}) -> f -> () { }") == 1);
-    CHECK(semaErrors("let (a :: int) -> f -> (r :: int {r >= a}) { }") == 0);
-    CHECK(semaErrors("let (a :: int) -> f -> (r :: int) wit {r >= a} { }") == 0);
+    CHECK(semaErrors("let (a :: int) -> f -> (r :: int {r >= a}) { a -| }") == 0);
+    CHECK(semaErrors("let (a :: int) -> f -> (r :: int) wit {r >= a} { a -| }") == 0);
     CHECK(semaErrors("let x :: int {p : p > 0} <- 5;") == 0);
     CHECK(semaErrors("assert (true);") == 0);
     CHECK(semaErrors("assert (1);") == 1);
@@ -121,7 +134,7 @@ TEST_CASE("Sema: operators", "[sema]") {
 
 // checks calls and pipes against the called function's signature
 TEST_CASE("Sema: calls and pipes", "[sema]") {
-    const std::string fns = "let (a :: int, b :: int) -> add -> (r :: int) { } let (a :: int) -> inc -> (r :: int) { } let () -> tick -> () { } ";
+    const std::string fns = "let (a :: int, b :: int) -> add -> (r :: int) { a + b -| } let (a :: int) -> inc -> (r :: int) { a + 1 -| } let () -> tick -> () { } ";
     CHECK(symbolType(fns + "let x <- add(1, 2);", "x") == "int");
     CHECK(symbolType(fns + "let x <- 1 |> inc |> inc;", "x") == "int");
     CHECK(symbolType(fns + "let x <- inc <| inc <| 1 + 2;", "x") == "int");
@@ -142,8 +155,32 @@ TEST_CASE("Sema: assignments", "[sema]") {
     CHECK(semaErrors("let x :: mut <- 1; x +<- 2;") == 0);
     CHECK(semaErrors("let x :: mut <- 1; x +<- 2.0;") == 1);
     CHECK(semaErrors("let x :: mut <- 1.0; x <<<- 2;") == 1);
+    CHECK(semaErrors("let x :: mut <- 1; x **<- 2;") == 1);
     CHECK(semaErrors("_ <- 1 + 2;") == 0);
     CHECK(semaErrors("let x <- _ + 1;") == 1);
+}
+
+// checks that only mut bindings and parameters can be assigned to, and that uninitialized bindings have to be mut
+TEST_CASE("Sema: mutability", "[sema]") {
+    CHECK(semaErrors("let x <- 1; x <- 2;") == 1);
+    CHECK(semaErrors("let x <- 1; x +<- 2;") == 1);
+    CHECK(semaErrors("let (n :: int) -> f -> () { n <- 2; }") == 1);
+    CHECK(semaErrors("let (n :: mut int) -> f -> () { n <- 2; }") == 0);
+    CHECK(semaErrors("let () -> f -> () { } f <- 2;") == 1);
+    CHECK(semaErrors("let x :: int <- _;") == 1);
+    CHECK(semaErrors("let x :: mut int <- _; x <- 5;") == 0);
+    CHECK(semaErrors("let x :: mut <- 1; { x <- 2; }") == 0);
+}
+
+// checks that a value can't be dropped without an explicit discard
+TEST_CASE("Sema: discards", "[sema]") {
+    const std::string fns = "let (a :: int) -> inc -> (r :: int) { a + 1 -| } let () -> tick -> () { } ";
+    CHECK(semaErrors(fns + "inc(1);") == 1);
+    CHECK(semaErrors(fns + "_ <- inc(1);") == 0);
+    CHECK(semaErrors(fns + "tick();") == 0);
+    CHECK(semaErrors(fns + "1 + 2;") == 1);
+    CHECK(semaErrors(fns + "1 |> inc;") == 1);
+    CHECK(semaErrors(fns + "y;") == 1);
 }
 
 // checks that what 4.1 can't check yet is reported once and poisons silently from there
@@ -155,5 +192,105 @@ TEST_CASE("Sema: unsupported forms", "[sema]") {
     CHECK(semaErrors("let x :: i32 <- 5; let y <- x; let z <- y;") == 1);
     CHECK(semaErrors("let s <- \"hi\";") == 1);
     CHECK(semaErrors("let p <- [1, 2];") == 1);
-    CHECK(semaErrors("let n <- match (1) { _ -> { 0 -| } };") == 1);
+    CHECK(semaErrors("let x <- 0; repeat (i) <- x { }") == 1);
+}
+
+// checks function results: every yield has to match the output, and every path has to yield
+TEST_CASE("Sema: function results", "[sema]") {
+    CHECK(semaErrors("let (a :: int) -> f -> (r :: int) { a -| }") == 0);
+    CHECK(semaErrors("let (a :: int) -> f -> (r :: int) { }") == 1);
+    CHECK(semaErrors("let (a :: int) -> f -> (r :: int) { true -| }") == 1);
+    CHECK(semaErrors("let () -> f -> () { -| }") == 0);
+    CHECK(semaErrors("let () -> f -> () { 5 -| }") == 1);
+    CHECK(semaErrors("let () -> f -> (r :: int) { -| }") == 1);
+    CHECK(semaErrors("let (a :: int) -> f -> (r :: int) { { a -| f } }") == 0);
+    CHECK(semaErrors("let (a :: int) -> f -> (r :: int) { { true -| f } 0 -| }") == 1);
+    CHECK(semaErrors("let (a :: int) -> f -> (r :: int) { y -| }") == 1);
+}
+
+// checks that bare yields go to the innermost scope, labels name an enclosing one, and nothing crosses a function
+TEST_CASE("Sema: yield targets and labels", "[sema]") {
+    CHECK(symbolType("let x <- { 5 -| };", "x") == "int");
+    CHECK(symbolType("let x <- { outer { { 5 -| outer } } -| };", "x") == "int");
+    CHECK(symbolType("let x <- { { 5 -| } -| };", "x") == "int");
+    CHECK(semaErrors("let x <- { };") == 1);
+    CHECK(semaErrors("let x <- { 5 -| outer };") == 1);
+    CHECK(semaErrors("-| ;") > 0);
+    CHECK(semaErrors("5 -|") == 1);
+    CHECK(semaErrors("let x <- { 5 -| } ;") == 0);
+    CHECK(semaErrors("let x <- { outer { { 5 -| outer } true -| } -| };") == 1);
+    CHECK(semaErrors("let () -> f -> () { let () -> g -> () { -| f } }") == 1);
+    CHECK(semaErrors("let x :: mut <- 0; let f <- 1; let () -> f2 -> () { f { x <- 1; -| f } }") == 0);
+}
+
+// checks that a scope used as a value has to yield on every path, and that every yield to it agrees
+TEST_CASE("Sema: scope values", "[sema]") {
+    CHECK(semaErrors("let x <- { 5 -| };") == 0);
+    CHECK(semaErrors("let x <- { b { { 5 -| b } let y <- 1; } -| };") == 0);
+    CHECK(semaWarnings("let x <- { b { { 5 -| b } let y <- 1; } -| };") == 1);
+    CHECK(semaErrors("let x <- { b { { 5 -| b } true -| } -| };") == 1);
+    CHECK(semaErrors("{ 5 -| }") == 1);
+    CHECK(semaErrors("_ <- { 5 -| };") == 0);
+}
+
+// checks the warning for statements that can never run, which doesn't count as an error
+TEST_CASE("Sema: unreachable statements", "[sema]") {
+    CHECK(semaErrors("let () -> f -> () { -| let x <- 1; }") == 0);
+    CHECK(semaWarnings("let () -> f -> () { -| let x <- 1; let y <- 2; }") == 1);
+    CHECK(semaWarnings("let () -> f -> () { { -| f } let x <- 1; }") == 1);
+    CHECK(semaWarnings("let () -> f -> () { let x <- 1; -| }") == 0);
+}
+
+// checks matches: arm values join into the match's type, patterns fit the subject, and the arms cover what they need to
+TEST_CASE("Sema: match", "[sema]") {
+    CHECK(symbolType("let n <- 3; let x <- match (n) { 0 -> { 10 -| } _ -> { 20 -| } };", "x") == "int");
+    CHECK(symbolType("let b <- true; let x <- match (b) { true -> { 1.0 -| } false -> { 2.0 -| } };", "x") == "float");
+    CHECK(symbolType("let n <- 3; let x <- match (n) { -1 -> { false -| } m -> { m > 0 -| } };", "x") == "bool");
+    CHECK(symbolType("let n <- 3; let x <- match { (n < 0) -> { 0 -| } _ -> { n -| } };", "x") == "int");
+    CHECK(symbolType("let n <- 3; let x <- match (=, n) { 0 -> { 1 -| } _ -> { 2 -| } };", "x") == "int");
+    CHECK(symbolType("let f <- 0.5; let x <- match (f) { 0.5 -> { 1 -| } _ -> { 2 -| } };", "x") == "int");
+    CHECK(semaErrors("let n <- 3; let x <- match (n) { 0 -> { 10 -| } _ -> { true -| } };") == 1);
+    CHECK(semaErrors("let n <- 3; let x <- match (n) { true -> { 1 -| } _ -> { 2 -| } };") == 1);
+    CHECK(semaErrors("let n <- 3; match (n) { 0 -> { } }") == 1);
+    CHECK(semaErrors("let b <- true; match (b) { true -> { } }") == 0);
+    CHECK(semaErrors("let b <- true; let x <- match (b) { true -> { 1 -| } };") == 1);
+    CHECK(semaErrors("let n <- 3; match { (n < 0) -> { } }") == 0);
+    CHECK(semaErrors("let n <- 3; let x <- match { (n < 0) -> { 0 -| } };") == 1);
+    CHECK(semaErrors("let n <- 3; match { (n) -> { } }") == 1);
+    CHECK(semaErrors("let n <- 3; let x <- match (n) { m -> { m -| } }; let y <- m;") == 1);
+    CHECK(semaWarnings("let n <- 3; match (n) { _ -> { } 0 -> { } }") == 1);
+    CHECK(semaWarnings("let b <- true; match (b) { true -> { } false -> { } _ -> { } }") == 1);
+}
+
+// checks yields that leave a match, from an arm or past it, and the paths that do or don't yield
+TEST_CASE("Sema: yields through match", "[sema]") {
+    CHECK(semaErrors("let (n :: int) -> f -> (r :: int) { match (n) { 0 -> { 1 -| f } _ -> { 2 -| f } } }") == 0);
+    CHECK(semaErrors("let (n :: int) -> f -> (r :: int) { match { (n > 100) -> { 100 -| f } } n -| }") == 0);
+    CHECK(semaErrors("let (n :: int) -> f -> (r :: int) { match { (n > 100) -> { 100 -| f } } }") == 1);
+    CHECK(semaErrors("let (n :: int) -> f -> (r :: int) { match (n) { 0 -> { 1 -| } _ -> { 2 -| } } -| }") == 0);
+    CHECK(semaErrors("let n <- 3; let x <- match (n) { 0 -> { { 5 -| match } } _ -> { 6 -| } };") == 0);
+    CHECK(semaErrors("let n <- 3; let x <- { match { (n > 0) -> { 1 -| } } 2 -| };") == 1);
+    CHECK(semaWarnings("let (n :: int) -> f -> () { match (n) { 0 -> { -| f } _ -> { -| f } } let y <- 1; }") == 1);
+}
+
+// checks loops: conditions are bools, a loop without one takes its exit's type, and a loop with one can't yield a value yet
+TEST_CASE("Sema: repeat", "[sema]") {
+    CHECK(semaErrors("let x :: mut <- 0; repeat (x < 10) { x +<- 1; }") == 0);
+    CHECK(semaErrors("let x :: mut <- 0; repeat (x) { }") == 1);
+    CHECK(semaErrors("let x :: mut <- 0; repeat (x < 10) wit {x >= 0} { x +<- 1; }") == 0);
+    CHECK(symbolType("let x <- repeat { 1 -| };", "x") == "int");
+    CHECK(symbolType("let x :: mut <- 0; let y <- repeat { x +<- 1; match { (x > 5) -> { x -| repeat } } };", "y") == "int");
+    CHECK(semaErrors("let x :: mut <- 0; repeat (x < 10) { -| repeat }") == 0);
+    CHECK(semaErrors("let x :: mut <- 0; repeat (x < 10) { 5 -| repeat }") == 1);
+    CHECK(semaErrors("let x :: mut <- 0; repeat outer (x < 10) { repeat { -| outer } }") == 0);
+    CHECK(semaErrors("-| repeat") == 1);
+    CHECK(semaWarnings("let () -> f -> () { repeat { } let y <- 1; }") == 1);
+    CHECK(semaErrors("let () -> f -> (r :: int) { repeat { } }") == 0);
+}
+
+// checks chunks, which yield like blocks and can be named
+TEST_CASE("Sema: chunk", "[sema]") {
+    CHECK(symbolType("let x <- chunk { 4 -| };", "x") == "int");
+    CHECK(semaErrors("let x <- chunk scratch { { 4 -| scratch } };") == 0);
+    CHECK(semaErrors("chunk { let y <- 1; }") == 0);
 }

@@ -139,6 +139,7 @@ static std::string dumpExpr(const Expr& e) {
             auto& m = static_cast<const MatchExpr&>(e);
             std::string s = "(match";
             if (m.name) s += ":" + std::string(m.name->text);
+            if (m.equality) s += " (eq " + std::string(m.equality->text) + ")";
             if (m.subject) s += " " + dumpExpr(*m.subject);
             for (auto& arm : m.arms) s += " (" + dumpPattern(*arm.pattern) + " -> " + dumpExpr(*arm.body) + ")";
             return s + ")";
@@ -1000,6 +1001,9 @@ TEST_CASE("Parser: match", "[parser][stmt]") {
         == "(expr (match ((guard (&& (chain a < b) ready)) -> (block (-| 1))) (_ -> (block (-| 2)))))");
     CHECK(stmtDump("match name (x) { _ -> { -| name } }") == "(expr (match:name x (_ -> (block (-| to:name)))))");
     CHECK(stmtDump("match name { _ -> { } }") == "(expr (match:name (_ -> (block))))");
+    CHECK(stmtDump("match (=, x) { 0 -> { } _ -> { } }") == "(expr (match (eq =) x (0 -> (block)) (_ -> (block))))");
+    CHECK(stmtDump("match name (==, f(x)) { _ -> { } }") == "(expr (match:name (eq ==) (call f x) (_ -> (block))))");
+    CHECK(stmtErrors("match (<, x) { _ -> { } }") == 1);
     CHECK(stmtDump("let p <- match (n % 2) { 0 -> { 1 -| } _ -> { 2 -| } };")
         == "(let p <- (match (% n 2) (0 -> (block (-| 1))) (_ -> (block (-| 2)))))");
     CHECK(stmtDump("match (x) { [x : x % 2 = 0] -> { } }") == "(expr (match x ((set x (= (% x 2) 0)) -> (block))))");

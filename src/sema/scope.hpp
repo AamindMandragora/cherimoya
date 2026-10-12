@@ -10,8 +10,7 @@ enum class SymbolKind {
     Function
 };
 
-// a symbol is one declared name, owned by sema so pointers to it never dangle
-// owner is the function body that declared it, 0 at the top of the file, so nested functions can't reach their parent's locals
+// a symbol is one declared name, physically owned by sema so pointers to it never dangle, owner numbers the function body that declared it
 struct Symbol {
     std::string_view name;
     SymbolKind kind;

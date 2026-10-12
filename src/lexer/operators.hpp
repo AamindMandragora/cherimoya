@@ -109,8 +109,7 @@ inline const std::deque<OpInfo>& operator_table() {
         add("~>",  K::ExtraOp,     C::Extra,       true,  15, 0, A::Left,  false);
         add("<~",  K::ExtraOp,     C::Extra,       true,  15, 0, A::Left,  false);
         // ---- Wrapped extra operators ----
-        // every single-symbol binary operator inside a wrapper takes that operator's level and associativity,
-        // except that a wrapped comparison never chains
+        // every single-symbol binary operator inside a wrapper takes that operator's level and associativity, except that a wrapped comparison never chains
         const std::vector<std::pair<char, char>> wrappers = {
             {'<', '>'}, {'<', '<'}, {'>', '>'}, {'|', '|'}, {'|', '>'}, {'<', '|'}, {'|', '<'}, {'>', '|'},
         };

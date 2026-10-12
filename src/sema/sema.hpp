@@ -2,6 +2,7 @@
 
 #include <deque>
 #include "scope.hpp"
+#include "target.hpp"
 #include "ast.hpp"
 
 // sema resolves every name to its symbol and gives every expression a type, writing both straight into the AST
@@ -15,6 +16,8 @@ class Sema {
     // which function body is being checked, 0 at the top of the file, and how many have been numbered so far
     size_t owner;
     size_t functions;
+    // every construct a yield could target right now, innermost last
+    std::vector<Target> targets;
 
     // reports something 4.1 parses but can't check yet, and poisons the result
     SemaType* unsupported(std::string_view what, Span span) {
@@ -45,8 +48,7 @@ class Sema {
         return static_cast<const QualifiedType&>(t).position == QualPosition::Value;
     }
 
-    // turns a parsed type into a sema type, or null when the type is left to inference (let x :: mut <- 5)
-    // refinements resolve to their base type here, and their predicates are checked once the subject is in scope
+    // turns a parsed type into a sema type, or null when the type is left to inference (let x :: mut <- 5), where refinements resolve to their base type and their predicates are checked once the subject is in scope
     SemaType* resolveType(const Type& t) {
         switch (t.kind) {
             case TypeKind::Named: {
@@ -162,7 +164,19 @@ class Sema {
                 }
                 if (fn.obligations) expectBool(*fn.obligations, "a function's obligations");
             });
-            if (fn.body) checkBlock(*fn.body);
+            // the body is the function's own scope, so a yield at its top level yields the function's result
+            if (fn.body) {
+                auto output = outputType(fn);
+                auto name = Span{fn.name.loc, fn.name.loc + fn.name.text.length()};
+                targets.push_back(Target{TargetKind::Function, fn.name.text, output, nullptr, {}, false, name});
+                bool completes = checkStmts(fn.body->stmts);
+                targets.pop_back();
+                fn.body->type = output;
+                if (completes && output != context.sema_void && !poisoned(output)) {
+                    engine.print_error("cherimoya requires every path through '" + std::string(fn.name.text) + "' to yield '" + output->to_string() + "', please end it with a yield",
+                        Span{fn.body->span.end - 1, fn.body->span.end}, {{"'" + std::string(fn.name.text) + "' is declared to yield '" + output->to_string() + "' here", name}});
+                }
+            }
         });
         owner = saved;
     }
@@ -173,8 +187,10 @@ class Sema {
         SemaType* type = declared;
         if (let.init->kind == ExprKind::Wildcard) {
             if (declared == nullptr) {
-                engine.print_error("cherimoya requires an uninitialized binding to have a type, please write 'let x :: int <- _;'", let.span);
+                engine.print_error("cherimoya requires an uninitialized binding to have a type, please write 'let x :: mut int <- _;'", let.span);
                 type = context.sema_error;
+            } else if (!isMut(*let.type)) {
+                engine.print_error("cherimoya requires an uninitialized binding to be mutable, please write 'let x :: mut int <- _;'", let.span);
             }
         } else {
             auto init = checkExpr(*let.init);
@@ -217,55 +233,251 @@ class Sema {
         return decl.kind == DeclKind::Fn ? &static_cast<FnDecl&>(decl) : nullptr;
     }
 
-    // checks a list of statements in three passes: function signatures, then everything else in order, then function bodies,
-    // so a body sees every name declared around it no matter where it is
-    void checkStmts(std::vector<std::unique_ptr<Stmt>>& stmts) {
+    // checks a list of statements in three passes: function signatures, then everything else in order, then function bodies, so a body sees every name declared around it no matter where it is, then returns whether control can reach the end of the list, warning once about statements after one that always yields
+    bool checkStmts(std::vector<std::unique_ptr<Stmt>>& stmts) {
         hoist(stmts);
+        bool completes = true;
+        bool warned = false;
         for (auto& s : stmts) {
-            if (fnOf(s.get()) == nullptr) checkStmt(*s);
+            if (fnOf(s.get()) != nullptr) continue;
+            if (!completes && !warned) {
+                engine.print_warning("cherimoya never runs this statement, since every path before it yields", s->span);
+                warned = true;
+            }
+            if (checkStmt(*s)) completes = false;
         }
         for (auto& s : stmts) {
             if (auto fn = fnOf(s.get())) checkFn(*fn);
         }
+        return completes;
     }
 
-    // checks a block in a new lexical scope
-    void checkBlock(BlockExpr& block) {
-        inScope([&] { checkStmts(block.stmts); });
-        block.type = context.sema_void;
+    // checks a block in a new lexical scope, and gives it the type of what reaches its end
+    SemaType* checkBlock(BlockExpr& block, TargetKind kind = TargetKind::Block) {
+        std::optional<std::string_view> label = std::nullopt;
+        if (block.name) label = block.name->text;
+        targets.push_back(Target{kind, label, nullptr, nullptr, {}, false, block.span});
+        bool completes = true;
+        inScope([&] { completes = checkStmts(block.stmts); });
+        auto target = targets.back();
+        targets.pop_back();
+        block.type = finish(target, completes, "this block");
+        return block.type;
     }
 
-    // checks one statement
-    void checkStmt(Stmt& s) {
+    // works out a scope's type once it's checked: what was yielded to it, joined with void if control can fall off its end, or never if nothing reaches past it at all
+    SemaType* finish(const Target& target, bool completes, std::string_view what) {
+        if (target.yielded == nullptr) return completes ? context.sema_void : context.sema_never;
+        if (!completes || target.yielded == context.sema_void || poisoned(target.yielded)) return target.yielded;
+        engine.print_error("cherimoya requires every path through " + std::string(what) + " to yield '" + target.yielded->to_string() + "', please end it with a yield",
+            Span{target.span.end - 1, target.span.end}, {{"this yield gives it '" + target.yielded->to_string() + "'", target.first}});
+        return context.sema_error;
+    }
+
+    // finds the target a yield goes to, searching outward from the innermost and never past the nearest function
+    Target* resolveTarget(const YieldStmt& y) {
+        for (size_t i = targets.size(); i-- > 0;) {
+            auto& t = targets[i];
+            if (!y.target) return &t;
+            auto kind = y.target->kind;
+            if (kind == TokenKind::KwMatch && t.kind == TargetKind::Match) return &t;
+            if (kind == TokenKind::KwRepeat && t.kind == TargetKind::Loop) return &t;
+            if (kind == TokenKind::Identifier && t.label == y.target->text) return &t;
+            if (t.kind == TargetKind::Function) break;
+        }
+        return nullptr;
+    }
+
+    // checks a yield against its target, and records its type for the target's own type
+    void checkYield(YieldStmt& y) {
+        auto value = y.value ? checkExpr(*y.value) : context.sema_void;
+        auto span = y.value ? y.value->span : y.span;
+        auto target = resolveTarget(y);
+        if (target == nullptr) {
+            if (!y.target) {
+                engine.print_error("cherimoya requires a yield to be inside a function or scope, please move it into one", y.span);
+            } else {
+                std::string name(y.target->text);
+                engine.print_error("cherimoya expected a function or scope named '" + name + "' around this yield, got none instead", {y.target->loc, y.target->loc + y.target->text.length()});
+            }
+            return;
+        }
+        if (poisoned(value)) return;
+        // a function's yields have to match its output
+        if (target->kind == TargetKind::Function) {
+            if (!compatible(target->expected, value)) {
+                engine.print_error("cherimoya expected a yield of type '" + target->expected->to_string() + "' to '" + std::string(*target->label) + "', got '" + value->to_string() + "' instead",
+                    span, {{"'" + std::string(*target->label) + "' is declared to yield '" + target->expected->to_string() + "' here", target->span}});
+            }
+            return;
+        }
+        if (target->kind == TargetKind::Loop && !target->infinite && value != context.sema_void) {
+            unsupported("yielding a value out of a loop with a header", span);
+            return;
+        }
+        contribute(*target, value, span);
+    }
+
+    // gives a target one more way to finish: the first one sets its type, and every later one has to agree
+    void contribute(Target& target, SemaType* value, Span span) {
+        if (value == context.sema_never) return;
+        if (target.yielded == nullptr || poisoned(target.yielded)) {
+            target.yielded = value;
+            target.first = span;
+        } else if (target.yielded != value && !poisoned(value)) {
+            engine.print_error("cherimoya requires every yield to one scope to have the same type, please make this one '" + target.yielded->to_string() + "'",
+                span, {{"this yield gives it '" + target.yielded->to_string() + "'", target.first}});
+        }
+    }
+
+    // checks one arm's pattern against the subject's type, declaring what it binds, and returns whether it matches every value
+    bool checkPattern(Pattern& p, SemaType* subject) {
+        switch (p.kind) {
+            case PatternKind::Wildcard:
+                return true;
+            case PatternKind::Binder: {
+                auto& b = static_cast<BinderPattern&>(p);
+                scope->insert(makeSymbol(b.name.text, SymbolKind::Binding, subject, false, b.span));
+                return true;
+            }
+            case PatternKind::Literal: {
+                auto type = checkExpr(*static_cast<LiteralPattern&>(p).literal);
+                if (!poisoned(subject) && !poisoned(type) && type != subject) {
+                    engine.print_error("cherimoya expected a pattern of type '" + subject->to_string() + "', got '" + type->to_string() + "' instead", p.span);
+                }
+                return false;
+            }
+            case PatternKind::Guard:
+                expectBool(*static_cast<GuardPattern&>(p).cond, "a guard");
+                return false;
+            case PatternKind::Variant:
+                unsupported("variant patterns", p.span);
+                return true;
+            case PatternKind::Pack:
+                unsupported("pack patterns", p.span);
+                return true;
+            case PatternKind::Range:
+                unsupported("range patterns", p.span);
+                return true;
+            case PatternKind::SetBuilder:
+                unsupported("set-builder patterns", p.span);
+                return true;
+            default:
+                return true;
+        }
+    }
+
+    // checks a match: each arm is a target of its own whose value goes to the match, and the arms have to cover every value that the match needs, which for now means a catch-all, or both true and false on a bool
+    SemaType* checkMatch(MatchExpr& m) {
+        auto subject = m.subject ? checkExpr(*m.subject) : nullptr;
+        std::optional<std::string_view> label = std::nullopt;
+        if (m.name) label = m.name->text;
+        targets.push_back(Target{TargetKind::Match, label, nullptr, nullptr, {}, false, m.span});
+        bool covered = false;
+        bool seenTrue = false;
+        bool seenFalse = false;
+        const MatchArm* catchAll = nullptr;
+        bool warned = false;
+        for (auto& arm : m.arms) {
+            if (covered && !warned) {
+                std::vector<Note> notes;
+                if (catchAll) notes.push_back({"this arm matches every value", catchAll->pattern->span});
+                engine.print_warning("cherimoya never reaches this arm, since the arms before it match every value", arm.pattern->span, notes);
+                warned = true;
+            }
+            SemaType* type = nullptr;
+            inScope([&] {
+                bool all = checkPattern(*arm.pattern, subject ? subject : context.sema_error);
+                if (all && !covered) catchAll = &arm;
+                if (arm.pattern->kind == PatternKind::Literal) {
+                    auto& literal = *static_cast<LiteralPattern&>(*arm.pattern).literal;
+                    if (literal.kind == ExprKind::BoolLiteral) (static_cast<BoolLiteralExpr&>(literal).literal ? seenTrue : seenFalse) = true;
+                }
+                covered = covered || all || (subject == context.sema_bool && seenTrue && seenFalse);
+                type = checkBlock(*arm.body, TargetKind::Arm);
+            });
+            contribute(targets.back(), type, arm.body->span);
+        }
+        auto target = targets.back();
+        targets.pop_back();
+        if (covered || poisoned(subject ? subject : context.sema_bool)) return finish(target, false, "this match");
+        bool value = target.yielded != nullptr && target.yielded != context.sema_void && !poisoned(target.yielded);
+        if (numeric(subject) || value) {
+            std::string what = subject ? "a match on '" + subject->to_string() + "'" : "a match that yields a value";
+            engine.print_error("cherimoya requires " + what + " to cover every value, please add a '_ -> { ... }' arm", Span{m.span.start, m.span.start + 5});
+            return context.sema_error;
+        }
+        return finish(target, true, "this match");
+    }
+
+    // checks a loop: one with a condition is void, and one without only ends by a yield, so it takes that yield's type
+    SemaType* checkRepeat(RepeatExpr& r) {
+        if (r.binder) return unsupported("for-each loops", r.binder->span);
+        if (r.cond) expectBool(*r.cond, "a loop's condition");
+        if (r.invariant) expectBool(*r.invariant, "a loop's invariant");
+        std::optional<std::string_view> label = std::nullopt;
+        if (r.name) label = r.name->text;
+        targets.push_back(Target{TargetKind::Loop, label, nullptr, nullptr, {}, r.cond == nullptr, r.span});
+        inScope([&] { checkStmts(r.body->stmts); });
+        auto target = targets.back();
+        targets.pop_back();
+        r.body->type = context.sema_void;
+        if (r.cond) return context.sema_void;
+        return target.yielded ? target.yielded : context.sema_never;
+    }
+
+    // checks a chunk, which is a block that can be named until allocators exist
+    SemaType* checkChunk(ChunkExpr& c) {
+        std::optional<std::string_view> label = std::nullopt;
+        if (c.name) label = c.name->text;
+        targets.push_back(Target{TargetKind::Chunk, label, nullptr, nullptr, {}, false, c.span});
+        bool completes = true;
+        inScope([&] { completes = checkStmts(c.body->stmts); });
+        auto target = targets.back();
+        targets.pop_back();
+        c.body->type = finish(target, completes, "this chunk");
+        return c.body->type;
+    }
+
+    // checks one statement, and returns whether control never continues past it
+    bool checkStmt(Stmt& s) {
         switch (s.kind) {
-            case StmtKind::Let:
-                checkLet(static_cast<LetStmt&>(s));
-                break;
+            case StmtKind::Let: {
+                auto& let = static_cast<LetStmt&>(s);
+                checkLet(let);
+                return let.init->type == context.sema_never;
+            }
             case StmtKind::Assign: {
                 auto& a = static_cast<AssignStmt&>(s);
                 auto value = checkExpr(*a.value);
                 if (a.place->kind == ExprKind::Wildcard) {
                     a.place->type = value;
-                    break;
+                    return value == context.sema_never;
                 }
-                auto place = checkExpr(*a.place);
+                auto place = checkPlace(*a.place);
                 // place op<- value is place <- place op value, which has to give back the place's type
-                if (a.op) {
+                if (a.op && a.op->op->base->category == OpCategory::Extra) {
+                    unsupported("extra operators", Span{a.op->loc, a.op->loc + a.op->text.length()});
+                } else if (a.op) {
                     auto result = binaryType(*a.op->op->base, place, a.place->span, value, a.value->span);
                     if (!compatible(place, result)) mismatch(place, result, a.value->span);
                 } else if (!compatible(place, value)) {
                     mismatch(place, value, a.value->span);
                 }
-                break;
+                return value == context.sema_never;
             }
-            case StmtKind::Expr:
-                checkExpr(*static_cast<ExprStmt&>(s).expr);
-                break;
-            case StmtKind::Yield: {
-                auto& y = static_cast<YieldStmt&>(s);
-                if (y.value) checkExpr(*y.value);
-                break;
+            // a value can't be dropped on the floor: it has to be used or explicitly discarded
+            case StmtKind::Expr: {
+                auto& e = *static_cast<ExprStmt&>(s).expr;
+                auto type = checkExpr(e);
+                if (type == context.sema_void || poisoned(type)) return type == context.sema_never;
+                auto text = engine.get_manager().text().substr(e.span.start, e.span.length());
+                engine.print_error("cherimoya requires a value to be used or discarded, please write '_ <- " + std::string(text) + ";'", e.span);
+                return false;
             }
+            case StmtKind::Yield:
+                checkYield(static_cast<YieldStmt&>(s));
+                return true;
             case StmtKind::Wit: {
                 auto& w = static_cast<WitStmt&>(s);
                 if (w.bound) {
@@ -295,12 +507,12 @@ class Sema {
             }
             case StmtKind::Attr: {
                 auto& a = static_cast<AttrStmt&>(s);
-                if (a.target) checkStmt(*a.target);
-                break;
+                return a.target && checkStmt(*a.target);
             }
             default:
                 break;
         }
+        return false;
     }
 
     // gives an identifier its symbol, and stops nested functions from reaching the locals of the function around them
@@ -320,6 +532,24 @@ class Sema {
         id.decl = symbol;
         if (symbol->kind == SymbolKind::Function && !callee) return unsupported("functions as values", id.span);
         return symbol->type;
+    }
+
+    // checks the left side of an assignment: it has to be a binding declared mut, and gives the type it holds
+    SemaType* checkPlace(Expr& place) {
+        if (place.kind != ExprKind::Identifier) return checkExpr(place);
+        auto& id = static_cast<IdentifierExpr&>(place);
+        auto type = checkIdentifier(id, true);
+        place.type = type;
+        auto symbol = id.decl;
+        if (symbol == nullptr || symbol->mut) return type;
+        std::string name(id.name);
+        if (symbol->kind == SymbolKind::Function) {
+            engine.print_error("cherimoya requires the left side of an assignment to be a binding, please assign to a 'let' instead of the function '" + name + "'", place.span);
+            return context.sema_error;
+        }
+        auto fix = symbol->kind == SymbolKind::Param ? "declare it as '" + name + " :: mut " + type->to_string() + "'" : "declare it with 'let " + name + " :: mut <- ...;'";
+        engine.print_error("cherimoya requires '" + name + "' to be mutable to assign to it, please " + fix, place.span, {{"'" + name + "' is declared here", symbol->s}});
+        return type;
     }
 
     // checks whether a type carries an earlier error or comes from a yield, so nothing built from it reports again
@@ -518,8 +748,13 @@ class Sema {
                 return checkCall(fn, {&arg}, e.span);
             }
             case ExprKind::Block:
-                checkBlock(static_cast<BlockExpr&>(e));
-                return context.sema_void;
+                return checkBlock(static_cast<BlockExpr&>(e));
+            case ExprKind::Match:
+                return checkMatch(static_cast<MatchExpr&>(e));
+            case ExprKind::Repeat:
+                return checkRepeat(static_cast<RepeatExpr&>(e));
+            case ExprKind::Chunk:
+                return checkChunk(static_cast<ChunkExpr&>(e));
             case ExprKind::Error:
                 return context.sema_error;
             default:

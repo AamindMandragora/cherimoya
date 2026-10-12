@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <iostream>
 #include <vector>
 #include "source.hpp"
@@ -16,14 +17,15 @@ struct Note {
     Span span;
 };
 
-// errors will have a message, a location, and any notes that go with it
+// diagnostics will have a message, a location, any notes that go with it, and whether they're only a warning
 struct Diagnostic {
     std::string error;
     Span span;
     std::vector<Note> notes;
+    bool warning;
 };
 
-// diagnostic engine holds source manager and a vector of diagnostics (errors)
+// diagnostic engine holds source manager and a vector of diagnostics (errors and warnings)
 class DiagnosticEngine {
     SourceManager& manager;
     std::vector<Diagnostic> diagnostics;
@@ -67,21 +69,28 @@ public:
         return out;
     }
 
-    // formats the nth error followed by each of its notes
+    // formats the nth diagnostic followed by each of its notes
     std::string get_error_n(size_t n) {
         if (n >= diagnostics.size()) return "";
-        auto& [error, span, notes] = diagnostics[n];
-        std::string out = render("error", error, span);
+        auto& [error, span, notes, warning] = diagnostics[n];
+        std::string out = render(warning ? "warning" : "error", error, span);
         for (auto& note : notes) out += render("note", note.message, note.span);
         return out;
     }
     
     // makes diagnostic, adds to vector, then prints formatted error to stdout
     void print_error(std::string_view error, Span span, std::vector<Note> notes = {}) {
-        diagnostics.push_back({std::string(error), span, std::move(notes)});
+        diagnostics.push_back({std::string(error), span, std::move(notes), false});
         std::cout << get_error_n(diagnostics.size() - 1) << std::endl;
     }
 
-    bool had_errors() const { return !diagnostics.empty(); }
-    size_t error_count() const { return diagnostics.size(); }
+    // makes a warning, which is reported like an error but doesn't stop compilation
+    void print_warning(std::string_view warning, Span span, std::vector<Note> notes = {}) {
+        diagnostics.push_back({std::string(warning), span, std::move(notes), true});
+        std::cout << get_error_n(diagnostics.size() - 1) << std::endl;
+    }
+
+    bool had_errors() const { return error_count() > 0; }
+    size_t error_count() const { return std::count_if(diagnostics.begin(), diagnostics.end(), [](const Diagnostic& d) { return !d.warning; }); }
+    size_t warning_count() const { return diagnostics.size() - error_count(); }
 };

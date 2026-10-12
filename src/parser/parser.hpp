@@ -654,12 +654,20 @@ class Parser {
         return std::nullopt;
     }
 
-    // parses match name (subject) { arms }, where a subjectless match's arms are (condition) or _
+    // parses match name (equality, subject) { arms }, where a subjectless match's arms are (condition) or _, deep by default
     std::unique_ptr<Expr> parseMatch(const Token& start) {
         auto name = parseScopeName(TokenKind::LParen, TokenKind::LBrace);
         std::unique_ptr<Expr> subject = nullptr;
+        std::optional<Token> equality = std::nullopt;
         if (peek().kind == TokenKind::LParen) {
             advance();
+            if (peek().op != nullptr && peekAt(1).kind == TokenKind::Comma) {
+                equality = advance();
+                advance();
+                if (equality->kind != TokenKind::Eq && equality->kind != TokenKind::EqEq) {
+                    engine.print_error("cherimoya requires a match's equality to be '=' or '==', please write 'match (=, subject)' or 'match (==, subject)'", tokSpan(*equality));
+                }
+            }
             subject = parseNested();
             expect(TokenKind::RParen, "')' after the subject in 'match (subject) { arms }'");
         }
@@ -684,7 +692,7 @@ class Parser {
             arms.push_back(MatchArm{std::move(pattern), std::move(body), Span{armStart, prevEnd()}});
         }
         expect(TokenKind::RBrace, "'}' after the arms in 'match (subject) { arms }'");
-        return std::make_unique<MatchExpr>(name, std::move(subject), std::move(arms), Span{start.loc, prevEnd()});
+        return std::make_unique<MatchExpr>(name, equality, std::move(subject), std::move(arms), Span{start.loc, prevEnd()});
     }
 
     // parses all three kinds of loop: (binder) <- source is for-each, (cond) alone is while, and nothing is infinite
@@ -756,8 +764,7 @@ class Parser {
         return tok.kind == TokenKind::Identifier || (tok.op != nullptr && tok.op->overloadable);
     }
 
-    // parses everything after let in [generics] (inputs) -> name -> (outputs) wit {obligations} body
-    // a member has no body, an extern ends with ;, and anything else has a block
+    // parses everything after let in [generics] (inputs) -> name -> (outputs) wit {obligations} body, where a member has no body, an extern ends with ;, and anything else has a block
     std::unique_ptr<FnDecl> parseFnDecl(const Token& start, bool member) {
         std::vector<GenericParam> generics;
         if (peek().kind == TokenKind::LBracket) generics = parseGenericParams();
@@ -932,8 +939,7 @@ public:
         return stmts;
     }
 
-    // parses a type: modes and qualifiers in front, then a handle, a tuple or record, or a named type, then an optional refinement
-    // refinable is off for types in value position, where a { can't follow
+    // parses a type: modes and qualifiers in front, then a handle, a tuple or record, or a named type, then an optional refinement, which is off for types in value position where a { can't follow
     std::unique_ptr<Type> parseType(bool refinable = true) {
         auto start = peek().loc;
         std::unique_ptr<Type> type;
@@ -1101,8 +1107,7 @@ public:
         return std::make_unique<ExprStmt>(std::move(expr), Span{start, prevEnd()});
     }
 
-    // repeatedly consumes tokens, recursing with higher and higher rbp until the next token doesn't have a strong enough lbp, at which point the highest level returns and its caller picks up where it left off
-    // parent is the operator whose right side this is, so the mixing and pipe rules can see across the recursion
+    // repeatedly consumes tokens, recursing with higher and higher rbp until the next token doesn't have a strong enough lbp, at which point the highest level returns and its caller picks up where it left off, and parent is the operator whose right side this is so the mixing and pipe rules can see across the recursion
     std::unique_ptr<Expr> parseExpr(int rbp = 0, const OpInfo* parent = nullptr) {
         auto tok = advance();
         std::unique_ptr<Expr> left;

@@ -5,8 +5,7 @@
 
 #include "parser.hpp"
 
-// prints the AST back as source: 4-space indents, one statement per line, and only the parentheses the grammar needs
-// full mode parenthesizes every operator's operands, so two trees print the same in full mode only if they have the same shape
+// prints the AST back as source: 4-space indents, one statement per line, and only the parentheses the grammar needs, full mode parenthesizes every operator's operands, so two trees print the same in full mode only if they have the same shape
 class Printer {
     bool full;
 
@@ -309,7 +308,7 @@ public:
                 auto& m = static_cast<const MatchExpr&>(e);
                 std::string s = "match";
                 if (m.name) s += " " + std::string(m.name->text);
-                if (m.subject) s += " (" + expr(*m.subject, depth, false) + ")";
+                if (m.subject) s += " (" + (m.equality ? std::string(m.equality->text) + ", " : "") + expr(*m.subject, depth, false) + ")";
                 std::vector<std::string> arms;
                 for (auto& arm : m.arms) arms.push_back(pattern(*arm.pattern, depth + 1) + " -> " + block(*arm.body, depth + 1));
                 return s + " " + braces(arms, depth);
@@ -625,6 +624,7 @@ TEST_CASE("Printer: statement and clause contexts", "[printer]") {
     canonical("(match (x) { _ -> { 1 -| } } + 1);\n");
     canonical("({ 1 -| } + 1) -|\n");
     canonical("match (x) { _ -> { 1 -| } } -|\n");
+    canonical("match (=, x) { _ -> { 1 -| } } -|\n");
 }
 
 // checks every statement form and scope layout
