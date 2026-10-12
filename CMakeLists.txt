@@ -17,6 +17,7 @@ target_include_directories(cheri INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/diagnostics
     ${CMAKE_CURRENT_SOURCE_DIR}/src/lexer
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sema
     ${CMAKE_CURRENT_SOURCE_DIR}/src/driver
 )
 
@@ -39,6 +40,7 @@ if(CHERI_BUILD_TESTS)
     tests/unit/lexer/test_lexer.cpp
     tests/unit/parser/test_parser.cpp
     tests/unit/parser/test_printer.cpp
+    tests/unit/sema/test_sema.cpp
   )
   target_link_libraries(cheri_tests PRIVATE cheri Catch2::Catch2WithMain)
 
