@@ -38,6 +38,7 @@ if(CHERI_BUILD_TESTS)
   add_executable(cheri_tests 
     tests/unit/lexer/test_lexer.cpp
     tests/unit/parser/test_parser.cpp
+    tests/unit/parser/test_printer.cpp
   )
   target_link_libraries(cheri_tests PRIVATE cheri Catch2::Catch2WithMain)
 
