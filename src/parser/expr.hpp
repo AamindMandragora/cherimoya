@@ -289,19 +289,21 @@ struct MatchArm {
 };
 
 /*
-match name (subject) {
+match name (equality, subject) {
     arms[0]
     arms[1]
     ...
     arms[arms.size() - 1]
 }
+where equality is = for shallow pattern comparisons, == or nothing for deep, and both it and subject are optional
 */
 class MatchExpr : public Expr {
 public:
     std::optional<Token> name;
+    std::optional<Token> equality;
     std::unique_ptr<Expr> subject;
     std::vector<MatchArm> arms;
-    MatchExpr(std::optional<Token> n, std::unique_ptr<Expr> su, std::vector<MatchArm> a, Span s) : Expr(ExprKind::Match, s), name(n), subject(std::move(su)), arms(std::move(a)) {}
+    MatchExpr(std::optional<Token> n, std::optional<Token> eq, std::unique_ptr<Expr> su, std::vector<MatchArm> a, Span s) : Expr(ExprKind::Match, s), name(n), equality(eq), subject(std::move(su)), arms(std::move(a)) {}
 };
 
 // repeat name (binder) <- source wit {invariant} body, where a binder means for-each, a cond alone means while, and neither means infinite
