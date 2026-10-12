@@ -6,6 +6,8 @@
 #include "diagnostics.hpp"
 #include "expr.hpp"
 
+class Decl;
+
 enum class StmtKind {
     Assign,
     Expr,
@@ -13,6 +15,8 @@ enum class StmtKind {
     Let,
     Wit,
     Assert,
+    Decl,
+    Attr,
     Error
 };
 
@@ -71,6 +75,22 @@ class AssertStmt : public Stmt {
 public:
     std::unique_ptr<Expr> cond;
     AssertStmt(std::unique_ptr<Expr> c, Span s) : Stmt(StmtKind::Assert, s), cond(std::move(c)) {}
+};
+
+// declarations can appear anywhere a statement can: at the top of a file, and functions inside bodies
+class DeclStmt : public Stmt {
+public:
+    std::unique_ptr<Decl> decl;
+    DeclStmt(std::unique_ptr<Decl> d, Span s) : Stmt(StmtKind::Decl, s), decl(std::move(d)) {}
+};
+
+// @name(args) target, where the target is the statement after it, or null when ; follows: @tier(strict);
+class AttrStmt : public Stmt {
+public:
+    Token name;
+    std::vector<std::unique_ptr<Expr>> args;
+    std::unique_ptr<Stmt> target;
+    AttrStmt(Token n, std::vector<std::unique_ptr<Expr>> a, std::unique_ptr<Stmt> t, Span s) : Stmt(StmtKind::Attr, s), name(n), args(std::move(a)), target(std::move(t)) {}
 };
 
 // error statements don't hold anything special
