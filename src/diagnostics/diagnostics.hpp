@@ -18,17 +18,24 @@ struct Note {
     Span span;
 };
 
-// a diagnostic has a message, a location, and any notes that go with it
+// a diagnostic has a message, a location, any notes that go with it, and whether it's only a warning
 struct Diagnostic {
     std::string message;
     Span span;
     std::vector<Note> notes;
+    bool isWarning;
 };
 
 // the diagnostic engine holds the source manager and every diagnostic reported so far
 class DiagnosticEngine {
     SourceManager& manager;
     std::vector<Diagnostic> diagnostics;
+
+    // records a diagnostic, then prints it formatted to stdout
+    void report(std::string_view message, Span span, std::vector<Note> notes, bool isWarning) {
+        diagnostics.push_back({std::string(message), span, std::move(notes), isWarning});
+        std::cout << getErrorN(diagnostics.size() - 1) << std::endl;
+    }
 public:
     explicit DiagnosticEngine(SourceManager& m) : manager(m) {}
     SourceManager& getManager() { return manager; }
@@ -73,18 +80,23 @@ public:
     // formats the nth diagnostic followed by each of its notes
     std::string getErrorN(size_t n) {
         if (n >= diagnostics.size()) return "";
-        auto& [message, span, notes] = diagnostics[n];
-        std::string out = render("error", message, span);
+        auto& [message, span, notes, isWarning] = diagnostics[n];
+        std::string out = render(isWarning ? "warning" : "error", message, span);
         for (auto& note : notes) out += render("note", note.message, note.span);
         return out;
     }
 
     // records an error with any notes that explain it, then prints it formatted to stdout
     void printError(std::string_view message, Span span, std::vector<Note> notes = {}) {
-        diagnostics.push_back({std::string(message), span, std::move(notes)});
-        std::cout << getErrorN(diagnostics.size() - 1) << std::endl;
+        report(message, span, std::move(notes), false);
     }
 
-    bool hadErrors() const { return !diagnostics.empty(); }
-    size_t errorCount() const { return diagnostics.size(); }
+    // records a warning, which is reported like an error but doesn't stop compilation
+    void printWarning(std::string_view message, Span span, std::vector<Note> notes = {}) {
+        report(message, span, std::move(notes), true);
+    }
+
+    bool hadErrors() const { return errorCount() > 0; }
+    size_t errorCount() const { return std::count_if(diagnostics.begin(), diagnostics.end(), [](const Diagnostic& d) { return !d.isWarning; }); }
+    size_t warningCount() const { return diagnostics.size() - errorCount(); }
 };
