@@ -2,6 +2,7 @@
 
 #include <string>
 #include <memory>
+#include <algorithm>
 
 #include "parser.hpp"
 
@@ -10,6 +11,7 @@ static std::string dumpType(const Type& t);
 static std::string dumpPattern(const Pattern& p);
 static std::string dumpStmt(const Stmt& s);
 static std::string dumpParams(const std::vector<Param>& ps);
+static std::string dumpDecl(const Decl& d);
 
 // converts an expression to text
 static std::string dumpExpr(const Expr& e) {
@@ -314,10 +316,92 @@ static std::string dumpStmt(const Stmt& s) {
         }
         case StmtKind::Assert:
             return "(assert " + dumpExpr(*static_cast<const AssertStmt&>(s).cond) + ")";
+        case StmtKind::Decl:
+            return dumpDecl(*static_cast<const DeclStmt&>(s).decl);
+        case StmtKind::Attr: {
+            auto& a = static_cast<const AttrStmt&>(s);
+            std::string r = "(@" + std::string(a.name.text);
+            for (auto& arg : a.args) r += " " + dumpExpr(*arg);
+            if (a.target) r += " " + dumpStmt(*a.target);
+            return r + ")";
+        }
         case StmtKind::Error:
             return "<error-stmt>";
     }
     return "<unknown-stmt>";
+}
+
+// converts generic parameters to text
+static std::string dumpGenerics(const std::vector<GenericParam>& gs) {
+    std::string s = "[";
+    for (size_t i = 0; i < gs.size(); i++) {
+        if (i) s += " ";
+        s += std::string(gs[i].name.text);
+        for (size_t j = 0; j < gs[i].bounds.size(); j++) s += (j ? "&" : "::") + dumpType(*gs[i].bounds[j]);
+        if (gs[i].fallback) s += "<-" + dumpArg(*gs[i].fallback);
+    }
+    return s + "]";
+}
+
+// converts an export or import list to text
+static std::string dumpItems(const std::vector<ModuleItem>& items) {
+    std::string s;
+    for (auto& it : items) {
+        s += " ";
+        if (it.fields.empty()) { s += std::string(it.name.text); continue; }
+        s += "(" + std::string(it.name.text);
+        for (auto& f : it.fields) s += " " + std::string(f.text);
+        s += ")";
+    }
+    return s;
+}
+
+// converts a declaration to text
+static std::string dumpDecl(const Decl& d) {
+    switch (d.kind) {
+        case DeclKind::Fn: {
+            auto& f = static_cast<const FnDecl&>(d);
+            std::string s = "(fn-decl " + std::string(f.name.text);
+            if (!f.generics.empty()) s += " " + dumpGenerics(f.generics);
+            s += " " + dumpParams(f.inputs) + " -> " + dumpParams(f.outputs);
+            if (f.obligations) s += " (wit " + dumpExpr(*f.obligations) + ")";
+            s += f.body ? " " + dumpExpr(*f.body) : " no-body";
+            return s + ")";
+        }
+        case DeclKind::Type: {
+            auto& t = static_cast<const TypeDecl&>(d);
+            std::string s = "(type " + std::string(t.name.text);
+            if (!t.generics.empty()) s += " " + dumpGenerics(t.generics);
+            switch (t.form) {
+                case TypeForm::Newtype: s += " newtype"; break;
+                case TypeForm::Refinement: s += " refinement"; break;
+                case TypeForm::Product: s += " product"; break;
+                case TypeForm::Sum: s += " sum"; break;
+                case TypeForm::Enum: s += " enum"; break;
+                case TypeForm::Interface: s += " interface"; break;
+            }
+            if (t.rhs) s += " " + dumpType(*t.rhs);
+            for (auto& v : t.variants) {
+                if (v.payload.empty()) { s += " " + std::string(v.name.text); continue; }
+                s += " (" + std::string(v.name.text);
+                for (auto& p : v.payload) s += " " + dumpType(*p);
+                s += ")";
+            }
+            for (auto& m : t.members) s += " " + dumpDecl(*m);
+            return s + ")";
+        }
+        case DeclKind::Export:
+            return "(export" + dumpItems(static_cast<const ExportDecl&>(d).items) + ")";
+        case DeclKind::Import: {
+            auto& i = static_cast<const ImportDecl&>(d);
+            std::string path;
+            for (size_t j = 0; j < i.path.size(); j++) path += (j ? "." : "") + std::string(i.path[j].text);
+            return "(import" + dumpItems(i.items) + " <- " + path + ")";
+        }
+        case DeclKind::Error:
+            return "<error-decl>";
+    }
+    return "<unknown-decl>";
 }
 
 // parses input and returns text representation
@@ -390,6 +474,20 @@ static std::string patternDump(const std::string& input) {
     Parser parser(tokens, diag);
     auto pattern = parser.parsePattern();
     return dumpPattern(*pattern);
+}
+
+// parses input as a whole program and returns text representation, one statement per line
+static std::string programDump(const std::string& input) {
+    SourceManager sm;
+    sm.load_string(input);
+    DiagnosticEngine diag(sm);
+    Lexer lexer(diag);
+    auto tokens = lexer.lex();
+    Parser parser(tokens, diag);
+    auto program = parser.parseProgram();
+    std::string s;
+    for (size_t i = 0; i < program.size(); i++) s += (i ? "\n" : "") + dumpStmt(*program[i]);
+    return s;
 }
 
 // parses input as statements up to the end and returns how many diagnostics lexing and parsing produced
@@ -1041,6 +1139,141 @@ TEST_CASE("Parser: fail/if_removed statement", "[parser][stmt]") {
 TEST_CASE("Parser: statement error recovery", "[parser][stmt]") {
     CHECK(stmtErrors("x <- ; y <- 2;") == 1);
     CHECK(stmtErrors("{ x <- 1 }") == 1);
-    CHECK(stmtErrors("let (a :: int) -> f -> (r :: int) { a -| }") == 1);
     CHECK(stmtDump("+;") == "(expr <error>)");
+}
+
+// checks functions: generics, refinements, wit obligations, operator names, externs, and nesting
+TEST_CASE("Parser: functions", "[parser][decl]") {
+    CHECK(stmtDump("let () -> main -> (code :: int) { 0 -| }") == "(fn-decl main () -> (code:int) (block (-| 0)))");
+    CHECK(stmtDump("let (x :: int) -> inc -> (r :: int) { x + 1 -| }") == "(fn-decl inc (x:int) -> (r:int) (block (-| (+ x 1))))");
+    CHECK(stmtDump("let (a :: int {a >= 0}, b :: int {b > 0}) -> divmod -> (q :: int, r :: int {0 <= r < b && a = q * b + r}) { [a / b, a % b] -| }")
+        == "(fn-decl divmod (a:(refine int (chain a >= 0)) b:(refine int (chain b > 0))) -> (q:int r:(refine int (&& (chain 0 <= r < b) (= a (+ (* q b) r))))) (block (-| (pack (/ a b) (% a b)))))");
+    CHECK(stmtDump("let [T :: Ord] (a :: T, b :: T) -> max -> (m :: T) { }") == "(fn-decl max [T::Ord] (a:T b:T) -> (m:T) (block))");
+    CHECK(stmtDump("let [T, A :: Allocator & Default <- Global] () -> list_new -> (l :: List[T, A]) { }")
+        == "(fn-decl list_new [T A::Allocator&Default<-Global] () -> (l:(List T A)) (block))");
+    CHECK(stmtDump("let (a :: Vec2, b :: Vec2) -> + -> (r :: Vec2) { [a.x + b.x, a.y + b.y] -| }")
+        == "(fn-decl + (a:Vec2 b:Vec2) -> (r:Vec2) (block (-| (pack (+ (. a x) (. b x)) (+ (. a y) (. b y))))))");
+    CHECK(stmtDump("let (a :: Vec2) -> - -> (r :: Vec2) { [-a.x, -a.y] -| }") == "(fn-decl - (a:Vec2) -> (r:Vec2) (block (-| (pack (pre:- (. a x)) (pre:- (. a y))))))");
+    CHECK(stmtDump("let (a :: Vec2, b :: Vec2) -> <+> -> (r :: Vec2) { a + b -| }") == "(fn-decl <+> (a:Vec2 b:Vec2) -> (r:Vec2) (block (-| (+ a b))))");
+    CHECK(stmtDump("let (a :: T, b :: T) -> == -> (r :: bool) { }") == "(fn-decl == (a:T b:T) -> (r:bool) (block))");
+    CHECK(stmtDump("let (g :: peek mut Graph) -> grow -> () wit {node_count(g) >= node_count(old g)} { }")
+        == "(fn-decl grow (g:(peek (mut@value Graph))) -> () (wit (chain (call node_count g) >= (call node_count (old g)))) (block))");
+    CHECK(stmtDump("let (fd :: i32, buf :: peek arr char, n :: i64u) -> write -> (r :: i64);") == "(fn-decl write (fd:i32 buf:(peek (arr char)) n:i64u) -> (r:i64) no-body)");
+    CHECK(stmtDump("let (s :: peek Shape) -> area -> (a :: f64) { let (r :: f64) -> sq -> (o :: f64) { r * r -| } 0.0 -| }")
+        == "(fn-decl area (s:(peek Shape)) -> (a:f64) (block (fn-decl sq (r:f64) -> (o:f64) (block (-| (* r r)))) (-| 0.0)))");
+    CHECK(stmtErrors("let (a :: int) -> f -> (r :: int) { a -| }") == 0);
+    CHECK(stmtErrors("let (a :: int) -> 5 -> (r :: int) { }") == 1);
+    CHECK(stmtErrors("let (a :: int) -> && -> (r :: int) { }") == 1);
+    CHECK(stmtErrors("let (a :: int) -> f -> r :: int { }") > 0);
+}
+
+// checks every form of type definition
+TEST_CASE("Parser: type definitions", "[parser][decl]") {
+    CHECK(stmtDump("type NodeId <- i64u;") == "(type NodeId newtype i64u)");
+    CHECK(stmtDump("type Wrapper <- Foo[int];") == "(type Wrapper newtype (Foo int))");
+    CHECK(stmtDump("type Percent <- int {p : 0 <= p <= 100};") == "(type Percent refinement (refine int p : (chain 0 <= p <= 100)))");
+    CHECK(stmtDump("type Point <- [x :: f64, y :: f64];") == "(type Point product (record x:f64 y:f64))");
+    CHECK(stmtDump("type Pos <- [x :: f64, y :: f64] {p : p.x >= 0.0};") == "(type Pos product (refine (record x:f64 y:f64) p : (chain (. p x) >= 0.0)))");
+    CHECK(stmtDump("type Shape <- Circle[f64] | Rect[f64, f64];") == "(type Shape sum (Circle f64) (Rect f64 f64))");
+    CHECK(stmtDump("type Dir <- N | E | S | W;") == "(type Dir enum N E S W)");
+    CHECK(stmtDump("type Option[T] <- Some[T] | None;") == "(type Option [T] sum (Some T) None)");
+    CHECK(stmtDump("type Ord[T] <- [ let (a :: peek T, b :: peek T) -> cmp -> (r :: int) ];")
+        == "(type Ord [T] interface (fn-decl cmp (a:(peek T) b:(peek T)) -> (r:int) no-body))");
+    CHECK(stmtDump("type Num[T] <- [ let (a :: T, b :: T) -> + -> (r :: T), let (a :: T) -> - -> (r :: T) ];")
+        == "(type Num [T] interface (fn-decl + (a:T b:T) -> (r:T) no-body) (fn-decl - (a:T) -> (r:T) no-body))");
+    CHECK(stmtDump("type Spaceship[T] <- [ let (a :: peek T, b :: peek T) -> <=> -> (r :: int) ];")
+        == "(type Spaceship [T] interface (fn-decl <=> (a:(peek T) b:(peek T)) -> (r:int) no-body))");
+    CHECK(stmtDump("type List[T, A :: Allocator <- Global] <- [data :: arr[A] mut T, count :: i64u] {l : l.count <= len(l.data) && written(l.data) == [0, ..., <l.count]};")
+        == "(type List [T A::Allocator<-Global] product (refine (record data:(arr [A] (mut@elems T)) count:i64u) l : "
+           "(&& (chain (. l count) <= (call len (. l data))) (== (call written (. l data)) (range 0 ... <(. l count))))))");
+    CHECK(stmtDump("type Map[K :: Ord, V] <- [keys :: arr K, vals :: arr V];") == "(type Map [K::Ord V] product (record keys:(arr K) vals:(arr V)))");
+    CHECK(stmtErrors("type Bad <- Foo | std.Bar;") == 1);
+    CHECK(stmtErrors("type Bad <- Foo | Bar[3];") == 1);
+    CHECK(stmtErrors("type Bad <- int") == 1);
+}
+
+// checks export and import lists, including field exports
+TEST_CASE("Parser: modules", "[parser][decl]") {
+    CHECK(stmtDump("export [List, list_new, push, Result[dist, prev]];") == "(export List list_new push (Result dist prev))");
+    CHECK(stmtDump("export [Vec2, <+>, +];") == "(export Vec2 <+> +)");
+    CHECK(stmtDump("import [List, push, len] <- list;") == "(import List push len <- list)");
+    CHECK(stmtDump("import [Allocator] <- std.mem;") == "(import Allocator <- std.mem)");
+    CHECK(stmtDump("import [Raw] <- std.unsafe;") == "(import Raw <- std.unsafe)");
+    CHECK(stmtErrors("import [List] <- ;") > 0);
+    CHECK(stmtErrors("export [1];") == 1);
+}
+
+// checks attributes, file-level tiers, and tier regions
+TEST_CASE("Parser: attributes", "[parser][decl]") {
+    CHECK(stmtDump("@tier(strict);") == "(@tier strict)");
+    CHECK(stmtDump("@tier(strict) { x <- 1; }") == "(@tier strict (expr (block (<- x 1))))");
+    CHECK(stmtDump("@extern(\"c\") let (fd :: i32) -> close -> (r :: i32);") == "(@extern \"c\" (fn-decl close (fd:i32) -> (r:i32) no-body))");
+    CHECK(stmtDump("@global_allocator let heap <- Bump();") == "(@global_allocator (let heap <- (call Bump)))");
+    CHECK(stmtDump("@a @b let x <- 1;") == "(@a (@b (let x <- 1)))");
+    CHECK(stmtErrors("@ let x <- 1;") == 1);
+}
+
+// pass/reference: the spec's reference examples parse as a whole program
+TEST_CASE("Parser: pass/reference program", "[parser][decl]") {
+    const char* src =
+        "type Percent <- int {p : 0 <= p <= 100};\n"
+        "type Shape   <- Circle[f64] | Rect[f64, f64];\n"
+        "type Vec2    <- [x :: f64, y :: f64];\n"
+        "let (a :: Vec2, b :: Vec2) -> + -> (r :: Vec2) { [a.x + b.x, a.y + b.y] -| }\n"
+        "let (a :: Vec2, b :: Vec2) -> <+> -> (r :: Vec2) { a + b -| }\n"
+        "let (n :: int) -> clamp -> (p :: Percent) {\n"
+        "    match (n) {\n"
+        "        [..., <0]     -> { 0 -| }\n"
+        "        [0, ..., 100] -> { n -| }        # Z3 proves 0 <= n <= 100: no cast needed\n"
+        "        [>100, ...]   -> { 100 -| }\n"
+        "    } -|\n"
+        "}\n"
+        "let (s :: peek Shape) -> area -> (a :: f64) {\n"
+        "    match (s) {\n"
+        "        Circle[r]  -> { 3.14159 * r * r -| }\n"
+        "        Rect[w, h] -> { w * h -| }\n"
+        "    } -|\n"
+        "}\n"
+        "let (a :: int {a >= 0}, b :: int {b > 0})\n"
+        "    -> divmod\n"
+        "    -> (q :: int, r :: int {0 <= r < b && a = q * b + r}) {\n"
+        "    [a / b, a % b] -|\n"
+        "}\n"
+        "let (x :: bool, y :: bool) -> describe -> (code :: int) {\n"
+        "    match ([x, y]) {\n"
+        "        [true,  true ] -> { 3 -| }\n"
+        "        [true,  false] -> { 2 -| }\n"
+        "        [false, _    ] -> { 0 -| }\n"
+        "    } -|\n"
+        "}\n"
+        "let (x :: int) -> inc -> (r :: int) { x + 1 -| }\n"
+        "let (x :: int) -> double -> (r :: int) { x * 2 -| }\n"
+        "let (acc :: [f64, f64, f64], x :: f64) -> moments -> (r :: [f64, f64, f64]) {\n"
+        "    [acc[0] + 1.0, acc[1] + x, acc[2] + x * x] -|\n"
+        "}\n";
+    CHECK(stmtErrors(src) == 0);
+    auto dump = programDump(src);
+    CHECK(std::count(dump.begin(), dump.end(), '\n') == 11);
+    CHECK(dump.find("(fn-decl moments (acc:(tuple f64 f64 f64) x:f64) -> (r:(tuple f64 f64 f64))") != std::string::npos);
+}
+
+// pass/module_header: a file with a tier, exports, imports, and an extern
+TEST_CASE("Parser: pass/module header", "[parser][decl]") {
+    const char* src =
+        "@tier(strict);\n"
+        "export [List, list_new, push, Result[dist, prev]];\n"
+        "import [Allocator] <- std.mem;\n"
+        "import [Raw] <- std.unsafe;\n"
+        "@extern(\"c\") let (fd :: i32, buf :: peek arr char, n :: i64u) -> write -> (r :: i64);\n"
+        "let LIMIT <- 4096;\n"
+        "wit {Vec2 :: Ord};\n";
+    CHECK(stmtErrors(src) == 0);
+    CHECK(programDump(src) ==
+        "(@tier strict)\n"
+        "(export List list_new push (Result dist prev))\n"
+        "(import Allocator <- std.mem)\n"
+        "(import Raw <- std.unsafe)\n"
+        "(@extern \"c\" (fn-decl write (fd:i32 buf:(peek (arr char)) n:i64u) -> (r:i64) no-body))\n"
+        "(let LIMIT <- 4096)\n"
+        "(wit Vec2 :: Ord)");
 }

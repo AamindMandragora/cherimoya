@@ -596,19 +596,7 @@ class Parser {
         return std::make_unique<ExprStmt>(std::move(scope), span);
     }
 
-    // skips a construct the parser doesn't handle yet: up to a ; or the end of its first brace block
-    void skipItem() {
-        int depth = 0;
-        while (!atEnd()) {
-            auto kind = advance().kind;
-            if (kind == TokenKind::LParen || kind == TokenKind::LBracket || kind == TokenKind::LBrace) depth++;
-            if (kind == TokenKind::RParen || kind == TokenKind::RBracket) depth--;
-            if (kind == TokenKind::RBrace && --depth == 0) return;
-            if (kind == TokenKind::Semi && depth == 0) return;
-        }
-    }
-
-    // parses let pattern :: type <- init; where a function definition (let (... or let [...] (...) is left for later
+    // parses let pattern :: type <- init; or a function, which starts let ( or let [generics] (
     std::unique_ptr<Stmt> parseLet() {
         auto start = advance();
         bool function = peek().kind == TokenKind::LParen;
@@ -616,11 +604,7 @@ class Parser {
             size_t close = findClose(cursor);
             function = tokens[std::min(close + 1, tokens.size() - 1)].kind == TokenKind::LParen;
         }
-        if (function) {
-            engine.print_error("cherimoya doesn't parse function definitions yet", tokSpan(start));
-            skipItem();
-            return std::make_unique<ErrorStmt>(Span{start.loc, prevEnd()});
-        }
+        if (function) return declStmt(parseFnDecl(start, false));
         auto pattern = parsePattern();
         std::unique_ptr<Type> type = nullptr;
         if (peek().kind == TokenKind::ColonColon) {
@@ -739,12 +723,213 @@ class Parser {
         return std::make_unique<ChunkExpr>(name, std::move(body), Span{start.loc, prevEnd()});
     }
 
+    // parses [name :: bound & bound <- fallback, ...] after a function's let or a type's name
+    std::vector<GenericParam> parseGenericParams() {
+        std::vector<GenericParam> params;
+        expect(TokenKind::LBracket, "'[' to start the generic parameters in '[T :: Bound <- Fallback]'");
+        while (peek().kind != TokenKind::RBracket && peek().kind != TokenKind::Eof) {
+            auto name = expect(TokenKind::Identifier, "a generic parameter name in '[T :: Bound <- Fallback]'");
+            std::vector<std::unique_ptr<Type>> bounds;
+            if (peek().kind == TokenKind::ColonColon) {
+                advance();
+                bounds.push_back(parseType(false));
+                while (peek().kind == TokenKind::Amp) {
+                    advance();
+                    bounds.push_back(parseType(false));
+                }
+            }
+            std::optional<GenericArg> fallback = std::nullopt;
+            if (peek().kind == TokenKind::LArrow) {
+                advance();
+                fallback = parseGenericArg();
+            }
+            params.push_back(GenericParam{name, std::move(bounds), std::move(fallback)});
+            if (peek().kind != TokenKind::Comma) break;
+            advance();
+        }
+        expect(TokenKind::RBracket, "']' after the generic parameters in '[T :: Bound <- Fallback]'");
+        return params;
+    }
+
+    // checks whether a token can name a function: an identifier or an overloadable operator, built-in or extra
+    bool isFnName(const Token& tok) {
+        return tok.kind == TokenKind::Identifier || (tok.op != nullptr && tok.op->overloadable);
+    }
+
+    // parses everything after let in [generics] (inputs) -> name -> (outputs) wit {obligations} body
+    // a member has no body, an extern ends with ;, and anything else has a block
+    std::unique_ptr<FnDecl> parseFnDecl(const Token& start, bool member) {
+        std::vector<GenericParam> generics;
+        if (peek().kind == TokenKind::LBracket) generics = parseGenericParams();
+        expect(TokenKind::LParen, "'(' before the inputs in 'let (inputs) -> name -> (outputs) { body }'");
+        auto inputs = parseParamList();
+        expect(TokenKind::RArrow, "'->' after the inputs in 'let (inputs) -> name -> (outputs) { body }'");
+        auto name = advance();
+        if (!isFnName(name)) expected("a function name (an identifier or an overloadable operator) in 'let (inputs) -> name -> (outputs) { body }'", name);
+        expect(TokenKind::RArrow, "'->' after the function's name in 'let (inputs) -> name -> (outputs) { body }'");
+        expect(TokenKind::LParen, "'(' before the outputs in 'let (inputs) -> name -> (outputs) { body }'");
+        auto outputs = parseParamList();
+        std::unique_ptr<Expr> obligations = nullptr;
+        if (peek().kind == TokenKind::KwWit) {
+            advance();
+            expect(TokenKind::LBrace, "'{' after 'wit' in 'wit {obligations}'");
+            obligations = parseNested();
+            expect(TokenKind::RBrace, "'}' after the obligations in 'wit {obligations}'");
+        }
+        std::unique_ptr<BlockExpr> body = nullptr;
+        if (!member) {
+            if (peek().kind == TokenKind::Semi) {
+                advance();
+            } else {
+                body = parseBlock(std::nullopt);
+            }
+        }
+        return std::make_unique<FnDecl>(std::move(generics), std::move(inputs), name, std::move(outputs), std::move(obligations), std::move(body), Span{start.loc, prevEnd()});
+    }
+
+    // turns one alternative of a sum into a variant: a single name with only types in its brackets
+    Variant toVariant(std::unique_ptr<Type> type) {
+        if (type->kind == TypeKind::Named) {
+            auto& named = static_cast<NamedType&>(*type);
+            bool types = std::all_of(named.args.begin(), named.args.end(), [](const GenericArg& a) { return a.type != nullptr; });
+            if (named.path.size() == 1 && types) {
+                std::vector<std::unique_ptr<Type>> payload;
+                for (auto& a : named.args) payload.push_back(std::move(a.type));
+                return Variant{named.path[0], std::move(payload)};
+            }
+        }
+        engine.print_error("cherimoya requires each variant of a sum to be a name with an optional payload, please write 'Name' or 'Name[T, U]'", type->span);
+        return Variant{Token(TokenKind::Error, "", type->span.start), {}};
+    }
+
+    // parses type name[generics] <- rhs; and decides the form from the right side
+    std::unique_ptr<Decl> parseTypeDecl() {
+        auto start = advance();
+        auto name = expect(TokenKind::Identifier, "the type's name in 'type Name <- definition;'");
+        std::vector<GenericParam> generics;
+        if (peek().kind == TokenKind::LBracket) generics = parseGenericParams();
+        expect(TokenKind::LArrow, "'<-' after the type's name in 'type Name <- definition;'");
+        auto form = TypeForm::Newtype;
+        std::unique_ptr<Type> rhs = nullptr;
+        std::vector<Variant> variants;
+        std::vector<std::unique_ptr<FnDecl>> members;
+        // Interface: a pack of signatures, recognized by the leading let
+        if (peek().kind == TokenKind::LBracket && peekAt(1).kind == TokenKind::KwLet) {
+            form = TypeForm::Interface;
+            advance();
+            while (peek().kind == TokenKind::KwLet) {
+                auto let = advance();
+                members.push_back(parseFnDecl(let, true));
+                if (peek().kind != TokenKind::Comma) break;
+                advance();
+            }
+            expect(TokenKind::RBracket, "']' after the interface's signatures in 'type Name <- [let ..., let ...];'");
+        } else {
+            rhs = parseType();
+            // Sum or enum: more than one alternative
+            if (peek().kind == TokenKind::Pipe) {
+                variants.push_back(toVariant(std::move(rhs)));
+                while (peek().kind == TokenKind::Pipe) {
+                    advance();
+                    variants.push_back(toVariant(parseType(false)));
+                }
+                bool payloads = std::any_of(variants.begin(), variants.end(), [](const Variant& v) { return !v.payload.empty(); });
+                form = payloads ? TypeForm::Sum : TypeForm::Enum;
+            } else if (rhs->kind == TypeKind::Record) {
+                form = TypeForm::Product;
+            } else if (rhs->kind == TypeKind::Refined) {
+                bool record = static_cast<RefinedType&>(*rhs).inner->kind == TypeKind::Record;
+                form = record ? TypeForm::Product : TypeForm::Refinement;
+            }
+        }
+        expectSemi(nullptr);
+        return std::make_unique<TypeDecl>(name, std::move(generics), form, std::move(rhs), std::move(variants), std::move(members), Span{start.loc, prevEnd()});
+    }
+
+    // parses [name, name[field, field], ...] for export and import lists
+    std::vector<ModuleItem> parseModuleItems() {
+        std::vector<ModuleItem> items;
+        expect(TokenKind::LBracket, "'[' before the items in 'export [items];' or 'import [items] <- module;'");
+        while (peek().kind != TokenKind::RBracket && peek().kind != TokenKind::Eof) {
+            auto name = advance();
+            if (!isFnName(name) && name.kind != TokenKind::TypeName) expected("a name to export or import", name);
+            std::vector<Token> fields;
+            if (peek().kind == TokenKind::LBracket) {
+                advance();
+                while (peek().kind == TokenKind::Identifier) {
+                    fields.push_back(advance());
+                    if (peek().kind != TokenKind::Comma) break;
+                    advance();
+                }
+                expect(TokenKind::RBracket, "']' after the fields in 'Name[field, field]'");
+            }
+            items.push_back(ModuleItem{name, std::move(fields)});
+            if (peek().kind != TokenKind::Comma) break;
+            advance();
+        }
+        expect(TokenKind::RBracket, "']' after the items in '[Name, Name[field]]'");
+        return items;
+    }
+
+    // parses export [items];
+    std::unique_ptr<Decl> parseExport() {
+        auto start = advance();
+        auto items = parseModuleItems();
+        expectSemi(nullptr);
+        return std::make_unique<ExportDecl>(std::move(items), Span{start.loc, prevEnd()});
+    }
+
+    // parses import [items] <- dotted.path;
+    std::unique_ptr<Decl> parseImport() {
+        auto start = advance();
+        auto items = parseModuleItems();
+        expect(TokenKind::LArrow, "'<-' before the module in 'import [items] <- module.path;'");
+        std::vector<Token> path{expect(TokenKind::Identifier, "a module name in 'import [items] <- module.path;'")};
+        while (peek().kind == TokenKind::Dot) {
+            advance();
+            path.push_back(expect(TokenKind::Identifier, "a module name after '.' in 'module.path'"));
+        }
+        expectSemi(nullptr);
+        return std::make_unique<ImportDecl>(std::move(items), std::move(path), Span{start.loc, prevEnd()});
+    }
+
+    // wraps a declaration so it can sit wherever a statement can
+    std::unique_ptr<Stmt> declStmt(std::unique_ptr<Decl> decl) {
+        auto span = decl->span;
+        return std::make_unique<DeclStmt>(std::move(decl), span);
+    }
+
+    // parses @name(args) and the statement it applies to, or ; when it applies to the whole file
+    std::unique_ptr<Stmt> parseAttr() {
+        auto start = advance();
+        auto name = expect(TokenKind::Identifier, "an attribute name after '@' in '@name(args)'");
+        std::vector<std::unique_ptr<Expr>> args;
+        if (peek().kind == TokenKind::LParen) {
+            advance();
+            args = parseArgList();
+        }
+        std::unique_ptr<Stmt> target = nullptr;
+        if (peek().kind == TokenKind::Semi) {
+            advance();
+        } else {
+            target = parseStmt();
+        }
+        return std::make_unique<AttrStmt>(name, std::move(args), std::move(target), Span{start.loc, prevEnd()});
+    }
+
 public:
     Parser(std::vector<Token>& t, DiagnosticEngine& e) : tokens(t), engine(e), cursor(0), arrowStops(false) {}
 
     // checks if we've reached the EOF token
     bool atEnd() {
         return tokens[cursor].kind == TokenKind::Eof;
+    }
+
+    // the entry point for the parser, a program is a series of statements, most of them declarations
+    std::vector<std::unique_ptr<Stmt>> parseProgram() {
+        std::vector<std::unique_ptr<Stmt>> stmts = {};
+        while (!atEnd()) stmts.push_back(parseStmt());
+        return stmts;
     }
 
     // parses a type: modes and qualifiers in front, then a handle, a tuple or record, or a named type, then an optional refinement
@@ -860,6 +1045,14 @@ public:
                 return parseWit();
             case TokenKind::KwAssert:
                 return parseAssert();
+            case TokenKind::KwType:
+                return declStmt(parseTypeDecl());
+            case TokenKind::KwExport:
+                return declStmt(parseExport());
+            case TokenKind::KwImport:
+                return declStmt(parseImport());
+            case TokenKind::At:
+                return parseAttr();
             // a bare yield has no value
             case TokenKind::Yield:
                 return parseYield(nullptr);
