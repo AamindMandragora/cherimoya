@@ -112,10 +112,10 @@ static std::string dumpExpr(const Expr& e) {
         }
         case ExprKind::Ann: {
             auto& a = static_cast<const AnnExpr&>(e);
-            return "(:: " + dumpExpr(*a.expr) + " " + dumpType(*a.type) + ")";
+            return "(:: " + dumpExpr(*a.expr) + " " + dumpType(*a.annotation) + ")";
         }
         case ExprKind::TypeExpr:
-            return "(type " + dumpType(*static_cast<const TypeExprExpr&>(e).type) + ")";
+            return "(type " + dumpType(*static_cast<const TypeExprExpr&>(e).typeExpr) + ")";
         case ExprKind::Closure: {
             auto& c = static_cast<const ClosureExpr&>(e);
             std::string s = "(fn";
