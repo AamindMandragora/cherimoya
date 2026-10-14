@@ -1,0 +1,9 @@
+# exit: 37
+# checks assignment, compound assignment, and discards
+let () -> main -> (code :: int) {
+    let x :: mut <- 10;
+    x <- x * 3;
+    x +<- 7;
+    _ <- x;
+    x -|
+}

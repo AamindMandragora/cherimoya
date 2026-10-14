@@ -1,0 +1,3 @@
+# exit: 67
+# checks hexadecimal integer literals
+let () -> main -> (code :: int) { 0x43 -| }

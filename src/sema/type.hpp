@@ -24,7 +24,7 @@ public:
 enum class PrimitiveKind {
     Int,
     Bool,
-    F64,
+    Float,
     Void,
     Never
 };
@@ -39,7 +39,7 @@ public:
             return "int";
         case PrimitiveKind::Bool:
             return "bool";
-        case PrimitiveKind::F64:
+        case PrimitiveKind::Float:
             return "float";
         case PrimitiveKind::Void:
             return "void";

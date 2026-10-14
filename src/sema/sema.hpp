@@ -56,7 +56,7 @@ class Sema {
                 if (named.path.size() == 1 && named.args.empty()) {
                     auto name = named.path[0].text;
                     if (name == "int" || name == "i64") return context.sema_int;
-                    if (name == "float" || name == "f64") return context.sema_f64;
+                    if (name == "float" || name == "f64") return context.sema_float;
                     if (name == "bool") return context.sema_bool;
                 }
                 std::string text;
@@ -137,7 +137,9 @@ class Sema {
             }
             signature.push_back(outputType(fn));
             auto span = Span{fn.name.loc, fn.name.loc + fn.name.text.length()};
-            scope->insert(makeSymbol(fn.name.text, SymbolKind::Function, context.get(signature), false, span));
+            auto symbol = makeSymbol(fn.name.text, SymbolKind::Function, context.get(signature), false, span);
+            scope->insert(symbol);
+            fn.decl = symbol;
         }
     }
 
@@ -151,6 +153,7 @@ class Sema {
                 auto type = p.type ? resolveType(*p.type) : nullptr;
                 bool mut = p.type && isMut(*p.type);
                 auto param = makeSymbol(p.name.text, SymbolKind::Param, type ? type : context.sema_error, mut, {p.name.loc, p.name.loc + p.name.text.length()});
+                p.decl = param;
                 scope->insert(param);
                 if (p.type) checkRefinements(*p.type, param);
             }
@@ -211,6 +214,7 @@ class Sema {
         }
         auto& binder = static_cast<BinderPattern&>(*let.pattern);
         auto symbol = makeSymbol(binder.name.text, SymbolKind::Binding, type, let.type && isMut(*let.type), binder.span);
+        binder.decl = symbol;
         if (let.type) checkRefinements(*let.type, symbol);
         scope->insert(symbol);
     }
@@ -337,7 +341,8 @@ class Sema {
                 return true;
             case PatternKind::Binder: {
                 auto& b = static_cast<BinderPattern&>(p);
-                scope->insert(makeSymbol(b.name.text, SymbolKind::Binding, subject, false, b.span));
+                b.decl = makeSymbol(b.name.text, SymbolKind::Binding, subject, false, b.span);
+                scope->insert(b.decl);
                 return true;
             }
             case PatternKind::Literal: {
@@ -559,7 +564,7 @@ class Sema {
 
     // checks whether a type is one of the numeric types
     bool numeric(SemaType* type) {
-        return type == context.sema_int || type == context.sema_f64;
+        return type == context.sema_int || type == context.sema_float;
     }
 
     // reports an operand of the wrong type for an operator
@@ -697,7 +702,7 @@ class Sema {
             case ExprKind::IntLiteral:
                 return context.sema_int;
             case ExprKind::FloatLiteral:
-                return context.sema_f64;
+                return context.sema_float;
             case ExprKind::BoolLiteral:
                 return context.sema_bool;
             case ExprKind::Identifier:
@@ -761,14 +766,27 @@ class Sema {
                 return unsupported(unsupportedName(e), e.span);
         }
     }
+    // checks the entry point of a program that will run: a top-level main, declared the way the runtime calls it
+    void checkMain(Scope& global) {
+        Symbol* main = global.lookup("main");
+        if (main == nullptr) {
+            engine.print_error("cherimoya requires a program to have a 'main' function, please add 'let () -> main -> (code :: int) { 0 -| }'", Span{0, 0});
+            return;
+        }
+        if (poisoned(main->type)) return;
+        if (main->kind != SymbolKind::Function || main->type != context.get({context.sema_int})) {
+            engine.print_error("cherimoya requires 'main' to be declared as 'let () -> main -> (code :: int)', please change its inputs and outputs", main->s);
+        }
+    }
 public:
     Sema(DiagnosticEngine& e) : engine(e), scope(nullptr), owner(0), functions(0) {}
 
-    // checks a whole program as one list of statements
-    void check(std::vector<std::unique_ptr<Stmt>>& program) {
+    // checks a whole program as one list of statements, and when entry is set, that it has a main to run
+    void check(std::vector<std::unique_ptr<Stmt>>& program, bool entry = false) {
         Scope global(nullptr, engine);
         scope = &global;
         checkStmts(program);
+        if (entry) checkMain(global);
         scope = nullptr;
     }
 

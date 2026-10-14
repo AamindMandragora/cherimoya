@@ -19,7 +19,7 @@ class TypeContext {
 public:
     PrimitiveSemaType* sema_int = make<PrimitiveSemaType>(PrimitiveKind::Int);
     PrimitiveSemaType* sema_bool = make<PrimitiveSemaType>(PrimitiveKind::Bool);
-    PrimitiveSemaType* sema_f64 = make<PrimitiveSemaType>(PrimitiveKind::F64);
+    PrimitiveSemaType* sema_float = make<PrimitiveSemaType>(PrimitiveKind::Float);
     PrimitiveSemaType* sema_void = make<PrimitiveSemaType>(PrimitiveKind::Void);
     PrimitiveSemaType* sema_never = make<PrimitiveSemaType>(PrimitiveKind::Never);
     ErrorSemaType* sema_error = make<ErrorSemaType>();

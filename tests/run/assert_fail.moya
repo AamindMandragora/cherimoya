@@ -1,0 +1,9 @@
+# exit: 134
+# checks that a false assertion traps with its line, which aborts the program
+let (n :: int) -> half -> (r :: int) {
+    assert (n % 2 = 0);
+    n / 2 -|
+}
+let () -> main -> (code :: int) {
+    half(7) -|
+}

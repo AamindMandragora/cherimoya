@@ -1,0 +1,11 @@
+# exit: 5
+# checks that assertions that hold let the program run on
+let (n :: int) -> half -> (r :: int) {
+    assert (n % 2 = 0);
+    n / 2 -|
+}
+let () -> main -> (code :: int) {
+    assert (true);
+    assert (1 < 2 && 2 < 3);
+    half(10) -|
+}
