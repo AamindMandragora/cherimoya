@@ -1,0 +1,12 @@
+# exit: 6
+# checks functions nested in an assertion's condition and in a match guard, which are declared like any other nested function
+let (n :: int) -> f -> (r :: int) {
+    assert ({ let () -> two -> (t :: int) { 2 -| } two() = 2 -| });
+    match {
+        ({ let () -> big -> (b :: int) { 100 -| } n < big() -| }) -> { n * 2 -| f }
+        _ -> { 0 -| f }
+    }
+}
+let () -> main -> (code :: int) {
+    f(3) -|
+}

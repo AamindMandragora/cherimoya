@@ -1,0 +1,3 @@
+# exit: 67
+# checks digit separators in integer literals
+let () -> main -> (code :: int) { 6_7 -| }

@@ -1,0 +1,8 @@
+# exit: 88
+# checks leaving a function from inside a nested block with -| name
+let (n :: int) -> clamp -> (r :: int) {
+    { n -| clamp }
+}
+let () -> main -> (code :: int) {
+    { 88 -| main }
+}
