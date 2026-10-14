@@ -1,0 +1,8 @@
+# exit: 67
+# checks forward and backward pipes
+let (a :: int) -> succ -> (r :: int) { a + 1 -| }
+let (n :: int) -> double -> (r :: int) { n * 2 -| }
+let () -> main -> (code :: int) {
+    let x <- (33 |> double);
+    (succ <| x) -|
+}

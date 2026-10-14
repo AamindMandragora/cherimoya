@@ -1,0 +1,15 @@
+# exit: 29
+# checks functions nested in a body and in a block, where two named square stay separate
+let (n :: int) -> outer -> (r :: int) {
+    let (x :: int) -> square -> (r :: int) { x * x -| }
+    let total <- {
+        let (x :: int) -> twice -> (r :: int) { x + x -| }
+        twice(n) -|
+    };
+    square(n) + total + helper(n) -|
+}
+let (x :: int) -> helper -> (r :: int) {
+    let (y :: int) -> square -> (r :: int) { y + 1 -| }
+    square(x) -|
+}
+let () -> main -> (code :: int) { outer(4) -| }

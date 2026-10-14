@@ -7,6 +7,7 @@
 #include "diagnostics.hpp"
 
 class Expr;
+struct Symbol;
 
 enum class PatternKind {
     Literal,
@@ -42,10 +43,11 @@ public:
     WildcardPattern(Span s) : Pattern(PatternKind::Wildcard, s) {}
 };
 
-// binder patterns hold a bare name, which sema resolves to a payload-free variant like None or else binds as a new name
+// binder patterns hold a bare name, which sema resolves to a payload-free variant like None or else binds as a new name, filling in its symbol
 class BinderPattern : public Pattern {
 public:
     Token name;
+    Symbol* decl = nullptr;
     BinderPattern(Token n, Span s) : Pattern(PatternKind::Binder, s), name(n) {}
 };
 

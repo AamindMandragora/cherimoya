@@ -1,0 +1,13 @@
+# exit: 52
+# checks top-level bindings: a folded constant, one computed before main, and a mutable one a function changes
+let LIMIT <- 40;
+let DOUBLE <- LIMIT * 2;
+let (n :: int) -> bump -> (r :: int) { n + 1 -| }
+let START <- bump(9);
+let counter :: mut <- 0;
+let () -> tick -> () { counter +<- 1; }
+let () -> main -> (code :: int) {
+    tick();
+    tick();
+    DOUBLE - LIMIT + START + counter -|
+}

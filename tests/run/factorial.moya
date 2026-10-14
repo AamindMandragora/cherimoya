@@ -1,0 +1,12 @@
+# exit: 120
+# checks a while loop with mutable locals
+let (n :: int) -> factorial -> (r :: int) {
+    let product :: mut <- 1;
+    let i :: mut <- 2;
+    repeat (i <= n) {
+        product *<- i;
+        i +<- 1;
+    }
+    product -|
+}
+let () -> main -> (code :: int) { factorial(5) -| }

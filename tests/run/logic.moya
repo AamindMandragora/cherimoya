@@ -1,0 +1,13 @@
+# exit: 23
+# checks that && and || skip their right side, since dividing by zero there would crash, and ^^
+let (n :: int) -> divides -> (r :: bool) { 84 % n = 0 -| }
+let () -> main -> (code :: int) {
+    let a <- false && divides(0);
+    let b <- true || divides(0);
+    let c <- true ^^ false;
+    let both <- !a && b && c;
+    match (both) {
+        true -> { 23 -| main }
+        false -> { 1 -| main }
+    }
+}

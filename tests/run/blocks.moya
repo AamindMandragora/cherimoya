@@ -1,0 +1,7 @@
+# exit: 52
+# checks block values and a labeled yield out of a nested block
+let () -> main -> (code :: int) {
+    let x <- { let a <- 25; a * 2 -| };
+    let y <- { outer { { 2 -| outer } } -| };
+    x + y -|
+}

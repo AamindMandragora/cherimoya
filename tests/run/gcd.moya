@@ -1,0 +1,13 @@
+# exit: 21
+# checks a while loop with a let inside its body
+let (a :: int, b :: int) -> gcd -> (r :: int) {
+    let x :: mut <- a;
+    let y :: mut <- b;
+    repeat (y != 0) {
+        let t <- y;
+        y <- x % y;
+        x <- t;
+    }
+    x -|
+}
+let () -> main -> (code :: int) { gcd(1071, 462) -| }

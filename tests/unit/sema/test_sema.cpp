@@ -30,6 +30,20 @@ static size_t semaWarnings(const std::string& input) {
     return Checked(input).diag.warningCount();
 }
 
+// checks input as a whole program that will run, so it also needs a main, and returns how many diagnostics it produced
+static size_t entryErrors(const std::string& input) {
+    SourceManager sm;
+    sm.loadString(input);
+    DiagnosticEngine diag(sm);
+    Lexer lexer(diag);
+    auto tokens = lexer.lex();
+    Parser parser(tokens, diag);
+    auto program = parser.parseProgram();
+    Sema sema(diag);
+    sema.check(program, true);
+    return diag.errorCount();
+}
+
 // checks input as a whole program and returns the type of the last symbol named name, or "" if there isn't one
 static std::string symbolType(const std::string& input, std::string_view name) {
     Checked checked(input);
@@ -296,4 +310,17 @@ TEST_CASE("Sema: chunk", "[sema]") {
     CHECK(symbolType("let x <- chunk { 4 -| };", "x") == "int");
     CHECK(semaErrors("let x <- chunk scratch { { 4 -| scratch } };") == 0);
     CHECK(semaErrors("chunk { let y <- 1; }") == 0);
+}
+
+// checks that a program that will run has a top-level main shaped the way the runtime calls it
+TEST_CASE("Sema: entry point", "[sema]") {
+    CHECK(entryErrors("let () -> main -> (code :: int) { 0 -| }") == 0);
+    CHECK(entryErrors("let LIMIT <- 4; let () -> main -> (code :: int) { LIMIT -| }") == 0);
+    CHECK(entryErrors("let () -> start -> (code :: int) { 0 -| }") == 1);
+    CHECK(entryErrors("let (a :: int) -> main -> (code :: int) { a -| }") == 1);
+    CHECK(entryErrors("let () -> main -> () { }") == 1);
+    CHECK(entryErrors("let () -> main -> (code :: bool) { true -| }") == 1);
+    CHECK(entryErrors("let main <- 5;") == 1);
+    CHECK(entryErrors("let () -> f -> () { let () -> main -> (code :: int) { 0 -| } }") == 1);
+    CHECK(semaErrors("let () -> start -> (code :: int) { 0 -| }") == 0);
 }

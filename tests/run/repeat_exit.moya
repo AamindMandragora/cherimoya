@@ -1,0 +1,17 @@
+# exit: 77
+# checks an infinite loop yielding its value with -| repeat, and leaving a labeled loop from an inner one
+let () -> main -> (code :: int) {
+    let n :: mut <- 0;
+    let found <- repeat {
+        n +<- 7;
+        match { (n > 70) -> { n -| repeat } }
+    };
+    let count :: mut <- 0;
+    repeat outer (true) {
+        repeat {
+            count +<- 1;
+            match { (count = 3) -> { -| outer } }
+        }
+    }
+    found + count - 3 -|
+}

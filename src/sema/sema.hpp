@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <deque>
-#include <unordered_map>
 #include "context.hpp"
 #include "scope.hpp"
 #include "target.hpp"
@@ -19,8 +18,6 @@ class Sema {
     // which function body is being checked, 0 at the top of the file, and how many have been numbered so far
     size_t owner;
     size_t functions;
-    // every function's type, resolved once when it's hoisted, so its parameters and outputs are only ever reported once
-    std::unordered_map<const FnDecl*, FunctionSemaType*> signatures;
     // every construct a yield could target right now, innermost last
     std::vector<Target> targets;
 
@@ -156,16 +153,17 @@ class Sema {
                 signature.push_back(type);
             }
             signature.push_back(outputType(fn));
-            auto span = tokSpan(fn.name);
-            signatures[&fn] = context.functionType(signature);
-            scope->insert(makeSymbol(fn.name.text, SymbolKind::Function, signatures[&fn], false, span));
+            auto symbol = makeSymbol(fn.name.text, SymbolKind::Function, context.functionType(signature), false, tokSpan(fn.name));
+            scope->insert(symbol);
+            fn.decl = symbol;
         }
     }
 
     // the last pass for a function: its parameters and their refinements, its obligations, then its body in a scope of its own
     void checkFn(FnDecl& fn) {
         if (fn.name.kind != TokenKind::Identifier) return;
-        FunctionSemaType* signature = signatures.at(&fn);
+        // the signature was resolved when the function was hoisted, so its parameters and outputs are only ever reported once
+        auto signature = static_cast<FunctionSemaType*>(fn.decl->type);
         size_t saved = owner;
         owner = ++functions;
         inScope([&] {
@@ -173,6 +171,7 @@ class Sema {
                 auto& p = fn.inputs[i];
                 bool isMutable = p.type && isMut(*p.type);
                 auto param = makeSymbol(p.name.text, SymbolKind::Param, signature->params[i], isMutable, tokSpan(p.name));
+                p.decl = param;
                 scope->insert(param);
                 if (p.type) checkRefinements(*p.type, param);
             }
@@ -233,6 +232,7 @@ class Sema {
         }
         auto& binder = static_cast<BinderPattern&>(*let.pattern);
         auto symbol = makeSymbol(binder.name.text, SymbolKind::Binding, type, let.type && isMut(*let.type), binder.span);
+        binder.decl = symbol;
         scope->insert(symbol);
         if (let.type) checkRefinements(*let.type, symbol);
     }
@@ -363,7 +363,8 @@ class Sema {
                 return true;
             case PatternKind::Binder: {
                 auto& b = static_cast<BinderPattern&>(p);
-                scope->insert(makeSymbol(b.name.text, SymbolKind::Binding, subject, false, b.span));
+                b.decl = makeSymbol(b.name.text, SymbolKind::Binding, subject, false, b.span);
+                scope->insert(b.decl);
                 return true;
             }
             case PatternKind::Literal: {
@@ -773,14 +774,27 @@ class Sema {
                 return unsupported(unsupportedName(e), e.span);
         }
     }
+    // checks the entry point of a program that will run: a top-level main, declared the way the runtime calls it
+    void checkMain(Scope& global) {
+        Symbol* main = global.lookup("main");
+        if (main == nullptr) {
+            engine.printError("cherimoya requires a program to have a 'main' function, please add 'let () -> main -> (code :: int) { 0 -| }'", Span{0, 0});
+            return;
+        }
+        if (isPoisoned(main->type)) return;
+        if (main->kind != SymbolKind::Function || main->type != context.functionType({context.semaInt})) {
+            engine.printError("cherimoya requires 'main' to be declared as 'let () -> main -> (code :: int)', please change its inputs and outputs", main->span);
+        }
+    }
 public:
     Sema(DiagnosticEngine& e) : engine(e), scope(nullptr), owner(0), functions(0) {}
 
-    // checks a whole program as one list of statements
-    void check(std::vector<std::unique_ptr<Stmt>>& program) {
+    // checks a whole program as one list of statements, and when entry is set, that it has a main to run
+    void check(std::vector<std::unique_ptr<Stmt>>& program, bool entry = false) {
         Scope global(nullptr, engine);
         scope = &global;
         checkStmts(program);
+        if (entry) checkMain(global);
         scope = nullptr;
     }
 

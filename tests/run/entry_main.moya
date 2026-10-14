@@ -1,0 +1,9 @@
+# exit: 9
+# checks that the entry point is the main at the top of the file, not a function named main inside a top-level block
+let K <- {
+    let () -> main -> (code :: int) { 5 -| }
+    4 -|
+};
+let () -> main -> (code :: int) {
+    K + 5 -|
+}

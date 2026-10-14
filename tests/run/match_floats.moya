@@ -1,0 +1,14 @@
+# exit: 14
+# checks that a plain match compares floats deeply, so -0.0 matches 0.0, and match (=, x) compares their bits
+let () -> main -> (code :: int) {
+    let negative <- -0.0;
+    let deep <- match (negative) {
+        0.0 -> { 11 -| }
+        _ -> { 0 -| }
+    };
+    let shallow <- match (=, negative) {
+        0.0 -> { 0 -| }
+        _ -> { 3 -| }
+    };
+    deep + shallow -|
+}

@@ -7,6 +7,7 @@
 #include "diagnostics.hpp"
 
 class Expr;
+struct Symbol;
 
 enum class TypeKind {
     Named,
@@ -78,10 +79,11 @@ public:
     TupleType(std::vector<std::unique_ptr<Type>> e, Span s) : Type(TypeKind::Tuple, s), elems(std::move(e)) {}
 };
 
-// name :: type, used for record fields and for parameters, where the type is null when a closure leaves it to inference
+// name :: type, used for record fields and for parameters, where the type is null when a closure leaves it to inference, and sema fills in a parameter's symbol
 struct Param {
     Token name;
     std::unique_ptr<Type> type;
+    Symbol* decl = nullptr;
 };
 
 // record types hold their named fields: [x :: f64, y :: f64]
