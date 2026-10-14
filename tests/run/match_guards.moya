@@ -1,0 +1,15 @@
+# exit: 69
+# checks subjectless guards that leave the function early, and a match on a bool
+let (n :: int) -> clamp -> (r :: int) {
+    match { (n > 100) -> { 100 -| clamp } }
+    match { (n < 0) -> { 0 -| clamp } }
+    n -|
+}
+let () -> main -> (code :: int) {
+    let flag <- true;
+    let bonus <- match (flag) {
+        true -> { 2 -| }
+        false -> { 0 -| }
+    };
+    clamp(500) - clamp(-5) - 33 + bonus -|
+}

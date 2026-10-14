@@ -1,0 +1,12 @@
+# exit: 48
+# checks a match on an int with literal, negative literal, and binder arms
+let (n :: int) -> classify -> (r :: int) {
+    match (n) {
+        0 -> { 10 -| }
+        -1 -> { 20 -| }
+        m -> { m * 3 -| }
+    } -|
+}
+let () -> main -> (code :: int) {
+    classify(0) + classify(-1) + classify(6) -|
+}

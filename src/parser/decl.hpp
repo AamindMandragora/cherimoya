@@ -7,6 +7,8 @@
 #include "diagnostics.hpp"
 #include "stmt.hpp"
 
+struct Symbol;
+
 enum class DeclKind {
     Fn,
     Type,
@@ -33,7 +35,7 @@ struct GenericParam {
 
 /*
 let [generics] (inputs) -> name -> (outputs) wit {obligations} body
-where name is an identifier or an overloadable operator, and body is null for externs and interface members
+where name is an identifier or an overloadable operator, body is null for externs and interface members, and sema fills in the function's symbol
 */
 class FnDecl : public Decl {
 public:
@@ -43,6 +45,7 @@ public:
     std::vector<Param> outputs;
     std::unique_ptr<Expr> obligations;
     std::unique_ptr<BlockExpr> body;
+    Symbol* decl = nullptr;
     FnDecl(std::vector<GenericParam> g, std::vector<Param> i, Token n, std::vector<Param> o, std::unique_ptr<Expr> ob, std::unique_ptr<BlockExpr> b, Span s) : Decl(DeclKind::Fn, s), generics(std::move(g)), inputs(std::move(i)), name(n), outputs(std::move(o)), obligations(std::move(ob)), body(std::move(b)) {}
 };
 

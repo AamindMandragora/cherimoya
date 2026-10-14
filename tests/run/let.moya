@@ -1,0 +1,7 @@
+# exit: 149
+# checks bindings and reading them back
+let () -> main -> (code :: int) {
+    let x <- 13;
+    let y :: int <- x * 11;
+    y + 6 -|
+}

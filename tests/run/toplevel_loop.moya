@@ -1,0 +1,13 @@
+# exit: 3
+# checks that a binding inside a top-level loop starts over each time round, even when its initializer is a constant
+let count :: mut <- 0;
+let total :: mut <- 0;
+repeat (count < 3) {
+    let step :: mut <- 0;
+    step +<- 1;
+    total +<- step;
+    count +<- 1;
+}
+let () -> main -> (code :: int) {
+    total -|
+}

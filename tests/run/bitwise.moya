@@ -1,0 +1,3 @@
+# exit: 42
+# checks bitwise operators and their precedence
+let () -> main -> (code :: int) { (1 << 5) | 8 ^ 2 -| }
