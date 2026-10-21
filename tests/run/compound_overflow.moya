@@ -1,0 +1,11 @@
+# exit: 134
+# trap: trap at line 6: 'x +<- 100' overflowed i8
+# checks that a compound assignment that overflows traps, quoting the assignment without its semicolon
+let (n :: i8) -> bump -> (r :: i8) {
+    let x :: mut <- n;
+    x +<- 100;
+    x -|
+}
+let () -> main -> (code :: int) {
+    int(bump(100)) -|
+}

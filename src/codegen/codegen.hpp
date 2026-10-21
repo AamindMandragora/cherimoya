@@ -9,6 +9,7 @@
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/ErrorHandling.h>
+#include <llvm/IR/Intrinsics.h>
 
 // codegen lowers a checked program to an LLVM module, reading the types and symbols sema wrote into the AST
 class Codegen {
@@ -29,8 +30,6 @@ class Codegen {
         switch (sematype->kind) {
             case SemaTypeKind::Primitive:
                 switch (static_cast<PrimitiveSemaType*>(sematype)->primitive) {
-                    case PrimitiveKind::Int:
-                        return lowered[sematype] = llvm::Type::getInt64Ty(context);
                     case PrimitiveKind::Bool:
                         return lowered[sematype] = llvm::Type::getInt1Ty(context);
                     case PrimitiveKind::Float:
@@ -42,6 +41,8 @@ class Codegen {
                         llvm_unreachable("unknown primitive");
                         return nullptr;
                 }
+            case SemaTypeKind::Int:
+                return lowered[sematype] = llvm::Type::getIntNTy(context, static_cast<IntSemaType*>(sematype)->bits);
             case SemaTypeKind::Function: {
                 auto fn = static_cast<FunctionSemaType*>(sematype);
                 std::vector<llvm::Type*> params;
@@ -168,21 +169,32 @@ class Codegen {
         return type->kind == SemaTypeKind::Primitive && static_cast<PrimitiveSemaType*>(type)->primitive == PrimitiveKind::Float;
     }
 
-    // emits one built-in comparison, signed for ints and ordered for floats, which can't be NaN
-    llvm::Value* compare(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, bool floats) {
+    // the integer type a sema type is, or null if it isn't one
+    IntSemaType* asInt(SemaType* type) {
+        return type != nullptr && type->kind == SemaTypeKind::Int ? static_cast<IntSemaType*>(type) : nullptr;
+    }
+
+    // checks whether a sema type is an unsigned integer, which decides between signed and unsigned instructions
+    bool isUnsigned(SemaType* type) {
+        IntSemaType* integer = asInt(type);
+        return integer != nullptr && !integer->isSigned;
+    }
+
+    // emits one built-in comparison, signed or unsigned for ints, and ordered for floats, which can't be NaN
+    llvm::Value* compare(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, bool floats, bool unsignedInts = false) {
         switch (op) {
             case TokenKind::Lt:
                 if (floats) return irbuilder.CreateFCmp(llvm::FCmpInst::FCMP_OLT, lhs, rhs);
-                return irbuilder.CreateICmp(llvm::CmpInst::ICMP_SLT, lhs, rhs);
+                return irbuilder.CreateICmp(unsignedInts ? llvm::CmpInst::ICMP_ULT : llvm::CmpInst::ICMP_SLT, lhs, rhs);
             case TokenKind::Le:
                 if (floats) return irbuilder.CreateFCmp(llvm::FCmpInst::FCMP_OLE, lhs, rhs);
-                return irbuilder.CreateICmp(llvm::CmpInst::ICMP_SLE, lhs, rhs);
+                return irbuilder.CreateICmp(unsignedInts ? llvm::CmpInst::ICMP_ULE : llvm::CmpInst::ICMP_SLE, lhs, rhs);
             case TokenKind::Gt:
                 if (floats) return irbuilder.CreateFCmp(llvm::FCmpInst::FCMP_OGT, lhs, rhs);
-                return irbuilder.CreateICmp(llvm::CmpInst::ICMP_SGT, lhs, rhs);
+                return irbuilder.CreateICmp(unsignedInts ? llvm::CmpInst::ICMP_UGT : llvm::CmpInst::ICMP_SGT, lhs, rhs);
             case TokenKind::Ge:
                 if (floats) return irbuilder.CreateFCmp(llvm::FCmpInst::FCMP_OGE, lhs, rhs);
-                return irbuilder.CreateICmp(llvm::CmpInst::ICMP_SGE, lhs, rhs);
+                return irbuilder.CreateICmp(unsignedInts ? llvm::CmpInst::ICMP_UGE : llvm::CmpInst::ICMP_SGE, lhs, rhs);
             case TokenKind::Eq:
             case TokenKind::EqEq:
                 if (floats) return irbuilder.CreateFCmp(llvm::FCmpInst::FCMP_OEQ, lhs, rhs);
@@ -196,8 +208,109 @@ class Codegen {
         }
     }
 
-    // emits one built-in arithmetic or bitwise operator, which compound assignment shares through the base of X<-
-    llvm::Value* arithmetic(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, bool floats) {
+    // stops the program with a message when fails is true at run time, and otherwise carries on in a fresh block, which every runtime check goes through
+    void trapIf(llvm::Value* fails, const std::string& message, Span span) {
+        llvm::Function* f = irbuilder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* fail = llvm::BasicBlock::Create(context, "trap", f);
+        llvm::BasicBlock* ok = llvm::BasicBlock::Create(context, "ok", f);
+        irbuilder.CreateCondBr(fails, fail, ok);
+        irbuilder.SetInsertPoint(fail);
+        uint64_t line = manager.getLineCol(span.start).line;
+        irbuilder.CreateCall(trap(), {irbuilder.CreateGlobalString(message), irbuilder.getInt64(line)});
+        irbuilder.CreateUnreachable();
+        irbuilder.SetInsertPoint(ok);
+    }
+
+    // the source text of a span, quoted, for trap messages like 'x * y' overflowed i8
+    std::string quoted(Span span) {
+        return "'" + std::string(manager.text().substr(span.start, span.length())) + "'";
+    }
+
+    // emits + - or * on a trapping integer through an overflow intrinsic, which gives the result and whether it overflowed, and traps when it did
+    llvm::Value* checked(llvm::Intrinsic::ID id, llvm::Value* lhs, llvm::Value* rhs, IntSemaType& type, Span span) {
+        llvm::Function* intrinsic = llvm::Intrinsic::getOrInsertDeclaration(module.get(), id, {lhs->getType()});
+        llvm::Value* pair = irbuilder.CreateCall(intrinsic, {lhs, rhs});
+        llvm::Value* result = irbuilder.CreateExtractValue(pair, 0);
+        llvm::Value* overflowed = irbuilder.CreateExtractValue(pair, 1);
+        trapIf(overflowed, quoted(span) + " overflowed " + type.toString(), span);
+        return result;
+    }
+
+    // emits / or % on integers: a zero divisor always traps, and the one signed case that overflows, the minimum divided by -1, traps or wraps with the type
+    llvm::Value* divide(bool isDivide, llvm::Value* lhs, llvm::Value* rhs, IntSemaType& type, Span span) {
+        llvm::Type* llvmType = lhs->getType();
+        llvm::Value* zero = irbuilder.CreateICmpEQ(rhs, llvm::ConstantInt::get(llvmType, 0));
+        trapIf(zero, quoted(span) + " divided by zero", span);
+        if (type.isSigned) {
+            llvm::Value* minimum = llvm::ConstantInt::get(llvmType, llvm::APInt::getSignedMinValue(type.bits));
+            llvm::Value* minusOne = llvm::ConstantInt::getSigned(llvmType, -1);
+            llvm::Value* overflows = irbuilder.CreateAnd(irbuilder.CreateICmpEQ(lhs, minimum), irbuilder.CreateICmpEQ(rhs, minusOne));
+            if (!type.isWrapping) {
+                trapIf(overflows, quoted(span) + " overflowed " + type.toString(), span);
+            } else {
+                rhs = irbuilder.CreateSelect(overflows, llvm::ConstantInt::getSigned(llvmType, 1), rhs);
+            }
+        }
+        if (isDivide) return type.isSigned ? irbuilder.CreateSDiv(lhs, rhs) : irbuilder.CreateUDiv(lhs, rhs);
+        return type.isSigned ? irbuilder.CreateSRem(lhs, rhs) : irbuilder.CreateURem(lhs, rhs);
+    }
+
+    // emits << or >>, where a trapping type traps on an amount outside 0 to bits - 1, a wrapping type takes the amount modulo the width, and >> keeps the sign only for signed types
+    llvm::Value* shift(bool isLeft, llvm::Value* lhs, llvm::Value* rhs, IntSemaType& type, Span span) {
+        llvm::Value* width = llvm::ConstantInt::get(lhs->getType(), type.bits);
+        if (type.isWrapping) {
+            rhs = irbuilder.CreateAnd(rhs, llvm::ConstantInt::get(lhs->getType(), type.bits - 1));
+        } else {
+            llvm::Value* outOfRange = irbuilder.CreateICmpUGE(rhs, width);
+            trapIf(outOfRange, quoted(span) + " shifted by an amount outside 0 to " + std::to_string(type.bits - 1), span);
+        }
+        if (isLeft) return irbuilder.CreateShl(lhs, rhs);
+        return type.isSigned ? irbuilder.CreateAShr(lhs, rhs) : irbuilder.CreateLShr(lhs, rhs);
+    }
+
+    // converts an integer to another integer type: a wrapping target keeps the low bits, and a trapping one checks the value survived and traps if it didn't
+    llvm::Value* convert(llvm::Value* value, IntSemaType& source, IntSemaType& target, Span span) {
+        llvm::Type* targetType = lower(&target);
+        llvm::Value* converted;
+        if (source.bits > target.bits) {
+            converted = irbuilder.CreateTrunc(value, targetType);
+        } else if (source.bits < target.bits) {
+            converted = source.isSigned ? irbuilder.CreateSExt(value, targetType) : irbuilder.CreateZExt(value, targetType);
+        } else {
+            converted = value;
+        }
+        if (target.isWrapping) return converted;
+        // converting back has to give the original value, which catches narrowing that lost bits
+        llvm::Type* sourceType = value->getType();
+        llvm::Value* back;
+        if (target.bits > source.bits) {
+            back = irbuilder.CreateTrunc(converted, sourceType);
+        } else if (target.bits < source.bits) {
+            back = target.isSigned ? irbuilder.CreateSExt(converted, sourceType) : irbuilder.CreateZExt(converted, sourceType);
+        } else {
+            back = converted;
+        }
+        llvm::Value* fits = irbuilder.CreateICmpEQ(back, value);
+        // and the sign has to survive: -1 as an i8 and 255 as an i8u have the same bits, so a value that changes signedness also has to be at least zero on the signed side
+        llvm::Value* zero = llvm::ConstantInt::get(sourceType, 0);
+        if (source.isSigned && !target.isSigned) fits = irbuilder.CreateAnd(fits, irbuilder.CreateICmpSGE(value, zero));
+        if (!source.isSigned && target.isSigned) fits = irbuilder.CreateAnd(fits, irbuilder.CreateICmpSGE(converted, llvm::ConstantInt::get(targetType, 0)));
+        trapIf(irbuilder.CreateNot(fits), quoted(span) + " doesn't fit in " + target.toString(), span);
+        return converted;
+    }
+
+    // emits one built-in arithmetic or bitwise operator on two values of the same type, which compound assignment shares through the base of X<-
+    llvm::Value* arithmetic(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, SemaType* type, Span span) {
+        bool floats = isFloat(type);
+        IntSemaType* integer = asInt(type);
+        // a trapping integer's + - and * go through the overflow intrinsics, signed or unsigned, and a wrapping one's are plain two's complement
+        if (integer && !integer->isWrapping && (op == TokenKind::Plus || op == TokenKind::Minus || op == TokenKind::Star)) {
+            bool s = integer->isSigned;
+            llvm::Intrinsic::ID id = op == TokenKind::Plus ? (s ? llvm::Intrinsic::sadd_with_overflow : llvm::Intrinsic::uadd_with_overflow)
+                : op == TokenKind::Minus ? (s ? llvm::Intrinsic::ssub_with_overflow : llvm::Intrinsic::usub_with_overflow)
+                : (s ? llvm::Intrinsic::smul_with_overflow : llvm::Intrinsic::umul_with_overflow);
+            return checked(id, lhs, rhs, *integer, span);
+        }
         switch (op) {
             case TokenKind::Plus:
                 if (floats) return irbuilder.CreateFAdd(lhs, rhs);
@@ -210,22 +323,20 @@ class Codegen {
                 return irbuilder.CreateMul(lhs, rhs);
             case TokenKind::Slash:
                 if (floats) return irbuilder.CreateFDiv(lhs, rhs);
-                return irbuilder.CreateSDiv(lhs, rhs);
+                return divide(true, lhs, rhs, *integer, span);
             case TokenKind::Percent:
                 if (floats) return irbuilder.CreateFRem(lhs, rhs);
-                return irbuilder.CreateSRem(lhs, rhs);
+                return divide(false, lhs, rhs, *integer, span);
             case TokenKind::Amp:
                 return irbuilder.CreateAnd(lhs, rhs);
             case TokenKind::Bar:
                 return irbuilder.CreateOr(lhs, rhs);
             case TokenKind::Caret:
                 return irbuilder.CreateXor(lhs, rhs);
-            case TokenKind::CaretCaret:
-                return irbuilder.CreateXor(lhs, rhs);
             case TokenKind::Shl:
-                return irbuilder.CreateShl(lhs, rhs);
+                return shift(true, lhs, rhs, *integer, span);
             case TokenKind::Shr:
-                return irbuilder.CreateAShr(lhs, rhs);
+                return shift(false, lhs, rhs, *integer, span);
             default:
                 llvm_unreachable("not an arithmetic operator");
         }
@@ -270,15 +381,16 @@ class Codegen {
                 std::string_view literal = static_cast<IntLiteralExpr*>(&e)->literal;
                 std::string cleaned;
                 for (char c : literal) if (c != '_') cleaned.push_back(c);
+                unsigned bits = static_cast<IntSemaType*>(static_cast<IntLiteralExpr*>(&e)->type)->bits;
                 llvm::APInt llvmValue;
                 if (cleaned.substr(0, 2) == "0x" || cleaned.substr(0, 2) == "0X") {
-                    llvmValue = llvm::APInt(64, cleaned.substr(2), 16);
+                    llvmValue = llvm::APInt(bits, cleaned.substr(2), 16);
                 } else if (cleaned.substr(0, 2) == "0o" || cleaned.substr(0, 2) == "0O") {
-                    llvmValue = llvm::APInt(64, cleaned.substr(2), 8);
+                    llvmValue = llvm::APInt(bits, cleaned.substr(2), 8);
                 } else if (cleaned.substr(0, 2) == "0b" || cleaned.substr(0, 2) == "0B") {
-                    llvmValue = llvm::APInt(64, cleaned.substr(2), 2);
+                    llvmValue = llvm::APInt(bits, cleaned.substr(2), 2);
                 } else {
-                    llvmValue = llvm::APInt(64, cleaned, 10);
+                    llvmValue = llvm::APInt(bits, cleaned, 10);
                 }
                 return irbuilder.getInt(llvmValue);
             }
@@ -308,9 +420,14 @@ class Codegen {
                 auto* unary = static_cast<UnaryExpr*>(&e);
                 auto* operand = emitExpr(*unary->operand.get());
                 bool floats = isFloat(unary->operand->type);
+                IntSemaType* integer = asInt(unary->operand->type);
                 switch (unary->op.kind) {
                     case TokenKind::Minus:
                         if (floats) return irbuilder.CreateFNeg(operand);
+                        // a negated literal is a constant sema already checked, like -128 as an i8, whose 128 would overflow if it were negated at run time
+                        if (unary->operand->kind == ExprKind::IntLiteral) return irbuilder.CreateNeg(operand);
+                        // negating a trapping signed integer overflows only for the minimum, so it's 0 - x through the checked subtraction
+                        if (integer && !integer->isWrapping) return checked(llvm::Intrinsic::ssub_with_overflow, llvm::ConstantInt::get(operand->getType(), 0), operand, *integer, e.span);
                         return irbuilder.CreateNeg(operand);
                     case TokenKind::Tilde:
                     case TokenKind::Bang:
@@ -338,7 +455,7 @@ class Codegen {
                     case TokenKind::Caret:
                     case TokenKind::Shl:
                     case TokenKind::Shr:
-                        return arithmetic(binary->op.kind, lhs, rhs, floats);
+                        return arithmetic(binary->op.kind, lhs, rhs, binary->lhs->type, e.span);
                     case TokenKind::CaretCaret:
                         return irbuilder.CreateXor(lhs, rhs);
                     case TokenKind::Lt:
@@ -349,7 +466,7 @@ class Codegen {
                     case TokenKind::EqEq:
                     case TokenKind::Ne:
                     case TokenKind::NeEq:
-                        return compare(binary->op.kind, lhs, rhs, floats);
+                        return compare(binary->op.kind, lhs, rhs, floats, isUnsigned(binary->lhs->type));
                     default:
                         llvm_unreachable("sema rejected every other binary operator");
                         return nullptr;
@@ -365,7 +482,7 @@ class Codegen {
                 }
                 llvm::Value* result = nullptr;
                 for (size_t i = 0; i < chain->ops.size(); i++) {
-                    auto* pair = compare(chain->ops[i].kind, operands[i], operands[i + 1], floats);
+                    auto* pair = compare(chain->ops[i].kind, operands[i], operands[i + 1], floats, isUnsigned(chain->operands[0]->type));
                     result = result ? irbuilder.CreateAnd(result, pair) : pair;
                 }
                 return result;
@@ -378,6 +495,11 @@ class Codegen {
             // a call's callee is always a function's name, so it's looked up instead of emitted
             case ExprKind::Call: {
                 auto* call = static_cast<CallExpr*>(&e);
+                // a type called on a value converts it
+                if (call->callee->kind == ExprKind::TypeExpr) {
+                    llvm::Value* value = emitExpr(*call->args[0]);
+                    return convert(value, *asInt(call->args[0]->type), *asInt(call->callee->type), e.span);
+                }
                 auto* callee = static_cast<IdentifierExpr*>(call->callee.get());
                 std::vector<llvm::Value*> args;
                 for (auto& arg : call->args) {
@@ -408,7 +530,9 @@ class Codegen {
             case ExprKind::Pipe: {
                 auto* pipe = static_cast<PipeExpr*>(&e);
                 switch (pipe->op.kind) {
+                    // a pipe into a type converts, x |> i8 being i8(x)
                     case TokenKind::PipeFwd: {
+                        if (pipe->rhs->kind == ExprKind::TypeExpr) return convert(emitExpr(*pipe->lhs), *asInt(pipe->lhs->type), *asInt(pipe->rhs->type), e.span);
                         auto* lhs = emitExpr(*pipe->lhs.get());
                         auto* rhs = static_cast<IdentifierExpr*>(pipe->rhs.get());
                         auto fun = declared.find(rhs->decl);
@@ -419,6 +543,7 @@ class Codegen {
                         return emitCall(fun->second, {lhs});
                     }
                     case TokenKind::PipeBack: {
+                        if (pipe->lhs->kind == ExprKind::TypeExpr) return convert(emitExpr(*pipe->rhs), *asInt(pipe->rhs->type), *asInt(pipe->lhs->type), e.span);
                         auto* lhs = static_cast<IdentifierExpr*>(pipe->lhs.get());
                         auto* rhs = emitExpr(*pipe->rhs.get());
                         auto fun = declared.find(lhs->decl);
@@ -577,7 +702,7 @@ class Codegen {
                 if (assign->op) {
                     llvm::Value* current = irbuilder.CreateLoad(lower(place->decl->type), address);
                     TokenKind base = assign->op->op->base->kind;
-                    value = arithmetic(base, current, value, isFloat(assign->place->type));
+                    value = arithmetic(base, current, value, assign->place->type, Span{assign->place->span.start, assign->value->span.end});
                 }
                 irbuilder.CreateStore(value, address);
                 break;
@@ -603,17 +728,8 @@ class Codegen {
             // assert (cond) checks cond at run time, and traps with the assertion's line and source text when it's false
             case StmtKind::Assert: {
                 auto* check = static_cast<AssertStmt*>(stmt);
-                llvm::Function* f = irbuilder.GetInsertBlock()->getParent();
                 llvm::Value* cond = emitExpr(*check->cond);
-                llvm::BasicBlock* ok = llvm::BasicBlock::Create(context, "assert.ok", f);
-                llvm::BasicBlock* fail = llvm::BasicBlock::Create(context, "assert.fail", f);
-                irbuilder.CreateCondBr(cond, ok, fail);
-                irbuilder.SetInsertPoint(fail);
-                std::string_view text = manager.text().substr(stmt->span.start, stmt->span.length());
-                uint64_t line = manager.getLineCol(stmt->span.start).line;
-                irbuilder.CreateCall(trap(), {irbuilder.CreateGlobalString(text), irbuilder.getInt64(line)});
-                irbuilder.CreateUnreachable();
-                irbuilder.SetInsertPoint(ok);
+                trapIf(irbuilder.CreateNot(cond), std::string(manager.text().substr(stmt->span.start, stmt->span.length())), stmt->span);
                 break;
             }
             default:

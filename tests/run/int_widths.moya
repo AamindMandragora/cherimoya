@@ -1,0 +1,15 @@
+# exit: 99
+# checks arithmetic in narrow, wide, unsigned, and wrapping types, and literals that adapt to them
+let () -> main -> (code :: int) {
+    let a :: i8 <- -128;
+    let b :: i8u <- 200;
+    let c :: i128u <- 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF;
+    let d :: i8uw <- 250;
+    let e <- d + 10;
+    let big :: i128 <- 170141183460469231731687303715884105727;
+    let ok <- a < 0 && b > 100 && c > 0 && e = 4 && big > 0;
+    match (ok) {
+        true -> { 99 -| main }
+        false -> { 1 -| main }
+    }
+}

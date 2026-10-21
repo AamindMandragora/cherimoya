@@ -5,6 +5,7 @@
 
 enum class SemaTypeKind {
     Primitive,
+    Int,
     Function,
     Error
 };
@@ -20,7 +21,6 @@ public:
 
 // never is the type of a yield, since control doesn't continue past one
 enum class PrimitiveKind {
-    Int,
     Bool,
     Float,
     Void,
@@ -33,8 +33,6 @@ public:
     PrimitiveSemaType(PrimitiveKind p) : SemaType(SemaTypeKind::Primitive), primitive(p) {}
     std::string toString() const override {
         switch (primitive) {
-        case PrimitiveKind::Int:
-            return "int";
         case PrimitiveKind::Bool:
             return "bool";
         case PrimitiveKind::Float:
@@ -45,6 +43,20 @@ public:
             return "never";
         }
         return "unknown";
+    }
+};
+
+// an integer type is its width, whether it's signed, and whether it wraps on overflow instead of trapping: i32 is 32 bits, signed, and trapping, and i8uw is 8 bits, unsigned, and wrapping
+class IntSemaType : public SemaType {
+public:
+    unsigned bits;
+    bool isSigned;
+    bool isWrapping;
+    // the name the type is written with, where i64 prints as int, the alias it's usually written as
+    std::string name;
+    IntSemaType(unsigned b, bool s, bool w, std::string n) : SemaType(SemaTypeKind::Int), bits(b), isSigned(s), isWrapping(w), name(std::move(n)) {}
+    std::string toString() const override {
+        return name;
     }
 };
 

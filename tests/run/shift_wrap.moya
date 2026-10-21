@@ -1,0 +1,4 @@
+# exit: 2
+# checks that a wrapping integer shifted by its width or more takes the amount modulo the width
+let (x :: i32w, n :: i32w) -> shl -> (r :: i32w) { x << n -| }
+let () -> main -> (code :: int) { int(shl(1, 33)) -| }
