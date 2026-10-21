@@ -147,6 +147,7 @@ TEST_CASE("Sema: calls and pipes", "[sema]") {
     CHECK(symbolType(fns + "let x <- 1 |> inc |> inc;", "x") == "int");
     CHECK(symbolType(fns + "let x <- inc <| inc <| 1 + 2;", "x") == "int");
     CHECK(semaErrors(fns + "let x <- add(1);") == 1);
+    CHECK(semaErrors(fns + "let x <- inc(1, 2, 3);") == 1);
     CHECK(semaErrors(fns + "let x <- add(1, true);") == 1);
     CHECK(semaErrors(fns + "let x <- tick();") == 1);
     CHECK(semaErrors(fns + "tick();") == 0);
@@ -194,11 +195,11 @@ TEST_CASE("Sema: discards", "[sema]") {
 
 // checks that what sema can't check yet is reported once and poisons silently from there
 TEST_CASE("Sema: unsupported forms", "[sema]") {
-    CHECK(semaErrors("let x :: i32 <- 5;") == 1);
+    CHECK(semaErrors("let x :: char <- 5;") == 1);
     CHECK(semaErrors("type Id <- int;") == 1);
     CHECK(semaErrors("import [List] <- list;") == 1);
     CHECK(semaErrors("let [a, b] <- p;") == 2);
-    CHECK(semaErrors("let x :: i32 <- 5; let y <- x; let z <- y;") == 1);
+    CHECK(semaErrors("let x :: char <- 5; let y <- x; let z <- y;") == 1);
     CHECK(semaErrors("let s <- \"hi\";") == 1);
     CHECK(semaErrors("let p <- [1, 2];") == 1);
     CHECK(semaErrors("let x <- 0; repeat (i) <- x { }") == 1);
@@ -324,3 +325,61 @@ TEST_CASE("Sema: entry point", "[sema]") {
     CHECK(entryErrors("let () -> f -> () { let () -> main -> (code :: int) { 0 -| } }") == 1);
     CHECK(semaErrors("let () -> start -> (code :: int) { 0 -| }") == 0);
 }
+
+// checks that every integer type resolves, and that integers of different types never mix without a conversion
+TEST_CASE("Sema: integer types", "[sema]") {
+    CHECK(symbolType("let x :: i8 <- 1;", "x") == "i8");
+    CHECK(symbolType("let x :: i128uw <- 1;", "x") == "i128uw");
+    CHECK(symbolType("let x :: i64 <- 1;", "x") == "int");
+    CHECK(symbolType("let x :: i32u <- 1; let y <- x + x;", "y") == "i32u");
+    CHECK(symbolType("let x :: i16w <- 1; let y <- x << x & ~x;", "y") == "i16w");
+    CHECK(symbolType("let x :: i8 <- 1; let y <- x < x;", "y") == "bool");
+    CHECK(semaErrors("let x :: i8 <- 1; let y :: i16 <- 2; let z <- x + y;") == 1);
+    CHECK(semaErrors("let x :: i8 <- 1; let y :: i8u <- 2; let z <- x = y;") == 1);
+    CHECK(semaErrors("let x :: u64 <- 1;") == 1);
+}
+
+// checks that a literal takes the type its context wants, and has to fit there
+TEST_CASE("Sema: literal adaptation", "[sema]") {
+    CHECK(symbolType("let x :: i8 <- 127;", "x") == "i8");
+    CHECK(symbolType("let x :: i8 <- -128;", "x") == "i8");
+    CHECK(symbolType("let x :: i8u <- 255;", "x") == "i8u");
+    CHECK(symbolType("let x :: i8u <- 0xFF;", "x") == "i8u");
+    CHECK(symbolType("let x :: i128u <- 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF;", "x") == "i128u");
+    CHECK(semaErrors("let x :: i8 <- 128;") == 1);
+    CHECK(semaErrors("let x :: i8 <- -129;") == 1);
+    CHECK(semaErrors("let x :: i8u <- 256;") == 1);
+    CHECK(semaErrors("let x :: i8uw <- 256;") == 1);
+    CHECK(semaErrors("let x <- 9223372036854775808;") == 1);
+    CHECK(semaErrors("let x :: i128u <- 0x1_0000_0000_0000_0000_0000_0000_0000_0000;") == 1);
+    CHECK(symbolType("let x :: i8 <- 1; let y <- x + 2;", "y") == "i8");
+    CHECK(symbolType("let x :: i8 <- 1; let y <- 2 * x;", "y") == "i8");
+    CHECK(symbolType("let x :: i8 <- 1; let y <- 0 < x <= 100;", "y") == "bool");
+    CHECK(semaErrors("let x :: i8 <- 1; let y <- x + 200;") == 1);
+    CHECK(symbolType("let y :: i16 <- 1 + 2 * 3;", "y") == "i16");
+    CHECK(semaErrors("let x :: mut i8 <- 0; x <- 100; x +<- 27;") == 0);
+    CHECK(semaErrors("let x :: mut i8 <- 0; x +<- 128;") == 1);
+    CHECK(semaErrors("let (a :: i8) -> f -> (r :: i8) { a + 1 -| } let y <- f(5);") == 0);
+    CHECK(semaErrors("let (a :: i8) -> f -> (r :: i8) { 300 -| }") == 1);
+    CHECK(semaErrors("let (n :: i8u) -> f -> () { match (n) { 255 -> { } _ -> { } } }") == 0);
+}
+
+// checks negation, which only signed and wrapping integers allow
+TEST_CASE("Sema: integer negation", "[sema]") {
+    CHECK(semaErrors("let x :: i32 <- 1; let y <- -x;") == 0);
+    CHECK(semaErrors("let x :: i32uw <- 1; let y <- -x;") == 0);
+    CHECK(semaErrors("let x :: i32u <- 1; let y <- -x;") == 1);
+    CHECK(semaErrors("let x :: i32u <- -1;") == 1);
+}
+
+// checks conversions between integer types
+TEST_CASE("Sema: integer conversions", "[sema]") {
+    CHECK(symbolType("let x :: i64 <- 5; let y <- i8(x);", "y") == "i8");
+    CHECK(symbolType("let x :: i8 <- 5; let y <- i128u(x);", "y") == "i128u");
+    CHECK(symbolType("let y <- i8w(300);", "y") == "i8w");
+    CHECK(semaErrors("let y <- i8(true);") == 1);
+    CHECK(semaErrors("let y <- i8(1, 2);") == 1);
+    CHECK(semaErrors("let y <- bool(1);") == 1);
+    CHECK(semaErrors("let y <- i8(1.5);") == 1);
+}
+

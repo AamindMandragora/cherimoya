@@ -1,0 +1,8 @@
+# exit: 134
+# trap: trap at line 4: 'a / b' divided by zero
+# checks that dividing by zero traps, even for a wrapping type
+let (a :: i32w, b :: i32w) -> div -> (r :: i32w) { a / b -| }
+let () -> main -> (code :: int) {
+    let z <- div(7, 0);
+    0 -|
+}

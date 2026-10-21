@@ -1,0 +1,8 @@
+# exit: 134
+# trap: trap at line 4: 'x << n' shifted by an amount outside 0 to 31
+# checks that a trapping integer shifted by its width or more traps
+let (x :: i32, n :: i32) -> shl -> (r :: i32) { x << n -| }
+let () -> main -> (code :: int) {
+    let y <- shl(1, 32);
+    0 -|
+}

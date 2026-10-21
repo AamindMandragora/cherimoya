@@ -1,0 +1,15 @@
+# exit: 7
+# checks that unsigned comparisons, division, and right shifts treat the top bit as part of the value, not a sign
+let () -> main -> (code :: int) {
+    let big :: i8u <- 255;
+    let one :: i8u <- 1;
+    let a <- big > one;
+    let b <- big / 2 = 127;
+    let c <- big >> 4 = 15;
+    let neg :: i8 <- -1;
+    let d <- neg >> 4 = -1;
+    match (a && b && c && d) {
+        true -> { 7 -| main }
+        false -> { 1 -| main }
+    }
+}

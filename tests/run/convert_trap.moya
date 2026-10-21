@@ -1,0 +1,8 @@
+# exit: 134
+# trap: trap at line 4: 'i32u(x)' doesn't fit in i32u
+# checks that a conversion into a trapping type traps when the value doesn't fit, here a negative value into an unsigned type
+let (x :: i32) -> toUnsigned -> (r :: i32u) { i32u(x) -| }
+let () -> main -> (code :: int) {
+    let y <- toUnsigned(-1);
+    0 -|
+}

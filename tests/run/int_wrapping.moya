@@ -1,0 +1,15 @@
+# exit: 44
+# checks that wrapping integers wrap instead of trapping, including the one signed division that overflows, while dividing anything else by -1 still negates it
+let () -> main -> (code :: int) {
+    let x :: i8uw <- 200;
+    let y <- x + 100;
+    let m :: i8w <- -128;
+    let q <- m / -1;
+    let r <- m % -1;
+    let n <- -m;
+    let d :: i8w <- 5;
+    match (q = m && r = 0 && n = m && d / -1 = -5 && d % -1 = 0) {
+        true -> { int(y) -| main }
+        false -> { 1 -| main }
+    }
+}

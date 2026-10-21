@@ -1,0 +1,12 @@
+# exit: 44
+# checks conversions that widen, narrow when the value fits, and wrap into a wrapping type
+let () -> main -> (code :: int) {
+    let small :: i8 <- -5;
+    let wide <- i64(small);
+    let fits <- i8u(200 |> i16);
+    let wrapped <- i8w(300);
+    match (wide = -5 && fits = 200) {
+        true -> { int(wrapped) -| main }
+        false -> { 1 -| main }
+    }
+}

@@ -2,8 +2,12 @@
 #include <iostream>
 #include <memory>
 #include <string_view>
+#ifdef _WIN32
+#include <process.h>
+#else
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 #include "parser.hpp"
 #include "codegen.hpp"
@@ -19,6 +23,46 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Passes/PassBuilder.h>
+
+// the few things that differ between platforms, so the rest of the driver reads the same everywhere
+namespace platform {
+#ifdef _WIN32
+    // Windows names executables .exe and objects .obj, and has no cc, but clang links there both with MSVC and under MSYS2
+    constexpr const char* exe = ".exe";
+    constexpr const char* obj = ".obj";
+    constexpr const char* linker = "clang";
+    inline int processId() { return _getpid(); }
+    // Windows hands std::system the program's exit code directly, and a crash comes back as an NTSTATUS like 0xC0000005, which is passed on as it is
+    inline int exitCode(int status) { return status; }
+    // quotes an argument for cmd, so a path with spaces in it stays one argument
+    inline std::string quote(const std::string& arg) {
+        std::string quoted = "\"";
+        for (char c : arg) quoted += c == '"' ? std::string("\\\"") : std::string(1, c);
+        return quoted + "\"";
+    }
+    // cmd strips the outermost pair of quotes from a command line that starts with one, so the whole command is wrapped in one more pair
+    inline std::string shell(const std::string& command) { return "\"" + command + "\""; }
+#else
+    constexpr const char* exe = "";
+    constexpr const char* obj = ".o";
+    constexpr const char* linker = "cc";
+    inline int processId() { return getpid(); }
+    // a Unix shell reports a program killed by a signal as 128 plus the signal, so cheri does too
+    inline int exitCode(int status) {
+        if (WIFEXITED(status)) return WEXITSTATUS(status);
+        if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+        return 1;
+    }
+    // quotes an argument for the shell, so a path with spaces or quotes in it stays one argument
+    inline std::string quote(const std::string& arg) {
+        std::string quoted = "'";
+        for (char c : arg) quoted += c == '\'' ? std::string("'\\''") : std::string(1, c);
+        return quoted + "'";
+    }
+    // the shell takes a command line as it is
+    inline std::string shell(const std::string& command) { return command; }
+#endif
+}
 
 // what a build produces: a linked executable, or the program at one of the stages before it
 enum class Emit { Exe, Obj, Asm, LLVM, Bitcode };
@@ -36,7 +80,7 @@ struct Options {
     std::string cpu = "generic";
     std::string features;
     // how to link: the program that links, whether the executable is static, and the arguments passed straight to it
-    std::string linker = "cc";
+    std::string linker = platform::linker;
     bool isStatic = false;
     std::vector<std::string> linkArgs;
 };
@@ -68,7 +112,7 @@ static void usage(std::ostream& out) {
            "  --features <list>     cpu features to turn on or off, like +avx2,-sse4.1\n"
            "\n"
            "linking:\n"
-           "  --linker <program>    the program that links, cc by default\n"
+           "  --linker <program>    the program that links, cc by default, or clang on Windows\n"
            "  --static              link a static executable\n"
            "  -L<dir> -l<lib>       search a directory for libraries, and link one\n"
            "  --link-arg <arg>      pass an argument straight to the linker\n";
@@ -156,13 +200,6 @@ static bool parseOptions(int argc, char** argv, Options& options) {
         return false;
     }
     return true;
-}
-
-// quotes an argument for the shell, so a path with spaces or quotes in it stays one argument
-static std::string quote(const std::string& arg) {
-    std::string quoted = "'";
-    for (char c : arg) quoted += c == '\'' ? std::string("'\\''") : std::string(1, c);
-    return quoted + "'";
 }
 
 // opens a file to write an output to, or reports why it can't and gives null
@@ -302,7 +339,7 @@ int main(int argc, char** argv) {
         case Emit::Asm:
             return writeMachineCode(*module, *machine, outputPath(".s"), llvm::CodeGenFileType::AssemblyFile) ? 0 : 1;
         case Emit::Obj:
-            return writeMachineCode(*module, *machine, outputPath(".o"), llvm::CodeGenFileType::ObjectFile) ? 0 : 1;
+            return writeMachineCode(*module, *machine, outputPath(platform::obj), llvm::CodeGenFileType::ObjectFile) ? 0 : 1;
         case Emit::Exe:
             break;
     }
@@ -310,29 +347,27 @@ int main(int argc, char** argv) {
     // an executable that's only run goes in the temporary directory, named so two runs at once don't collide
     std::string output = options.output;
     if (options.command == "run") {
-        output = (std::filesystem::temp_directory_path() / (stem + "-" + std::to_string(getpid()))).string();
+        output = (std::filesystem::temp_directory_path() / (stem + "-" + std::to_string(platform::processId()) + platform::exe)).string();
     } else if (output.empty()) {
-        output = stem;
+        output = stem + platform::exe;
     }
     // writes the object next to the executable, as a temporary that's removed once it's linked, or once writing it fails
-    std::string object = output + ".o";
+    std::string object = output + platform::obj;
     if (!writeMachineCode(*module, *machine, object, llvm::CodeGenFileType::ObjectFile)) {
         std::filesystem::remove(object);
         return 1;
     }
     // links the object with the runtime, whose C main calls cheri_init and cheri_main, and the linker brings in the C runtime that calls main, where every argument is quoted so paths with spaces stay whole
-    std::string command = quote(options.linker) + " " + quote(object) + " " + quote(CHERI_RUNTIME) + " -o " + quote(output);
+    std::string command = platform::quote(options.linker) + " " + platform::quote(object) + " " + platform::quote(CHERI_RUNTIME) + " -o " + platform::quote(output);
     if (options.isStatic) command += " -static";
-    for (auto& arg : options.linkArgs) command += " " + quote(arg);
-    int linked = std::system(command.c_str());
+    for (auto& arg : options.linkArgs) command += " " + platform::quote(arg);
+    int linked = std::system(platform::shell(command).c_str());
     std::filesystem::remove(object);
     if (linked != 0) return 1;
     if (options.command == "build") return 0;
 
-    // runs the program and exits the way it did, where a program killed by a signal exits like a shell reports it, 128 plus the signal
-    int status = std::system(quote(output).c_str());
+    // runs the program and exits the way it did
+    int status = std::system(platform::shell(platform::quote(output)).c_str());
     std::filesystem::remove(output);
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
-    return 1;
+    return platform::exitCode(status);
 }
