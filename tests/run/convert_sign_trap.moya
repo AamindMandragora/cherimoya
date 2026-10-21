@@ -1,0 +1,8 @@
+# exit: 134
+# trap: trap at line 4: 'i8(x)' doesn't fit in i8
+# checks that a conversion from unsigned to signed traps when the value is past the signed maximum, even when the bits are the same width
+let (x :: i8u) -> toSigned -> (r :: i8) { i8(x) -| }
+let () -> main -> (code :: int) {
+    let y <- toSigned(200);
+    0 -|
+}

@@ -1,0 +1,8 @@
+# exit: 134
+# trap: trap at line 4: 'x * 2' overflowed i8
+# checks that overflowing a trapping integer stops the program
+let (x :: i8) -> double -> (r :: i8) { x * 2 -| }
+let () -> main -> (code :: int) {
+    let y <- double(100);
+    0 -|
+}
