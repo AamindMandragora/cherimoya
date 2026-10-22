@@ -1,0 +1,8 @@
+# exit: 134
+# trap: trap at line 4: 'f8(x / x)' is a NaN, which f8 can't hold
+# checks that a NaN-carrying float traps when it becomes a NaN-free f8 while holding a NaN
+let (x :: f32n) -> strict -> (r :: f8) { f8(x / x) -| }
+let () -> main -> (code :: int) {
+    let y <- strict(0.0);
+    0 -|
+}

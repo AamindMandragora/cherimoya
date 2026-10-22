@@ -1,0 +1,14 @@
+# exit: 5
+# checks a NaN-carrying f8, where overflowing makes a NaN instead of trapping, and the total order and both equalities work on its bytes
+let (x :: f8e4m3n) -> same -> (r :: f8e4m3n) { x -| }
+let () -> main -> (code :: int) {
+    let zero :: f8e4m3n <- 0.0;
+    let nan <- same(zero) / zero;
+    let overflowed <- same(448.0) * 2;
+    let low :: f8e4m3n <- -448.0;
+    let negative <- -zero;
+    match (nan < low && nan == nan && overflowed == nan && negative == zero && !(negative = zero)) {
+        true -> { 5 -| main }
+        false -> { 1 -| main }
+    }
+}
