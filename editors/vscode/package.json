@@ -1,0 +1,57 @@
+{
+    "name": "cherimoya",
+    "displayName": "Cherimoya",
+    "description": "Diagnostics, highlighting, hovers, and definitions for cherimoya, from cheri's language server",
+    "version": "0.1.0",
+    "publisher": "cherimoya",
+    "engines": {
+        "vscode": "^1.82.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "main": "./dist/extension.js",
+    "activationEvents": [
+        "onLanguage:cherimoya"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "cherimoya",
+                "aliases": [
+                    "Cherimoya",
+                    "cherimoya"
+                ],
+                "extensions": [
+                    ".moya"
+                ],
+                "configuration": "./language-configuration.json",
+                "icon": {
+                    "light": "./icons/moya.svg",
+                    "dark": "./icons/moya.svg"
+                }
+            }
+        ],
+        "configuration": {
+            "title": "Cherimoya",
+            "properties": {
+                "cherimoya.compilerPath": {
+                    "type": "string",
+                    "default": "cheri",
+                    "description": "The cheri executable, which is started as cheri lsp"
+                }
+            }
+        }
+    },
+    "scripts": {
+        "bundle": "esbuild extension.js --bundle --platform=node --external:vscode --outfile=dist/extension.js",
+        "package": "npm run bundle && vsce package --no-dependencies --allow-missing-repository --skip-license -o cherimoya.vsix"
+    },
+    "dependencies": {
+        "vscode-languageclient": "9.0.1"
+    },
+    "devDependencies": {
+        "@vscode/vsce": "3.2.1",
+        "esbuild": "0.24.0"
+    }
+}

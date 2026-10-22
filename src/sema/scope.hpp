@@ -5,6 +5,8 @@
 #include "diagnostics.hpp"
 #include "type.hpp"
 
+class FnDecl;
+
 enum class SymbolKind {
     Binding,
     Param,
@@ -19,6 +21,10 @@ struct Symbol {
     bool isMutable;
     Span span;
     size_t owner;
+    // the span of the lexical scope it's declared in, which is where it can be named, for anything but a function only after its declaration
+    Span scope;
+    // the declaration a function symbol comes from, or null for anything else
+    const FnDecl* function;
 };
 
 // a lexical scope maps names to the symbols declared in it, and falls back to its parent for everything else
@@ -26,8 +32,9 @@ class Scope {
     DiagnosticEngine& engine;
     std::unordered_map<std::string_view, Symbol*> symbols;
     Scope* parent;
+    Span span;
 public:
-    Scope(Scope* p, DiagnosticEngine& e) : engine(e), parent(p) {}
+    Scope(Scope* p, DiagnosticEngine& e, Span s) : engine(e), parent(p), span(s) {}
 
     // finds the innermost symbol with this name, or null if nothing declares it
     Symbol* lookup(std::string_view name) {
@@ -46,5 +53,6 @@ public:
         } else {
             symbols[symbol->name] = symbol;
         }
+        symbol->scope = span;
     }
 };

@@ -3,6 +3,8 @@
 #include <memory>
 #include <string_view>
 #ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
 #include <process.h>
 #else
 #include <sys/wait.h>
@@ -11,6 +13,7 @@
 
 #include "parser.hpp"
 #include "codegen.hpp"
+#include "server.hpp"
 
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/LegacyPassManager.h>
@@ -44,6 +47,11 @@ namespace platform {
     }
     // cmd strips the outermost pair of quotes from a command line that starts with one, so the whole command is wrapped in one more pair
     inline std::string shell(const std::string& command) { return "\"" + command + "\""; }
+    // the language server's messages count bytes, so stdin and stdout can't turn \n into \r\n on the way through
+    inline void binaryStdio() {
+        _setmode(_fileno(stdin), _O_BINARY);
+        _setmode(_fileno(stdout), _O_BINARY);
+    }
 #else
     constexpr const char* exe = "";
     constexpr const char* obj = ".o";
@@ -65,6 +73,8 @@ namespace platform {
     }
     // the shell takes a command line as it is
     inline std::string shell(const std::string& command) { return command; }
+    // stdin and stdout pass bytes through unchanged already
+    inline void binaryStdio() {}
 #endif
 }
 
@@ -97,6 +107,7 @@ static void usage(std::ostream& out) {
            "  build                 check the program and build it, an executable by default\n"
            "  check                 check the program without building it\n"
            "  run                   build the program, run it, and exit with its exit code\n"
+           "  lsp                   run the language server, which an editor starts and talks to over stdin and stdout\n"
            "  help                  print this message\n"
            "\n"
            "output:\n"
@@ -252,13 +263,18 @@ static bool writeMachineCode(llvm::Module& module, llvm::TargetMachine& machine,
     return true;
 }
 
-// cheri <command> <file> checks a program and builds it: lex, parse, check, lower to LLVM, optimize, then write the stage that was asked for, or link an executable with the runtime
+// cheri <command> <file> checks a program and builds it: lex, parse, check, lower to LLVM, optimize, then write the stage that was asked for, or link an executable with the runtime, and cheri lsp serves an editor instead
 int main(int argc, char** argv) {
     if (argc >= 2) {
         std::string_view first = argv[1];
         if (first == "help" || first == "-h" || first == "--help") {
             usage(std::cout);
             return 0;
+        }
+        // the language server takes no file and no options, since the editor sends it every document it needs
+        if (first == "lsp") {
+            platform::binaryStdio();
+            return Server(std::cin, std::cout).run();
         }
     }
     if (argc < 2) {

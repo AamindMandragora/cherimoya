@@ -7,6 +7,32 @@
 #include "target.hpp"
 #include "ast.hpp"
 
+// one place a name appears, where it's declared or used, and the symbol it means
+struct Use {
+    Span span;
+    Symbol* symbol;
+    bool isDeclaration;
+};
+
+// the type an expression's context wanted, which the language server ranks completions by
+struct Expectation {
+    Span span;
+    SemaType* type;
+};
+
+// a call of a function by name, with each argument's span, which the language server's signature help reads
+struct Call {
+    Span span;
+    Symbol* function;
+    std::vector<Span> args;
+};
+
+// a function's span and the owner number its own locals get, so the language server can tell which locals a position can reach
+struct Body {
+    Span span;
+    size_t owner;
+};
+
 // sema resolves every name to its symbol and gives every expression a type, writing both straight into the AST
 class Sema {
     TypeContext context;
@@ -20,6 +46,11 @@ class Sema {
     size_t functions;
     // every construct a yield could target right now, innermost last
     std::vector<Target> targets;
+    // what the language server reads once checking is done: every use of a name, every expected type, every call, and every function body
+    std::vector<Use> uses;
+    std::vector<Expectation> expectations;
+    std::vector<Call> calls;
+    std::vector<Body> bodies;
 
     // reports something sema doesn't check yet, and poisons the result
     SemaType* unsupported(std::string_view what, Span span) {
@@ -40,14 +71,15 @@ class Sema {
 
     // makes a symbol that lives as long as sema does
     Symbol* makeSymbol(std::string_view name, SymbolKind kind, SemaType* type, bool isMutable, Span span) {
-        symbols.push_back(Symbol{name, kind, type, isMutable, span, owner});
+        symbols.push_back(Symbol{name, kind, type, isMutable, span, owner, {}, nullptr});
+        uses.push_back({span, &symbols.back(), true});
         return &symbols.back();
     }
 
-    // checks body with a new lexical scope pushed on top of the current one
+    // checks body with a new lexical scope pushed on top of the current one, covering span
     template <typename F>
-    void inScope(F body) {
-        Scope inner(scope, engine);
+    void inScope(Span span, F body) {
+        Scope inner(scope, engine, span);
         Scope* saved = scope;
         scope = &inner;
         body();
@@ -106,7 +138,7 @@ class Sema {
         if (t.kind != TypeKind::Refined) return;
         auto& refined = static_cast<const RefinedType&>(t);
         checkRefinements(*refined.inner, subject);
-        inScope([&] {
+        inScope(refined.span, [&] {
             if (refined.binder) scope->insert(makeSymbol(refined.binder->text, SymbolKind::Binding, subject->type, false, tokSpan(*refined.binder)));
             expectBool(*refined.predicate, "a refinement");
         });
@@ -154,6 +186,7 @@ class Sema {
             }
             signature.push_back(outputType(fn));
             auto symbol = makeSymbol(fn.name.text, SymbolKind::Function, context.functionType(signature), false, tokSpan(fn.name));
+            symbol->function = &fn;
             scope->insert(symbol);
             fn.decl = symbol;
         }
@@ -166,7 +199,8 @@ class Sema {
         auto signature = static_cast<FunctionSemaType*>(fn.decl->type);
         size_t saved = owner;
         owner = ++functions;
-        inScope([&] {
+        bodies.push_back({fn.span, owner});
+        inScope(fn.span, [&] {
             for (size_t i = 0; i < fn.inputs.size(); i++) {
                 auto& p = fn.inputs[i];
                 bool isMutable = p.type && isMut(*p.type);
@@ -176,7 +210,7 @@ class Sema {
                 if (p.type) checkRefinements(*p.type, param);
             }
             // outputs are only visible to contracts, so they get a scope the body never sees, and only a single output has a type of its own
-            inScope([&] {
+            inScope(fn.span, [&] {
                 for (auto& o : fn.outputs) {
                     auto type = fn.outputs.size() == 1 ? signature->returns : context.semaError;
                     auto output = makeSymbol(o.name.text, SymbolKind::Param, type, false, tokSpan(o.name));
@@ -278,7 +312,7 @@ class Sema {
     SemaType* checkScope(std::vector<std::unique_ptr<Stmt>>& stmts, TargetKind kind, const std::optional<Token>& name, Span span, std::string_view what) {
         targets.push_back(Target{kind, labelOf(name), nullptr, nullptr, {}, false, span});
         bool completes = true;
-        inScope([&] { completes = checkStmts(stmts); });
+        inScope(span, [&] { completes = checkStmts(stmts); });
         auto target = targets.back();
         targets.pop_back();
         return finish(target, completes, what);
@@ -416,7 +450,7 @@ class Sema {
                 warned = true;
             }
             SemaType* type = nullptr;
-            inScope([&] {
+            inScope(arm.span, [&] {
                 bool all = checkPattern(*arm.pattern, subject ? subject : context.semaError);
                 if (all && !covered) catchAll = &arm;
                 if (arm.pattern->kind == PatternKind::Literal) {
@@ -446,7 +480,7 @@ class Sema {
         if (r.cond) expectBool(*r.cond, "a loop's condition");
         if (r.invariant) expectBool(*r.invariant, "a loop's invariant");
         targets.push_back(Target{TargetKind::Loop, labelOf(r.name), nullptr, nullptr, {}, r.cond == nullptr, r.span});
-        inScope([&] { checkStmts(r.body->stmts); });
+        inScope(r.span, [&] { checkStmts(r.body->stmts); });
         auto target = targets.back();
         targets.pop_back();
         r.body->type = context.semaVoid;
@@ -553,6 +587,7 @@ class Sema {
             return context.semaError;
         }
         id.decl = symbol;
+        uses.push_back({id.span, symbol, false});
         if (symbol->kind == SymbolKind::Function && !callee) return unsupported("functions as values", id.span);
         return symbol->type;
     }
@@ -803,6 +838,12 @@ class Sema {
             type = unsupported("calling anything but a function's name", callee.span);
         }
         callee.type = type;
+        Symbol* function = callee.kind == ExprKind::Identifier ? static_cast<IdentifierExpr&>(callee).decl : nullptr;
+        if (function && function->kind == SymbolKind::Function) {
+            std::vector<Span> argSpans;
+            for (auto arg : args) argSpans.push_back(arg->span);
+            calls.push_back({span, function, argSpans});
+        }
         // each argument takes its parameter's type when the callee is a function with the right number of them
         auto fnType = type->kind == SemaTypeKind::Function ? static_cast<FunctionSemaType*>(type) : nullptr;
         std::vector<SemaType*> actual;
@@ -852,6 +893,7 @@ class Sema {
 
     // gives an expression its type and returns it, where expected is the type the context wants, if it knows, which literals adapt to
     SemaType* checkExpr(Expr& e, SemaType* expected = nullptr) {
+        if (expected) expectations.push_back({e.span, expected});
         e.type = typeOf(e, expected);
         return e.type;
     }
@@ -979,7 +1021,7 @@ public:
 
     // checks a whole program as one list of statements, and when entry is set, that it has a main to run
     void check(std::vector<std::unique_ptr<Stmt>>& program, bool entry = false) {
-        Scope global(nullptr, engine);
+        Scope global(nullptr, engine, Span{0, engine.getManager().text().size()});
         scope = &global;
         checkStmts(program);
         if (entry) checkMain(global);
@@ -988,4 +1030,10 @@ public:
 
     // every symbol sema declared, in order
     const std::deque<Symbol>& allSymbols() const { return symbols; }
+
+    // every place a name is declared or used, every expected type, every call by name, and every function body, in the order sema met them
+    const std::vector<Use>& allUses() const { return uses; }
+    const std::vector<Expectation>& allExpectations() const { return expectations; }
+    const std::vector<Call>& allCalls() const { return calls; }
+    const std::vector<Body>& allBodies() const { return bodies; }
 };
