@@ -128,12 +128,12 @@ TEST_CASE("Sema: operators", "[sema]") {
     CHECK(symbolType("let x <- 6 & 3 | 1 << 2;", "x") == "int");
     CHECK(symbolType("let x <- ~0;", "x") == "int");
     CHECK(symbolType("let x <- !true && false ^^ true || false;", "x") == "bool");
-    CHECK(semaErrors("let x <- 1 + 2.5;") == 1);
+    CHECK(symbolType("let x <- 1 + 2.5;", "x") == "float");
     CHECK(semaErrors("let x <- 1 + true;") == 1);
     CHECK(semaErrors("let x <- 1.0 & 2.0;") == 1);
     CHECK(semaErrors("let x <- 1 && 2;") == 1);
     CHECK(semaErrors("let x <- true < false;") == 1);
-    CHECK(semaErrors("let x <- 0 <= 1.5 < 2;") == 2);
+    CHECK(semaErrors("let x <- 0 <= 1.5 < 2;") == 0);
     CHECK(semaErrors("let x <- -true;") == 1);
     CHECK(semaErrors("let x <- !1;") == 1);
     CHECK(semaErrors("let x <- y + 1 + 2.5;") == 1);
@@ -154,7 +154,7 @@ TEST_CASE("Sema: calls and pipes", "[sema]") {
     CHECK(semaErrors(fns + "let x <- 5; x(1);") == 1);
     CHECK(semaErrors(fns + "let g <- inc;") == 1);
     CHECK(semaErrors(fns + "let x <- 2 |> add(1);") == 1);
-    CHECK(semaErrors(fns + "let x <- float(1);") == 1);
+    CHECK(semaErrors(fns + "let x <- float(1);") == 0);
 }
 
 // checks that assignments and compound assignments keep the place's type, and that a discard takes anything
@@ -343,6 +343,7 @@ TEST_CASE("Sema: integer types", "[sema]") {
 TEST_CASE("Sema: literal adaptation", "[sema]") {
     CHECK(symbolType("let x :: i8 <- 127;", "x") == "i8");
     CHECK(symbolType("let x :: i8 <- -128;", "x") == "i8");
+    CHECK(symbolType("let x :: i8u <- ~5;", "x") == "i8u");
     CHECK(symbolType("let x :: i8u <- 255;", "x") == "i8u");
     CHECK(symbolType("let x :: i8u <- 0xFF;", "x") == "i8u");
     CHECK(symbolType("let x :: i128u <- 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF;", "x") == "i128u");
@@ -380,6 +381,52 @@ TEST_CASE("Sema: integer conversions", "[sema]") {
     CHECK(semaErrors("let y <- i8(true);") == 1);
     CHECK(semaErrors("let y <- i8(1, 2);") == 1);
     CHECK(semaErrors("let y <- bool(1);") == 1);
-    CHECK(semaErrors("let y <- i8(1.5);") == 1);
+    CHECK(semaErrors("let y <- i8(1.5);") == 0);
+}
+
+// checks that every float type resolves, and that floats of different types never mix without a conversion
+TEST_CASE("Sema: float types", "[sema]") {
+    CHECK(symbolType("let x :: f32 <- 1.5;", "x") == "f32");
+    CHECK(symbolType("let x :: f64 <- 1.5;", "x") == "float");
+    CHECK(symbolType("let x :: float <- 1.5;", "x") == "float");
+    CHECK(symbolType("let x :: f16e8m7n <- 1.5;", "x") == "f16e8m7n");
+    CHECK(symbolType("let x :: f128 <- 1.5; let y <- x * x;", "y") == "f128");
+    CHECK(symbolType("let x :: f16 <- 1.5; let y <- x < x;", "y") == "bool");
+    CHECK(semaErrors("let x :: f32 <- 1.0; let y :: f64 <- 2.0; let z <- x + y;") == 1);
+    CHECK(semaErrors("let x :: f32 <- 1.0; let y :: f32n <- 2.0; let z <- x + y;") == 1);
+    CHECK(semaErrors("let x :: f8 <- 1.0;") == 1);
+    CHECK(semaErrors("let x :: f32 <- 1.0; let y <- x & x;") == 1);
+}
+
+// checks that float literals take a float context's type and have to be within its range, and that integer literals can stand for a float when they're exact
+TEST_CASE("Sema: float literals", "[sema]") {
+    CHECK(symbolType("let x :: f32 <- 1.0; let y <- x * 2.5;", "y") == "f32");
+    CHECK(symbolType("let x :: f16 <- 65504.0;", "x") == "f16");
+    CHECK(semaErrors("let x :: f16 <- 65536.0;") == 1);
+    CHECK(semaErrors("let x :: f16n <- -65504.0;") == 0);
+    CHECK(symbolType("let x :: f32 <- 0x1.8;", "x") == "f32");
+    CHECK(symbolType("let x :: f32 <- 0b1.1;", "x") == "f32");
+    CHECK(symbolType("let x :: f64 <- 2;", "x") == "float");
+    CHECK(symbolType("let x :: f32 <- 1.0; let y <- x * 2;", "y") == "f32");
+    CHECK(symbolType("let x :: f32 <- 1.0; let y <- 2 * x;", "y") == "f32");
+    CHECK(semaErrors("let x :: f16 <- 2048;") == 0);
+    CHECK(semaErrors("let x :: f16 <- 2049;") == 1);
+    CHECK(semaErrors("let x :: f16 <- 4096;") == 0);
+    CHECK(semaErrors("let x :: f32 <- 16777217;") == 1);
+    CHECK(semaErrors("let x :: f16 <- 65536;") == 1);
+    CHECK(semaErrors("let x :: f32 <- -3;") == 0);
+    CHECK(semaErrors("let x :: i8 <- 1.5;") == 1);
+    CHECK(symbolType("let y <- 0.5 < 1;", "y") == "bool");
+}
+
+// checks conversions between floats, and between floats and integers
+TEST_CASE("Sema: float conversions", "[sema]") {
+    CHECK(symbolType("let x :: f32 <- 1.5; let y <- f64(x);", "y") == "float");
+    CHECK(symbolType("let x :: f64n <- 1.5; let y <- f64(x);", "y") == "float");
+    CHECK(symbolType("let x :: i32 <- 7; let y <- f16(x);", "y") == "f16");
+    CHECK(symbolType("let x <- 2.7; let y <- i32(x);", "y") == "i32");
+    CHECK(symbolType("let x <- 2.7; let y <- i8uw(x);", "y") == "i8uw");
+    CHECK(semaErrors("let y <- f32(true);") == 1);
+    CHECK(semaErrors("let y <- bool(1.0);") == 1);
 }
 

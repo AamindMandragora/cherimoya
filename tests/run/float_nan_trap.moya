@@ -1,0 +1,8 @@
+# exit: 134
+# trap: trap at line 4: 'x / x' made a NaN, which float can't hold
+# checks that a NaN-free float traps when an operation makes a NaN
+let (x :: f64) -> broken -> (r :: f64) { x / x -| }
+let () -> main -> (code :: int) {
+    let y <- broken(0.0);
+    0 -|
+}

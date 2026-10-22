@@ -1,5 +1,6 @@
 #pragma once
 
+#include <limits>
 #include <map>
 #include <memory>
 #include <unordered_map>
@@ -31,22 +32,53 @@ class TypeContext {
                 }
             }
         }
+        made["int"] = made.at("i64");
+        return made;
+    }
+
+    // makes all ten float types, each encoding NaN-free and NaN-carrying (n), so f16, f16n, f16e8m7, and f16e8m7n up through f128n
+    std::unordered_map<std::string, FloatSemaType*> makeFloats() {
+        // each encoding's name, its precision, and its largest finite value, where f128's is long double's, which shares its range but holds a hair less
+        struct Row { const char* name; FloatFormat format; unsigned precision; long double max; };
+        const Row rows[] = {
+            {"f16", FloatFormat::Half, 11, 65504.0L},
+            {"f16e8m7", FloatFormat::BFloat, 8, 3.38953138925153547590e38L},
+            {"f32", FloatFormat::Single, 24, 3.40282346638528859812e38L},
+            {"f64", FloatFormat::Double, 53, 1.79769313486231570815e308L},
+            {"f128", FloatFormat::Quad, 113, std::numeric_limits<long double>::max()},
+        };
+        std::unordered_map<std::string, FloatSemaType*> made;
+        for (const Row& row : rows) {
+            std::string name = row.name;
+            // f64 prints as float, its alias
+            made[name] = make<FloatSemaType>(row.format, true, row.precision, row.max, name == "f64" ? "float" : name);
+            made[name + "n"] = make<FloatSemaType>(row.format, false, row.precision, row.max, name + "n");
+        }
+        made["float"] = made.at("f64");
         return made;
     }
 public:
-    // every integer type by the name it's written with, made before semaInt reads it, since members are made in the order they're declared
-    std::unordered_map<std::string, IntSemaType*> table = makeInts();
-    IntSemaType* semaInt = table.at("i64");
+    // every integer type by the name it's written with, int included, made before semaInt reads it, since members are made in the order they're declared
+    std::unordered_map<std::string, IntSemaType*> ints = makeInts();
+    IntSemaType* semaInt = ints.at("int");
     PrimitiveSemaType* semaBool = make<PrimitiveSemaType>(PrimitiveKind::Bool);
-    PrimitiveSemaType* semaFloat = make<PrimitiveSemaType>(PrimitiveKind::Float);
+    // every float type by the name it's written with, float included
+    std::unordered_map<std::string, FloatSemaType*> floats = makeFloats();
+    FloatSemaType* semaFloat = floats.at("float");
     PrimitiveSemaType* semaVoid = make<PrimitiveSemaType>(PrimitiveKind::Void);
     PrimitiveSemaType* semaNever = make<PrimitiveSemaType>(PrimitiveKind::Never);
     ErrorSemaType* semaError = make<ErrorSemaType>();
 
     // finds the integer type written with this name, or null if it isn't one
     IntSemaType* intType(std::string_view name) {
-        auto it = table.find(std::string(name));
-        return it == table.end() ? nullptr : it->second;
+        auto it = ints.find(std::string(name));
+        return it == ints.end() ? nullptr : it->second;
+    }
+
+    // finds the float type written with this name, or null if it isn't one
+    FloatSemaType* floatType(std::string_view name) {
+        auto it = floats.find(std::string(name));
+        return it == floats.end() ? nullptr : it->second;
     }
 
     // interns a function type keyed by its parameter types followed by its return type

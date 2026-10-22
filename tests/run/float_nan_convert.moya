@@ -1,0 +1,8 @@
+# exit: 134
+# trap: trap at line 4: 'f64(x / x)' is a NaN, which float can't hold
+# checks that a NaN-carrying float traps when it becomes a NaN-free one while holding a NaN
+let (x :: f64n) -> strict -> (r :: f64) { f64(x / x) -| }
+let () -> main -> (code :: int) {
+    let y <- strict(0.0);
+    0 -|
+}

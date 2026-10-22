@@ -1,0 +1,8 @@
+# exit: 134
+# trap: trap at line 4: 'i8(x)' doesn't fit in i8
+# checks that converting a float to a trapping integer traps when it's out of range
+let (x :: f64) -> narrow -> (r :: i8) { i8(x) -| }
+let () -> main -> (code :: int) {
+    let y <- narrow(300.0);
+    0 -|
+}

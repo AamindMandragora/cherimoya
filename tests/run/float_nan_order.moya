@@ -1,0 +1,18 @@
+# exit: 31
+# checks the total order on a NaN-carrying float: NaN is below everything, equal to itself, and -0.0 deep-equals 0.0 without being bit-equal
+let (x :: f64n) -> same -> (r :: f64n) { x -| }
+let () -> main -> (code :: int) {
+    let zero :: f64n <- 0.0;
+    let nan <- same(zero) / zero;
+    let low :: f64n <- -1000000.0;
+    let negative :: f64n <- -0.0;
+    let a <- nan < low;
+    let b <- nan == nan;
+    let c <- !(low < nan);
+    let d <- negative == zero;
+    let e <- !(negative = zero);
+    match (a && b && c && d && e) {
+        true -> { 31 -| main }
+        false -> { 1 -| main }
+    }
+}

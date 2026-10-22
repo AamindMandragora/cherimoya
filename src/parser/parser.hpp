@@ -493,9 +493,9 @@ class Parser {
             case ExprKind::CharLiteral:
                 return std::make_unique<LiteralPattern>(std::move(e), span);
             case ExprKind::Unary: {
-                auto& u = static_cast<UnaryExpr&>(*e);
-                auto inner = u.operand->kind;
-                if (u.op.kind == TokenKind::Minus && (inner == ExprKind::IntLiteral || inner == ExprKind::FloatLiteral)) {
+                auto& unary = static_cast<UnaryExpr&>(*e);
+                auto inner = unary.operand->kind;
+                if (unary.op.kind == TokenKind::Minus && (inner == ExprKind::IntLiteral || inner == ExprKind::FloatLiteral)) {
                     return std::make_unique<LiteralPattern>(std::move(e), span);
                 }
                 break;
@@ -503,17 +503,17 @@ class Parser {
             case ExprKind::Wildcard:
                 return std::make_unique<WildcardPattern>(span);
             case ExprKind::Identifier: {
-                auto& id = static_cast<IdentifierExpr&>(*e);
-                return std::make_unique<BinderPattern>(Token(TokenKind::Identifier, id.name, span.start), span);
+                auto& identifier = static_cast<IdentifierExpr&>(*e);
+                return std::make_unique<BinderPattern>(Token(TokenKind::Identifier, identifier.name, span.start), span);
             }
             // a variant with a payload
             case ExprKind::Index: {
-                auto& ix = static_cast<IndexExpr&>(*e);
-                if (ix.object->kind != ExprKind::Identifier) break;
-                auto& id = static_cast<IdentifierExpr&>(*ix.object);
+                auto& index = static_cast<IndexExpr&>(*e);
+                if (index.object->kind != ExprKind::Identifier) break;
+                auto& identifier = static_cast<IdentifierExpr&>(*index.object);
                 std::vector<std::unique_ptr<Pattern>> payload;
-                for (auto& a : ix.args) payload.push_back(toPattern(std::move(a)));
-                return std::make_unique<VariantPattern>(Token(TokenKind::Identifier, id.name, id.span.start), std::move(payload), span);
+                for (auto& a : index.args) payload.push_back(toPattern(std::move(a)));
+                return std::make_unique<VariantPattern>(Token(TokenKind::Identifier, identifier.name, identifier.span.start), std::move(payload), span);
             }
             case ExprKind::Pack: {
                 std::vector<PackPatternElem> elems;
@@ -527,13 +527,13 @@ class Parser {
             }
             // a set-builder, with a lone binder head and only filter clauses
             case ExprKind::Compr: {
-                auto& c = static_cast<ComprExpr&>(*e);
-                bool filters = std::all_of(c.clauses.begin(), c.clauses.end(), [](const ComprClause& cl) { return cl.pattern == nullptr; });
-                if (c.head->kind != ExprKind::Identifier || !filters) break;
-                auto& id = static_cast<IdentifierExpr&>(*c.head);
+                auto& compr = static_cast<ComprExpr&>(*e);
+                bool filters = std::all_of(compr.clauses.begin(), compr.clauses.end(), [](const ComprClause& cl) { return cl.pattern == nullptr; });
+                if (compr.head->kind != ExprKind::Identifier || !filters) break;
+                auto& identifier = static_cast<IdentifierExpr&>(*compr.head);
                 std::vector<std::unique_ptr<Expr>> predicates;
-                for (auto& cl : c.clauses) predicates.push_back(std::move(cl.expr));
-                return std::make_unique<SetBuilderPattern>(Token(TokenKind::Identifier, id.name, id.span.start), std::move(predicates), span);
+                for (auto& cl : compr.clauses) predicates.push_back(std::move(cl.expr));
+                return std::make_unique<SetBuilderPattern>(Token(TokenKind::Identifier, identifier.name, identifier.span.start), std::move(predicates), span);
             }
             case ExprKind::Error:
                 return std::make_unique<ErrorPattern>(span);

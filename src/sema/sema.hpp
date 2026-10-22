@@ -68,9 +68,8 @@ class Sema {
                 auto& named = static_cast<const NamedType&>(t);
                 if (named.path.size() == 1 && named.args.empty()) {
                     auto name = named.path[0].text;
-                    if (name == "int") return context.semaInt;
-                    if (IntSemaType* integer = context.table[std::string(name)]) return integer;
-                    if (name == "float" || name == "f64") return context.semaFloat;
+                    if (IntSemaType* integer = context.intType(name)) return integer;
+                    if (FloatSemaType* floating = context.floatType(name)) return floating;
                     if (name == "bool") return context.semaBool;
                 }
                 std::string text;
@@ -78,9 +77,9 @@ class Sema {
                 return unsupported("the type '" + text + "'", t.span);
             }
             case TypeKind::Qualified: {
-                auto& q = static_cast<const QualifiedType&>(t);
-                if (q.position != QualPosition::Value) return unsupported("handles", t.span);
-                return q.inner ? resolveType(*q.inner) : nullptr;
+                auto& qualified = static_cast<const QualifiedType&>(t);
+                if (qualified.position != QualPosition::Value) return unsupported("handles", t.span);
+                return qualified.inner ? resolveType(*qualified.inner) : nullptr;
             }
             case TypeKind::Refined:
                 return resolveType(*static_cast<const RefinedType&>(t).inner);
@@ -100,16 +99,16 @@ class Sema {
     // checks every refinement predicate in a type against its subject: the subject's own name on parameters, or the binder
     void checkRefinements(const Type& t, Symbol* subject) {
         if (t.kind == TypeKind::Qualified) {
-            auto& q = static_cast<const QualifiedType&>(t);
-            if (q.inner) checkRefinements(*q.inner, subject);
+            auto& qualified = static_cast<const QualifiedType&>(t);
+            if (qualified.inner) checkRefinements(*qualified.inner, subject);
             return;
         }
         if (t.kind != TypeKind::Refined) return;
-        auto& r = static_cast<const RefinedType&>(t);
-        checkRefinements(*r.inner, subject);
+        auto& refined = static_cast<const RefinedType&>(t);
+        checkRefinements(*refined.inner, subject);
         inScope([&] {
-            if (r.binder) scope->insert(makeSymbol(r.binder->text, SymbolKind::Binding, subject->type, false, tokSpan(*r.binder)));
-            expectBool(*r.predicate, "a refinement");
+            if (refined.binder) scope->insert(makeSymbol(refined.binder->text, SymbolKind::Binding, subject->type, false, tokSpan(*refined.binder)));
+            expectBool(*refined.predicate, "a refinement");
         });
     }
 
@@ -303,13 +302,13 @@ class Sema {
     // finds the target a yield goes to, searching outward from the innermost and never past the nearest function
     Target* resolveTarget(const YieldStmt& y) {
         for (size_t i = targets.size(); i-- > 0;) {
-            auto& t = targets[i];
-            if (!y.target) return &t;
+            auto& target = targets[i];
+            if (!y.target) return &target;
             auto kind = y.target->kind;
-            if (kind == TokenKind::KwMatch && t.kind == TargetKind::Match) return &t;
-            if (kind == TokenKind::KwRepeat && t.kind == TargetKind::Loop) return &t;
-            if (kind == TokenKind::Identifier && t.label == y.target->text) return &t;
-            if (t.kind == TargetKind::Function) break;
+            if (kind == TokenKind::KwMatch && target.kind == TargetKind::Match) return &target;
+            if (kind == TokenKind::KwRepeat && target.kind == TargetKind::Loop) return &target;
+            if (kind == TokenKind::Identifier && target.label == y.target->text) return &target;
+            if (target.kind == TargetKind::Function) break;
         }
         return nullptr;
     }
@@ -368,9 +367,9 @@ class Sema {
             case PatternKind::Wildcard:
                 return true;
             case PatternKind::Binder: {
-                auto& b = static_cast<BinderPattern&>(p);
-                b.decl = makeSymbol(b.name.text, SymbolKind::Binding, subject, false, b.span);
-                scope->insert(b.decl);
+                auto& binder = static_cast<BinderPattern&>(p);
+                binder.decl = makeSymbol(binder.name.text, SymbolKind::Binding, subject, false, binder.span);
+                scope->insert(binder.decl);
                 return true;
             }
             case PatternKind::Literal: {
@@ -470,45 +469,45 @@ class Sema {
                 return let.init->type == context.semaNever;
             }
             case StmtKind::Assign: {
-                auto& a = static_cast<AssignStmt&>(s);
-                if (a.place->kind == ExprKind::Wildcard) {
-                    auto value = checkExpr(*a.value);
-                    a.place->type = value;
+                auto& assign = static_cast<AssignStmt&>(s);
+                if (assign.place->kind == ExprKind::Wildcard) {
+                    auto value = checkExpr(*assign.value);
+                    assign.place->type = value;
                     return value == context.semaNever;
                 }
                 // the place is checked first, so the value can take its type: x <- 5 and x +<- 1 both make the literal x's type
-                auto place = checkPlace(*a.place);
-                auto value = checkExpr(*a.value, place);
+                auto place = checkPlace(*assign.place);
+                auto value = checkExpr(*assign.value, place);
                 // place op<- value is place <- place op value, which has to give back the place's type
-                if (a.op && a.op->op->base->category == OpCategory::Extra) {
-                    unsupported("extra operators", Span{a.op->loc, a.op->loc + a.op->text.length()});
-                } else if (a.op) {
-                    auto result = binaryType(*a.op->op->base, place, a.place->span, value, a.value->span);
-                    if (!isCompatible(place, result)) mismatch(place, result, a.value->span);
+                if (assign.op && assign.op->op->base->category == OpCategory::Extra) {
+                    unsupported("extra operators", Span{assign.op->loc, assign.op->loc + assign.op->text.length()});
+                } else if (assign.op) {
+                    auto result = binaryType(*assign.op->op->base, place, assign.place->span, value, assign.value->span);
+                    if (!isCompatible(place, result)) mismatch(place, result, assign.value->span);
                 } else if (!isCompatible(place, value)) {
-                    mismatch(place, value, a.value->span);
+                    mismatch(place, value, assign.value->span);
                 }
                 return value == context.semaNever;
             }
             // a value can't be dropped on the floor: it has to be used or explicitly discarded
             case StmtKind::Expr: {
-                auto& e = *static_cast<ExprStmt&>(s).expr;
-                auto type = checkExpr(e);
+                auto& expr = *static_cast<ExprStmt&>(s).expr;
+                auto type = checkExpr(expr);
                 if (type == context.semaVoid || isPoisoned(type)) return type == context.semaNever;
-                auto text = engine.getManager().text().substr(e.span.start, e.span.length());
-                engine.printError("cherimoya requires a value to be used or discarded, please write '_ <- " + std::string(text) + ";'", e.span);
+                auto text = engine.getManager().text().substr(expr.span.start, expr.span.length());
+                engine.printError("cherimoya requires a value to be used or discarded, please write '_ <- " + std::string(text) + ";'", expr.span);
                 return false;
             }
             case StmtKind::Yield:
                 checkYield(static_cast<YieldStmt&>(s));
                 return true;
             case StmtKind::Wit: {
-                auto& w = static_cast<WitStmt&>(s);
-                if (w.bound) {
-                    unsupported("interfaces", w.span);
+                auto& wit = static_cast<WitStmt&>(s);
+                if (wit.bound) {
+                    unsupported("interfaces", wit.span);
                     break;
                 }
-                expectBool(*w.predicate, "a 'wit' obligation");
+                expectBool(*wit.predicate, "a 'wit' obligation");
                 break;
             }
             case StmtKind::Assert:
@@ -530,8 +529,8 @@ class Sema {
                 break;
             }
             case StmtKind::Attr: {
-                auto& a = static_cast<AttrStmt&>(s);
-                return a.target && checkStmt(*a.target);
+                auto& attr = static_cast<AttrStmt&>(s);
+                return attr.target && checkStmt(*attr.target);
             }
             default:
                 break;
@@ -561,12 +560,12 @@ class Sema {
     // checks the left side of an assignment: it has to be a binding declared mut, and gives the type it holds
     SemaType* checkPlace(Expr& place) {
         if (place.kind != ExprKind::Identifier) return checkExpr(place);
-        auto& id = static_cast<IdentifierExpr&>(place);
-        auto type = checkIdentifier(id, true);
+        auto& identifier = static_cast<IdentifierExpr&>(place);
+        auto type = checkIdentifier(identifier, true);
         place.type = type;
-        auto symbol = id.decl;
+        auto symbol = identifier.decl;
         if (symbol == nullptr || symbol->isMutable) return type;
-        std::string name(id.name);
+        std::string name(identifier.name);
         if (symbol->kind == SymbolKind::Function) {
             engine.printError("cherimoya requires the left side of an assignment to be a binding, please assign to a 'let' instead of the function '" + name + "'", place.span);
             return context.semaError;
@@ -581,34 +580,57 @@ class Sema {
         return type == context.semaError || type == context.semaNever;
     }
 
-    // checks whether a type is one of the integer types, where a missing type, like a subjectless match's, isn't
-    bool isInt(SemaType* type) {
-        return type != nullptr && type->kind == SemaTypeKind::Int;
-    }
-
     // checks whether a type is one of the numeric types
     bool isNumeric(SemaType* type) {
-        return isInt(type) || type == context.semaFloat;
+        return asInt(type) || asFloat(type);
     }
 
-    // reads an integer literal's value from its raw text, with separators skipped and the prefix picking the radix, or nothing if it's wider than 128 bits, which no type holds
-    std::optional<unsigned __int128> literalValue(std::string_view text) {
-        unsigned radix = 10;
-        if (text.size() > 2 && text[0] == '0') {
-            char prefix = text[1] | 0x20;
-            if (prefix == 'x') radix = 16;
-            if (prefix == 'o') radix = 8;
-            if (prefix == 'b') radix = 2;
-            if (radix != 10) text.remove_prefix(2);
-        }
+    // the value of one digit in any base up to 16
+    unsigned digitValue(char c) {
+        char lower = c | 0x20;
+        return ('a' <= lower && lower <= 'f') ? 10 + (lower - 'a') : (c - '0');
+    }
+
+    // reads an integer literal's value from its raw text, or nothing if it's wider than 128 bits, which no type holds
+    std::optional<unsigned __int128> intLiteralValue(std::string_view text) {
+        auto [radix, digits] = literalDigits(text);
         unsigned __int128 value = 0;
-        for (char c : text) {
-            if (c == '_') continue;
-            unsigned digit = ('a' <= (c | 0x20) && (c | 0x20) <= 'f') ? 10 + ((c | 0x20) - 'a') : (c - '0');
+        for (char c : digits) {
+            unsigned digit = digitValue(c);
             if (value > (~(unsigned __int128)0 - digit) / radix) return std::nullopt;
             value = value * radix + digit;
         }
         return value;
+    }
+
+    // reads a float literal's value from its raw text as precisely as a long double can, which is plenty for checking it against a type's range, in any base, since 0x1.8 is 1.5
+    long double floatLiteralValue(std::string_view text) {
+        auto [radix, digits] = literalDigits(text);
+        long double value = 0;
+        // the place value of the next digit after the point, which starts at 1 / radix and shrinks by radix each digit, and is 0 before the point
+        long double place = 0;
+        for (char c : digits) {
+            if (c == '.') {
+                place = 1.0L / radix;
+                continue;
+            }
+            unsigned digit = digitValue(c);
+            if (place == 0) {
+                value = value * radix + digit;
+            } else {
+                value += digit * place;
+                place /= radix;
+            }
+        }
+        return value;
+    }
+
+    // checks whether a whole number is exact in a float type, so an integer literal can stand for it: its odd part has to fit in the significand, and the whole number in the range
+    bool isExactIn(unsigned __int128 value, const FloatSemaType& type) {
+        if ((long double)value > type.max) return false;
+        unsigned __int128 odd = value;
+        while (odd != 0 && (odd & 1) == 0) odd >>= 1;
+        return odd < ((unsigned __int128)1 << type.precision);
     }
 
     // checks whether a literal's value, negated or not, fits in an integer type
@@ -622,24 +644,56 @@ class Sema {
 
     // types an integer literal, adapting to the expected type when that's an integer and defaulting to int otherwise, and checks that its value fits there
     SemaType* intLiteral(IntLiteralExpr& literal, SemaType* expected, bool negated, Span span) {
-        IntSemaType* type = (expected != nullptr && expected->kind == SemaTypeKind::Int) ? static_cast<IntSemaType*>(expected) : context.semaInt;
-        auto value = literalValue(literal.literal);
-        if (!value || !isInRange(*value, negated, *type)) {
-            std::string text = (negated ? "-" : "") + std::string(literal.literal);
-            engine.printError("cherimoya requires " + text + " to fit in '" + type->toString() + "', please use a wider type or convert it explicitly", span);
+        auto value = intLiteralValue(literal.literal);
+        std::string text = (negated ? "-" : "") + std::string(literal.literal);
+        // a whole number can stand for a float when the float holds it exactly, so x * 2 works on a float x
+        if (FloatSemaType* floating = asFloat(expected)) {
+            if (!value || !isExactIn(*value, *floating)) {
+                engine.printError("cherimoya requires " + text + " to be exact in '" + floating->toString() + "', please write it as a float literal or use a wider type", span);
+                literal.type = context.semaError;
+                return context.semaError;
+            }
+            literal.type = floating;
+            return floating;
+        }
+        IntSemaType* integer = asInt(expected) ? asInt(expected) : context.semaInt;
+        if (!value || !isInRange(*value, negated, *integer)) {
+            engine.printError("cherimoya requires " + text + " to fit in '" + integer->toString() + "', please use a wider type or convert it explicitly", span);
             literal.type = context.semaError;
             return context.semaError;
         }
-        literal.type = type;
-        return type;
+        literal.type = integer;
+        return integer;
     }
 
-    // checks whether an expression is an integer literal, possibly negated, which takes its type from around it instead of deciding one
-    bool isIntLiteral(const Expr& e) {
-        if (e.kind == ExprKind::IntLiteral) return true;
-        if (e.kind != ExprKind::Unary) return false;
-        auto& u = static_cast<const UnaryExpr&>(e);
-        return u.op.kind == TokenKind::Minus && u.operand->kind == ExprKind::IntLiteral;
+    // types a float literal, adapting to the expected type when that's a float and defaulting to float otherwise, and checks that it's at most the type's largest value, so a literal never quietly rounds to the largest value or to infinity
+    SemaType* floatLiteral(FloatLiteralExpr& literal, SemaType* expected, bool negated, Span span) {
+        FloatSemaType* floating = asFloat(expected) ? asFloat(expected) : context.semaFloat;
+        if (floatLiteralValue(literal.literal) > floating->max) {
+            std::string text = (negated ? "-" : "") + std::string(literal.literal);
+            engine.printError("cherimoya requires " + text + " to fit in '" + floating->toString() + "', please use a wider type", span);
+            literal.type = context.semaError;
+            return context.semaError;
+        }
+        literal.type = floating;
+        return floating;
+    }
+
+    // the literal an expression is, looking through a minus, or null if it isn't a number literal: -128 is the literal 128, negated
+    const Expr* literalOf(const Expr& e) {
+        const Expr* inner = &e;
+        if (e.kind == ExprKind::Unary && static_cast<const UnaryExpr&>(e).op.kind == TokenKind::Minus) inner = static_cast<const UnaryExpr&>(e).operand.get();
+        return inner->kind == ExprKind::IntLiteral || inner->kind == ExprKind::FloatLiteral ? inner : nullptr;
+    }
+
+    // checks whether an expression is a number literal, possibly negated, which takes its type from around it instead of deciding one
+    bool isLiteral(const Expr& e) {
+        return literalOf(e) != nullptr;
+    }
+
+    // checks whether an expression is a float literal, possibly negated, which decides the type of the whole numbers around it, since they can be exact in a float and never the other way round
+    bool isFloatLiteral(const Expr& e) {
+        return isLiteral(e) && literalOf(e)->kind == ExprKind::FloatLiteral;
     }
 
     // reports an operand of the wrong type for an operator
@@ -651,18 +705,18 @@ class Sema {
     SemaType* unaryType(const OpInfo& op, SemaType* operand, Span span) {
         if (isPoisoned(operand)) return operand;
         // negating a trapping unsigned value overflows for everything but 0, so only signed and wrapping integers can be negated
-        if (op.spelling == "-" && isInt(operand)) {
-            auto& integer = static_cast<IntSemaType&>(*operand);
-            if (!integer.isSigned && !integer.isWrapping) {
-                std::string bits = std::to_string(integer.bits);
-                engine.printError("cherimoya requires negation to be on a signed or wrapping integer, please use an 'i" + bits + "' or an 'i" + bits + "uw' instead of '" + integer.toString() + "'", span);
+        IntSemaType* integer = asInt(operand);
+        if (op.spelling == "-" && integer) {
+            if (!integer->isSigned && !integer->isWrapping) {
+                std::string bits = std::to_string(integer->bits);
+                engine.printError("cherimoya requires negation to be on a signed or wrapping integer, please use an 'i" + bits + "' or an 'i" + bits + "uw' instead of '" + integer->toString() + "'", span);
                 return context.semaError;
             }
             return operand;
         }
         if (op.spelling == "-" && isNumeric(operand)) return operand;
         if (op.spelling == "!" && operand == context.semaBool) return operand;
-        if (op.spelling == "~" && isInt(operand)) return operand;
+        if (op.spelling == "~" && integer) return operand;
         auto wanted = op.spelling == "-" ? "an int or a float" : op.spelling == "!" ? "a bool" : "an int";
         badOperand(wanted, "after", op, operand, span);
         return context.semaError;
@@ -679,7 +733,7 @@ class Sema {
                 case OpCategory::Comparison:
                     return isNumeric(side);
                 case OpCategory::Bitwise:
-                    return isInt(side);
+                    return asInt(side) != nullptr;
                 case OpCategory::Logical:
                     return side == context.semaBool;
                 default:
@@ -719,7 +773,7 @@ class Sema {
         return result;
     }
 
-    // checks a conversion, a type called on one value: i32(x) converts any integer to i32, checked or wrapping depending on the target, and floats arrive in 6.2
+    // checks a conversion, a type called on one value: i32(x) converts any number to i32, and f32(x) any number to f32, where codegen checks the ones that can lose the value
     SemaType* checkConversion(TypeExprExpr& callee, const std::vector<Expr*>& args, Span span) {
         auto target = resolveType(*callee.typeExpr);
         callee.type = target;
@@ -731,9 +785,8 @@ class Sema {
         }
         auto source = args[0]->type;
         if (isPoisoned(source)) return context.semaError;
-        if (!isInt(callee.type) || !isInt(args[0]->type)) {
-            if (target == context.semaFloat || source == context.semaFloat) return unsupported("float conversions", span);
-            engine.printError("cherimoya requires a conversion to be between integers, please convert '" + source->toString() + "' to '" + target->toString() + "' some other way", span);
+        if (!isNumeric(target) || !isNumeric(source)) {
+            engine.printError("cherimoya requires a conversion to be between numbers, please convert '" + source->toString() + "' to '" + target->toString() + "' some other way", span);
             return context.semaError;
         }
         return callee.type;
@@ -805,7 +858,8 @@ class Sema {
 
     // checks both operands of a binary operator, where a literal on one side takes the other side's type, so in 1 + x the 1 is x's type whichever side x is on
     std::pair<SemaType*, SemaType*> checkOperands(Expr& lhs, Expr& rhs, SemaType* expected) {
-        if (isIntLiteral(lhs) && !isIntLiteral(rhs)) {
+        // two literals of different kinds, like 1 + 2.5, are typed from the float side
+        if (isLiteral(lhs) && (!isLiteral(rhs) || isFloatLiteral(rhs))) {
             auto right = checkExpr(rhs, expected);
             return {checkExpr(lhs, right), right};
         }
@@ -819,7 +873,7 @@ class Sema {
             case ExprKind::IntLiteral:
                 return intLiteral(static_cast<IntLiteralExpr&>(e), expected, false, e.span);
             case ExprKind::FloatLiteral:
-                return context.semaFloat;
+                return floatLiteral(static_cast<FloatLiteralExpr&>(e), expected, false, e.span);
             case ExprKind::BoolLiteral:
                 return context.semaBool;
             case ExprKind::Identifier:
@@ -829,59 +883,69 @@ class Sema {
                 return context.semaError;
             // a negated literal is checked as a whole, since -128 fits in an i8 when 128 doesn't
             case ExprKind::Unary: {
-                auto& u = static_cast<UnaryExpr&>(e);
-                if (isIntLiteral(e)) {
-                    auto type = intLiteral(static_cast<IntLiteralExpr&>(*u.operand), expected, true, e.span);
-                    return unaryType(*u.op.op, type, u.operand->span);
+                auto& unary = static_cast<UnaryExpr&>(e);
+                if (const Expr* literal = literalOf(e)) {
+                    auto type = literal->kind == ExprKind::FloatLiteral ? floatLiteral(static_cast<FloatLiteralExpr&>(*unary.operand), expected, true, e.span)
+                        : intLiteral(static_cast<IntLiteralExpr&>(*unary.operand), expected, true, e.span);
+                    return unaryType(*unary.op.op, type, unary.operand->span);
                 }
-                return unaryType(*u.op.op, checkExpr(*u.operand, expected), u.operand->span);
+                return unaryType(*unary.op.op, checkExpr(*unary.operand, expected), unary.operand->span);
             }
             // arithmetic and bitwise operators give their operands' type, so what the context wants flows into them, while comparisons and logic give a bool
             case ExprKind::Binary: {
-                auto& b = static_cast<BinaryExpr&>(e);
-                auto category = b.op.op->category;
+                auto& binary = static_cast<BinaryExpr&>(e);
+                auto category = binary.op.op->category;
                 bool passes = category == OpCategory::Arithmetic || category == OpCategory::Bitwise;
-                auto [lhs, rhs] = checkOperands(*b.lhs, *b.rhs, passes ? expected : nullptr);
-                return binaryType(*b.op.op, lhs, b.lhs->span, rhs, b.rhs->span);
+                auto [lhs, rhs] = checkOperands(*binary.lhs, *binary.rhs, passes ? expected : nullptr);
+                return binaryType(*binary.op.op, lhs, binary.lhs->span, rhs, binary.rhs->span);
             }
             // a chain is each neighboring pair compared, all joined with &&
             case ExprKind::Chain: {
-                auto& c = static_cast<ChainExpr&>(e);
+                auto& chain = static_cast<ChainExpr&>(e);
                 // the first operand that isn't a literal decides the type every literal in the chain takes
                 SemaType* common = nullptr;
-                for (auto& o : c.operands) {
-                    if (!isIntLiteral(*o)) {
-                        common = checkExpr(*o);
+                for (auto& operand : chain.operands) {
+                    if (!isLiteral(*operand)) {
+                        common = checkExpr(*operand);
                         break;
                     }
                 }
+                // a chain of nothing but literals takes a float literal's type if it has one
+                if (common == nullptr) {
+                    for (auto& operand : chain.operands) {
+                        if (isFloatLiteral(*operand)) {
+                            common = checkExpr(*operand);
+                            break;
+                        }
+                    }
+                }
                 std::vector<SemaType*> types;
-                for (auto& o : c.operands) types.push_back(o->type ? o->type : checkExpr(*o, common));
+                for (auto& operand : chain.operands) types.push_back(operand->type ? operand->type : checkExpr(*operand, common));
                 SemaType* result = context.semaBool;
-                for (size_t i = 0; i < c.ops.size(); i++) {
-                    auto pair = binaryType(*c.ops[i].op, types[i], c.operands[i]->span, types[i + 1], c.operands[i + 1]->span);
+                for (size_t i = 0; i < chain.ops.size(); i++) {
+                    auto pair = binaryType(*chain.ops[i].op, types[i], chain.operands[i]->span, types[i + 1], chain.operands[i + 1]->span);
                     if (isPoisoned(pair) && result != context.semaError) result = pair;
                 }
                 return result;
             }
             case ExprKind::ExtraBinary: {
-                auto& b = static_cast<ExtraBinaryExpr&>(e);
-                checkExpr(*b.lhs);
-                checkExpr(*b.rhs);
-                return unsupported("extra operators", tokSpan(b.op));
+                auto& extra = static_cast<ExtraBinaryExpr&>(e);
+                checkExpr(*extra.lhs);
+                checkExpr(*extra.rhs);
+                return unsupported("extra operators", tokSpan(extra.op));
             }
             case ExprKind::Call: {
-                auto& c = static_cast<CallExpr&>(e);
+                auto& call = static_cast<CallExpr&>(e);
                 std::vector<Expr*> args;
-                for (auto& a : c.args) args.push_back(a.get());
-                return checkCall(*c.callee, args, e.span);
+                for (auto& a : call.args) args.push_back(a.get());
+                return checkCall(*call.callee, args, e.span);
             }
             // x |> f and f <| x are both f(x)
             case ExprKind::Pipe: {
-                auto& p = static_cast<PipeExpr&>(e);
-                bool forward = p.op.kind == TokenKind::PipeFwd;
-                auto& fn = forward ? *p.rhs : *p.lhs;
-                auto& arg = forward ? *p.lhs : *p.rhs;
+                auto& pipe = static_cast<PipeExpr&>(e);
+                bool forward = pipe.op.kind == TokenKind::PipeFwd;
+                auto& fn = forward ? *pipe.rhs : *pipe.lhs;
+                auto& arg = forward ? *pipe.lhs : *pipe.rhs;
                 return checkCall(fn, {&arg}, e.span);
             }
             case ExprKind::Block:

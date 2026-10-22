@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 #include "token.hpp"
 #include "diagnostics.hpp"
@@ -73,6 +74,26 @@ public:
     std::string_view literal;
     FloatLiteralExpr(std::string_view l, Span s) : Expr(ExprKind::FloatLiteral, s), literal(l) {}
 };
+
+// a number literal's text with its prefix read off and its separators taken out, which sema and codegen both read values from: 0x1_F is radix 16 and digits 1F, and a float keeps its point
+struct LiteralDigits {
+    unsigned radix;
+    std::string digits;
+};
+inline LiteralDigits literalDigits(std::string_view literal) {
+    unsigned radix = 10;
+    if (literal.size() > 2 && literal[0] == '0') {
+        char prefix = literal[1] | 0x20;
+        if (prefix == 'x') radix = 16;
+        if (prefix == 'o') radix = 8;
+        if (prefix == 'b') radix = 2;
+        if (radix != 10) literal.remove_prefix(2);
+    }
+    std::string digits;
+    for (char c : literal) if (c != '_') digits.push_back(c);
+    return {radix, digits};
+}
+
 class BoolLiteralExpr : public Expr {
 public:
     bool literal;
