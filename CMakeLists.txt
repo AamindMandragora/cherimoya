@@ -30,6 +30,7 @@ target_include_directories(cheri INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser
     ${CMAKE_CURRENT_SOURCE_DIR}/src/sema
     ${CMAKE_CURRENT_SOURCE_DIR}/src/codegen
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lsp
 )
 
 # the runtime every program links with, whose path is baked into cheri so builds work from any directory
@@ -58,6 +59,7 @@ if(CHERI_BUILD_TESTS)
     tests/unit/parser/test_printer.cpp
     tests/unit/sema/test_sema.cpp
     tests/unit/runtime/test_fp8.cpp
+    tests/unit/lsp/test_lsp.cpp
     runtime/fp8.c
   )
   target_link_libraries(cheri_tests PRIVATE cheri cheri_llvm Catch2::Catch2WithMain)
