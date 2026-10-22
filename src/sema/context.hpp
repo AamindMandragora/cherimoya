@@ -36,25 +36,27 @@ class TypeContext {
         return made;
     }
 
-    // makes all ten float types, each encoding NaN-free and NaN-carrying (n), so f16, f16n, f16e8m7, and f16e8m7n up through f128n
+    // makes all fourteen float types, each encoding NaN-free and NaN-carrying (n), so f8e4m3, f8e4m3n, f8e5m2, and f8e5m2n up through f128n
     std::unordered_map<std::string, FloatSemaType*> makeFloats() {
-        // each encoding's name, its precision, and its largest finite value, where f128's is long double's, which shares its range but holds a hair less
-        struct Row { const char* name; FloatFormat format; unsigned precision; long double max; };
+        // each encoding's name, the alias its NaN-free type prints as, if it has one, its precision, and its largest finite value, where f128's is long double's, which shares its range but holds a hair less
+        struct Row { const char* name; const char* alias; FloatFormat format; unsigned precision; long double max; };
         const Row rows[] = {
-            {"f16", FloatFormat::Half, 11, 65504.0L},
-            {"f16e8m7", FloatFormat::BFloat, 8, 3.38953138925153547590e38L},
-            {"f32", FloatFormat::Single, 24, 3.40282346638528859812e38L},
-            {"f64", FloatFormat::Double, 53, 1.79769313486231570815e308L},
-            {"f128", FloatFormat::Quad, 113, std::numeric_limits<long double>::max()},
+            {"f8e4m3", "f8", FloatFormat::E4M3, 4, 448.0L},
+            {"f8e5m2", nullptr, FloatFormat::E5M2, 3, 57344.0L},
+            {"f16", nullptr, FloatFormat::Half, 11, 65504.0L},
+            {"f16e8m7", nullptr, FloatFormat::BFloat, 8, 3.38953138925153547590e38L},
+            {"f32", nullptr, FloatFormat::Single, 24, 3.40282346638528859812e38L},
+            {"f64", "float", FloatFormat::Double, 53, 1.79769313486231570815e308L},
+            {"f128", nullptr, FloatFormat::Quad, 113, std::numeric_limits<long double>::max()},
         };
         std::unordered_map<std::string, FloatSemaType*> made;
         for (const Row& row : rows) {
             std::string name = row.name;
-            // f64 prints as float, its alias
-            made[name] = make<FloatSemaType>(row.format, true, row.precision, row.max, name == "f64" ? "float" : name);
+            // an alias names only the NaN-free type, so f8 is f8e4m3 and the NaN-carrying one is only ever f8e4m3n
+            made[name] = make<FloatSemaType>(row.format, true, row.precision, row.max, row.alias ? row.alias : name);
+            if (row.alias) made[row.alias] = made.at(name);
             made[name + "n"] = make<FloatSemaType>(row.format, false, row.precision, row.max, name + "n");
         }
-        made["float"] = made.at("f64");
         return made;
     }
 public:

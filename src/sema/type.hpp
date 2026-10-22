@@ -58,8 +58,8 @@ public:
     }
 };
 
-// the encoding a float type uses, which decides the LLVM type codegen gives it: IEEE half, bfloat16, and IEEE single, double, and quad
-enum class FloatFormat { Half, BFloat, Single, Double, Quad };
+// the encoding a float type uses, which decides how codegen stores and computes with it: the two FP8 encodings, IEEE half, bfloat16, and IEEE single, double, and quad
+enum class FloatFormat { E4M3, E5M2, Half, BFloat, Single, Double, Quad };
 
 // a float type is its encoding and whether it's NaN-free: a NaN-free float traps on any operation that would make a NaN, and a NaN-carrying one, written with an n, follows IEEE and orders NaN below everything
 class FloatSemaType : public SemaType {

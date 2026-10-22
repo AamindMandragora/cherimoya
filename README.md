@@ -56,10 +56,10 @@ Cherimoya is early. What works today:
 
 - **The whole front end:** the lexer, the parser for the whole grammar except macros, and diagnostics that say what was expected, what the language does instead, or which rule was broken and how to fix it.
 - **Name resolution and type checking**: functions (nested, and in any order), bindings, operators, calls and pipes, blocks, `match`, loops, yields and their labels, mutability, discards, and the entry point.
-- **The numeric model**: every integer from 8 to 128 bits, signed or unsigned, trapping or wrapping, and every float from `f16` to `f128`, including bfloat16, NaN-free or NaN-carrying. Literals take the type their context wants, and conversions go between any two numbers.
-- **Code generation through LLVM** for all of that, with optimization, native object files, cross-compilation, and linking with a small runtime. Overflow, division by zero, out-of-range shifts, a NaN made in or converted into a NaN-free float, a conversion into a trapping integer that doesn't hold the value, and a failed `assert` trap with their line.
+- **The numeric model**: every integer from 8 to 128 bits, signed or unsigned, trapping or wrapping, and every float from `f16` to `f128`, including bfloat16, NaN-free or NaN-carrying, and both FP8 encodings, stored as bytes and computed in f32. Literals take the type their context wants, and conversions go between any two numbers.
+- **Code generation through LLVM** for all of that, with optimization, native object files, cross-compilation, and linking with a small runtime. Overflow, division by zero, out-of-range shifts, a NaN made in or converted into a NaN-free float, an `f8` that overflows, a conversion into a trapping integer that doesn't hold the value, and a failed `assert` trap with their line.
 
-Not yet: FP8, strings and chars, packs, ranges, comprehensions, and folds, for-each loops, handles and arrays, records, sums, interfaces, generics, closures and functions as values, operator overloading and the extra operators, modules, ownership checking, and verification with Z3.
+Not yet: strings and chars, packs, ranges, comprehensions, and folds, for-each loops, handles and arrays, records, sums, interfaces, generics, closures and functions as values, operator overloading and the extra operators, modules, ownership checking, and verification with Z3.
 
 ## Building
 
@@ -113,13 +113,13 @@ The most useful options:
 | `src/codegen` | lowering to LLVM IR |
 | `runtime/` | the C runtime every program links with |
 | `tools/cheri/` | the `cheri` driver |
-| `tests/unit/` | Catch2 tests for the lexer, parser, and sema |
+| `tests/unit/` | Catch2 tests for the lexer, parser, sema, and runtime |
 | `tests/run/` | whole programs, each checked by its exit code |
 | `design/` | a design note for every commit |
 
 ## Tests
 
-The lexer, parser, and sema have unit tests in C++, under `tests/unit/`, and codegen is tested through whole programs. Those live in `tests/run/`: each one is a `.moya` file whose first line is the exit code it should produce, and the test suite builds it with `cheri` at `-O0` and at `-O3`, runs it, and compares. A program that should trap names the trap on a `# trap:` line, and its stderr has to contain it.
+The lexer, parser, sema, and runtime have unit tests in C++, under `tests/unit/`, and codegen is tested through whole programs. Those live in `tests/run/`: each one is a `.moya` file whose first line is the exit code it should produce, and the test suite builds it with `cheri` at `-O0` and at `-O3`, runs it, and compares. A program that should trap names the trap on a `# trap:` line, and its stderr has to contain it.
 
 ```
 # exit: 134

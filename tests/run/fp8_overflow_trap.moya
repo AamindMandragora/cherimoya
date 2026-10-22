@@ -1,0 +1,8 @@
+# exit: 134
+# trap: trap at line 4: 'x * 2' overflowed f8
+# checks that a NaN-free f8 traps when a result is past its range, since E4M3 has no infinity to overflow into
+let (x :: f8) -> twice -> (r :: f8) { x * 2 -| }
+let () -> main -> (code :: int) {
+    let y <- twice(448.0);
+    0 -|
+}

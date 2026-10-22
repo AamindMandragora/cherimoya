@@ -33,7 +33,7 @@ target_include_directories(cheri INTERFACE
 )
 
 # the runtime every program links with, whose path is baked into cheri so builds work from any directory
-add_library(cheri_rt STATIC runtime/runtime.c)
+add_library(cheri_rt STATIC runtime/runtime.c runtime/fp8.c)
 add_executable(cheri_bin tools/cheri/main.cpp)
 set_target_properties(cheri_bin PROPERTIES OUTPUT_NAME cheri)
 target_link_libraries(cheri_bin PRIVATE cheri cheri_llvm)
@@ -51,13 +51,16 @@ if(CHERI_BUILD_TESTS)
   FetchContent_MakeAvailable(Catch2)
 
   enable_testing()
+  # every unit test, where the runtime's FP8 conversions are compiled in directly, without the runtime's main, and checked against LLVM's APFloat, which is why the tests link LLVM
   add_executable(cheri_tests
     tests/unit/lexer/test_lexer.cpp
     tests/unit/parser/test_parser.cpp
     tests/unit/parser/test_printer.cpp
     tests/unit/sema/test_sema.cpp
+    tests/unit/runtime/test_fp8.cpp
+    runtime/fp8.c
   )
-  target_link_libraries(cheri_tests PRIVATE cheri Catch2::Catch2WithMain)
+  target_link_libraries(cheri_tests PRIVATE cheri cheri_llvm Catch2::Catch2WithMain)
 
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)

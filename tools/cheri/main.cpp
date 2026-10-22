@@ -31,6 +31,8 @@ namespace platform {
     constexpr const char* exe = ".exe";
     constexpr const char* obj = ".obj";
     constexpr const char* linker = "clang";
+    // the C libraries the runtime needs beyond its own, where Windows' C runtime already has the math functions
+    constexpr const char* runtimeLibraries = "";
     inline int processId() { return _getpid(); }
     // Windows hands std::system the program's exit code directly, and a crash comes back as an NTSTATUS like 0xC0000005, which is passed on as it is
     inline int exitCode(int status) { return status; }
@@ -46,6 +48,8 @@ namespace platform {
     constexpr const char* exe = "";
     constexpr const char* obj = ".o";
     constexpr const char* linker = "cc";
+    // the math functions the runtime's FP8 conversions use live in libm on Unix
+    constexpr const char* runtimeLibraries = " -lm";
     inline int processId() { return getpid(); }
     // a Unix shell reports a program killed by a signal as 128 plus the signal, so cheri does too
     inline int exitCode(int status) {
@@ -358,7 +362,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     // links the object with the runtime, whose C main calls cheri_init and cheri_main, and the linker brings in the C runtime that calls main, where every argument is quoted so paths with spaces stay whole
-    std::string command = platform::quote(options.linker) + " " + platform::quote(object) + " " + platform::quote(CHERI_RUNTIME) + " -o " + platform::quote(output);
+    std::string command = platform::quote(options.linker) + " " + platform::quote(object) + " " + platform::quote(CHERI_RUNTIME) + platform::runtimeLibraries + " -o " + platform::quote(output);
     if (options.isStatic) command += " -static";
     for (auto& arg : options.linkArgs) command += " " + platform::quote(arg);
     int linked = std::system(platform::shell(command).c_str());

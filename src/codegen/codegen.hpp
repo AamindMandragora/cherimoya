@@ -25,9 +25,11 @@ class Codegen {
     // the source, so a runtime trap can say which line it came from
     SourceManager& manager;
 
-    // the APFloat semantics of a float encoding, which its LLVM type and every one of its constants are built from
+    // the APFloat semantics of a float encoding, which its LLVM type and every one of its constants are built from, where FP8 has no LLVM type, but its constants are still built in its semantics
     const llvm::fltSemantics& semantics(FloatFormat format) {
         switch (format) {
+            case FloatFormat::E4M3: return llvm::APFloat::Float8E4M3FN();
+            case FloatFormat::E5M2: return llvm::APFloat::Float8E5M2();
             case FloatFormat::Half: return llvm::APFloat::IEEEhalf();
             case FloatFormat::BFloat: return llvm::APFloat::BFloat();
             case FloatFormat::Single: return llvm::APFloat::IEEEsingle();
@@ -37,10 +39,15 @@ class Codegen {
         llvm_unreachable("unknown float format");
     }
 
+    // checks whether a float type is one of the FP8 encodings, which no hardware computes in, so they're stored as bytes and computed in f32
+    bool isFp8(const FloatSemaType& type) {
+        return type.format == FloatFormat::E4M3 || type.format == FloatFormat::E5M2;
+    }
+
     // sema interns its types, so each one is lowered once and looked up by pointer after that
     std::unordered_map<SemaType*, llvm::Type*> lowered;
 
-    // turns a sema type into an LLVM type: an integer is as wide as its type, bool is i1, a float is LLVM's type for its encoding, and void and never are void
+    // turns a sema type into an LLVM type: an integer is as wide as its type, bool is i1, a float is LLVM's type for its encoding, FP8 is a byte, and void and never are void
     llvm::Type* lower(SemaType* type) {
         auto found = lowered.find(type);
         if (found != lowered.end()) return found->second;
@@ -57,6 +64,7 @@ class Codegen {
             case SemaTypeKind::Int:
                 return lowered[type] = irbuilder.getIntNTy(asInt(type)->bits);
             case SemaTypeKind::Float:
+                if (isFp8(*asFloat(type))) return lowered[type] = irbuilder.getInt8Ty();
                 return lowered[type] = llvm::Type::getFloatingPointTy(context, semantics(asFloat(type)->format));
             case SemaTypeKind::Function: {
                 auto& function = static_cast<FunctionSemaType&>(*type);
@@ -389,9 +397,14 @@ class Codegen {
         }
     }
 
-    // converts an integer to a float, rounding to nearest even, which can't fail, since a value past the float's range rounds to infinity, which every float type holds
-    llvm::Value* intToFloat(llvm::Value* value, IntSemaType& from, FloatSemaType& to) {
-        return from.isSigned ? irbuilder.CreateSIToFP(value, lower(&to)) : irbuilder.CreateUIToFP(value, lower(&to));
+    // converts an integer to a float type, rounding to nearest even, which can't fail, since a value past the float's range rounds to infinity, where FP8 isn't converted here but narrowed from a double
+    llvm::Value* intToFloat(llvm::Value* value, IntSemaType& from, llvm::Type* to) {
+        return from.isSigned ? irbuilder.CreateSIToFP(value, to) : irbuilder.CreateUIToFP(value, to);
+    }
+
+    // traps when a NaN-carrying float that's becoming a NaN-free one holds a NaN, which is the one float conversion that can fail, since the NaN has nowhere to go
+    void trapIfNaNInto(llvm::Value* value, FloatSemaType& from, FloatSemaType& to, Span span) {
+        if (!from.isNanFree && to.isNanFree) trapIf(isNaN(value), quoted(span) + " is a NaN, which " + to.toString() + " can't hold", span);
     }
 
     // converts a float to an integer, rounding toward zero: a wrapping target saturates, so a value past either end becomes that end and a NaN becomes 0, and a trapping one traps on a NaN or a value past either end
@@ -416,9 +429,9 @@ class Codegen {
         return to.isSigned ? irbuilder.CreateFPToSI(value, llvmType) : irbuilder.CreateFPToUI(value, llvmType);
     }
 
-    // converts a float to another float type, rounding to nearest even, where a NaN-carrying float becoming a NaN-free one is the one that can fail, since the NaN has nowhere to go
+    // converts a float to another float type, rounding to nearest even
     llvm::Value* floatToFloat(llvm::Value* value, FloatSemaType& from, FloatSemaType& to, Span span) {
-        if (!from.isNanFree && to.isNanFree) trapIf(isNaN(value), quoted(span) + " is a NaN, which " + to.toString() + " can't hold", span);
+        trapIfNaNInto(value, from, to, span);
         llvm::Type* llvmType = lower(&to);
         if (value->getType() == llvmType) return value;
         unsigned fromBits = value->getType()->getPrimitiveSizeInBits();
@@ -428,35 +441,83 @@ class Codegen {
         return fromBits < toBits ? irbuilder.CreateFPExt(value, llvmType) : irbuilder.CreateFPTrunc(value, llvmType);
     }
 
-    // emits one built-in arithmetic or bitwise operator on two values of the same type, which compound assignment shares through the base of X<-
+    // finds or declares one of the runtime's FP8 conversions, cheri_e4m3_widen and its kin, which take a param to a result
+    llvm::Function* fp8Conversion(const FloatSemaType& type, std::string_view direction, llvm::Type* result, llvm::Type* param) {
+        std::string name = std::string("cheri_") + (type.format == FloatFormat::E4M3 ? "e4m3_" : "e5m2_") + std::string(direction);
+        return llvm::cast<llvm::Function>(module->getOrInsertFunction(name, llvm::FunctionType::get(result, {param}, false)).getCallee());
+    }
+
+    // turns an FP8 byte into the f32 it stands for, which holds every FP8 value exactly
+    llvm::Value* widen(llvm::Value* byte, FloatSemaType& type) {
+        return irbuilder.CreateCall(fp8Conversion(type, "widen", irbuilder.getFloatTy(), irbuilder.getInt8Ty()), {byte});
+    }
+
+    // turns any float into the nearest FP8 byte through a double, which holds every f32 and f64 exactly so they round only once, where a NaN-free f8 traps when the value was past its range, since E4M3 has no infinity to overflow into and makes a NaN instead
+    llvm::Value* narrow(llvm::Value* value, FloatSemaType& type, Span span) {
+        llvm::Type* doubleType = irbuilder.getDoubleTy();
+        unsigned bits = value->getType()->getPrimitiveSizeInBits();
+        llvm::Value* wide = bits < 64 ? irbuilder.CreateFPExt(value, doubleType) : bits > 64 ? irbuilder.CreateFPTrunc(value, doubleType) : value;
+        llvm::Value* byte = irbuilder.CreateCall(fp8Conversion(type, "narrow", irbuilder.getInt8Ty(), doubleType), {wide});
+        if (type.format == FloatFormat::E4M3 && type.isNanFree) {
+            // the NaNs are the bytes whose low seven bits are all ones, and a NaN-free value's NaN can only come from overflowing, since every NaN it could make is checked before it's narrowed
+            llvm::Value* overflowed = irbuilder.CreateICmpEQ(irbuilder.CreateAnd(byte, 0x7F), irbuilder.getInt8(0x7F));
+            trapIf(overflowed, quoted(span) + " overflowed " + type.toString(), span);
+        }
+        return byte;
+    }
+
+    // emits one built-in arithmetic or bitwise operator on two values of the same type, which compound assignment shares through the base of X<-, where FP8 is computed in f32 and narrowed back, which rounds exactly as if it were computed in FP8, since f32 has at least twice FP8's precision plus two bits
     llvm::Value* arithmetic(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, SemaType* type, Span span) {
-        if (FloatSemaType* floating = asFloat(type)) return floatArithmetic(op, lhs, rhs, *floating, span);
+        if (FloatSemaType* floating = asFloat(type)) {
+            if (!isFp8(*floating)) return floatArithmetic(op, lhs, rhs, *floating, span);
+            return narrow(floatArithmetic(op, widen(lhs, *floating), widen(rhs, *floating), *floating, span), *floating, span);
+        }
         return intArithmetic(op, lhs, rhs, *asInt(type), span);
     }
 
-    // emits one built-in comparison on two values of the same type, where a bool, the one other type that's compared, only has equality, and its bits are its value
+    // emits one built-in comparison on two values of the same type, where FP8's = and != compare its bytes and everything else compares in f32, and a bool, the one other type that's compared, only has equality, and its bits are its value
     llvm::Value* compare(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, SemaType* type) {
-        if (FloatSemaType* floating = asFloat(type)) return floatCompare(op, lhs, rhs, *floating);
+        if (FloatSemaType* floating = asFloat(type)) {
+            if (!isFp8(*floating)) return floatCompare(op, lhs, rhs, *floating);
+            if (op == TokenKind::Eq) return irbuilder.CreateICmpEQ(lhs, rhs);
+            if (op == TokenKind::Ne) return irbuilder.CreateICmpNE(lhs, rhs);
+            return floatCompare(op, widen(lhs, *floating), widen(rhs, *floating), *floating);
+        }
         if (IntSemaType* integer = asInt(type)) return intCompare(op, lhs, rhs, *integer);
         return op == TokenKind::Eq || op == TokenKind::EqEq ? irbuilder.CreateICmpEQ(lhs, rhs) : irbuilder.CreateICmpNE(lhs, rhs);
     }
 
-    // negates a number: a float flips its sign bit, which never makes a NaN, a wrapping integer wraps, and a trapping one is 0 - x through the checked subtraction, since only the minimum overflows
+    // negates a number: a float flips its sign bit, which for FP8 is the byte's top bit, and never makes a NaN, a wrapping integer wraps, and a trapping one is 0 - x through the checked subtraction, since only the minimum overflows
     llvm::Value* negate(llvm::Value* value, SemaType* type, Span span) {
-        if (asFloat(type)) return irbuilder.CreateFNeg(value);
+        if (FloatSemaType* floating = asFloat(type)) return isFp8(*floating) ? irbuilder.CreateXor(value, 0x80) : irbuilder.CreateFNeg(value);
         IntSemaType& integer = *asInt(type);
         if (integer.isWrapping) return irbuilder.CreateNeg(value);
         return checked(TokenKind::Minus, llvm::ConstantInt::get(value->getType(), 0), value, integer, span);
     }
 
-    // converts between any two numbers, by whether each side is an integer or a float
+    // converts between any two numbers, by whether each side is an integer or a float, where FP8 is widened to f32 before it converts to anything, and anything converting to FP8 becomes a double first and is narrowed from there
     llvm::Value* convert(llvm::Value* value, SemaType* from, SemaType* to, Span span) {
         IntSemaType* fromInt = asInt(from);
         IntSemaType* toInt = asInt(to);
         if (fromInt && toInt) return intToInt(value, *fromInt, *toInt, span);
-        if (fromInt) return intToFloat(value, *fromInt, *asFloat(to));
+        FloatSemaType* fromFloat = asFloat(from);
+        FloatSemaType* toFloat = asFloat(to);
+        if (fromFloat && isFp8(*fromFloat)) value = widen(value, *fromFloat);
+        if (toFloat && isFp8(*toFloat)) {
+            // a double holds every integer FP8 can hold, so an integer rounds only once, when it's narrowed
+            if (fromInt) return narrow(intToFloat(value, *fromInt, irbuilder.getDoubleTy()), *toFloat, span);
+            trapIfNaNInto(value, *fromFloat, *toFloat, span);
+            return narrow(value, *toFloat, span);
+        }
+        if (fromInt) return intToFloat(value, *fromInt, lower(toFloat));
         if (toInt) return floatToInt(value, *toInt, span);
-        return floatToFloat(value, *asFloat(from), *asFloat(to), span);
+        return floatToFloat(value, *fromFloat, *toFloat, span);
+    }
+
+    // a float constant in its type's encoding, where an FP8 constant is the byte holding its bits
+    llvm::Value* floatConstant(const llvm::APFloat& value, FloatSemaType& type) {
+        if (isFp8(type)) return irbuilder.getInt(value.bitcastToAPInt());
+        return llvm::ConstantFP::get(context, value);
     }
 
     // emits an integer literal as a constant of its type, which sema made sure it fits in, or as a float when it stands for one, which sema made sure it's exact in
@@ -466,7 +527,7 @@ class Codegen {
             llvm::APFloat value(semantics(floating->format));
             // the value is exact, so converting it can't round
             (void)value.convertFromAPInt(llvm::APInt(128, digits, radix), false, llvm::APFloat::rmNearestTiesToEven);
-            return llvm::ConstantFP::get(context, value);
+            return floatConstant(value, *floating);
         }
         return irbuilder.getInt(llvm::APInt(asInt(literal.type)->bits, digits, radix));
     }
@@ -484,14 +545,15 @@ class Codegen {
             llvm::APInt mantissa(whole.size() * bitsPerDigit, whole, radix);
             text = "0x" + llvm::toString(mantissa, 16, false) + "p" + std::to_string(exponent);
         }
-        llvm::APFloat value(semantics(asFloat(literal.type)->format));
+        FloatSemaType& type = *asFloat(literal.type);
+        llvm::APFloat value(semantics(type.format));
         // sema made sure the text is a valid literal in range, so APFloat failing to read it is a codegen bug
         llvm::Expected<llvm::APFloat::opStatus> status = value.convertFromString(text, llvm::APFloat::rmNearestTiesToEven);
         if (!status) {
             llvm::consumeError(status.takeError());
             llvm_unreachable("sema accepted a float literal APFloat can't read");
         }
-        return llvm::ConstantFP::get(context, value);
+        return floatConstant(value, type);
     }
 
     // a && b only evaluates b when a is true, and a || b only when a is false, so the right side gets its own block and a phi picks the answer

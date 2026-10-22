@@ -1,0 +1,19 @@
+# exit: 8
+# checks FP8 arithmetic in both encodings, rounding to nearest even, subnormals, overflowing into infinity, negation, and conversions to and from other numbers
+let (x :: f32) -> toF8 -> (r :: f8) { f8(x) -| }
+let (x :: f8) -> twice -> (r :: f8) { x * 2 -| }
+let () -> main -> (code :: int) {
+    let tie <- toF8(17.0);
+    let tieUp <- toF8(19.0);
+    let three <- twice(1.5);
+    let tiny :: f8 <- 0.001953125;
+    let half <- tiny / 2;
+    let largest :: f8e5m2 <- 57344.0;
+    let infinity <- largest * 2;
+    let negative <- -three;
+    let ok <- tie == 16.0 && tieUp == 20.0 && three == 3.0 && half == 0.0 && infinity > largest && negative == -3.0;
+    match (ok && i32(three) == 3 && f64(tiny) == 0.001953125 && f8(7) == 7.0) {
+        true -> { 8 -| main }
+        false -> { 1 -| main }
+    }
+}
