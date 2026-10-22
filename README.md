@@ -59,6 +59,8 @@ Cherimoya is early. What works today:
 - **The numeric model**: every integer from 8 to 128 bits, signed or unsigned, trapping or wrapping, and every float from `f16` to `f128`, including bfloat16, NaN-free or NaN-carrying, and both FP8 encodings, stored as bytes and computed in f32. Literals take the type their context wants, and conversions go between any two numbers.
 - **Code generation through LLVM** for all of that, with optimization, native object files, cross-compilation, and linking with a small runtime. Overflow, division by zero, out-of-range shifts, a NaN made in or converted into a NaN-free float, an `f8` that overflows, a conversion into a trapping integer that doesn't hold the value, and a failed `assert` trap with their line.
 
+- **A language server**, `cheri lsp`, with a VS Code extension: diagnostics as you type, highlighting by meaning, hover, go to definition, references, rename, an outline, completion ranked by the type a position expects, and signature help.
+
 Not yet: strings and chars, packs, ranges, comprehensions, and folds, for-each loops, handles and arrays, records, sums, interfaces, generics, closures and functions as values, operator overloading and the extra operators, modules, ownership checking, and verification with Z3.
 
 ## Building
@@ -85,6 +87,7 @@ The compiler ends up at `build/cheri`.
 cheri build prog.moya            # an executable named prog
 cheri run prog.moya              # build, run, and exit with the program's exit code
 cheri check prog.moya            # check without building
+cheri lsp                        # the language server, which an editor starts
 cheri help                       # every command and option
 ```
 
@@ -102,6 +105,19 @@ The most useful options:
 
 `cheri build prog.moya --emit-llvm -O0` prints the IR exactly as the compiler wrote it, before any optimization.
 
+## Editor Support
+
+`editors/vscode/` is a VS Code extension that runs `cheri lsp` for every `.moya` file and gives them a cherimoya icon. To build and install it:
+
+```
+cd editors/vscode
+npm install
+npm run package
+code --install-extension cherimoya.vsix
+```
+
+Then set `cherimoya.compilerPath` to your `build/cheri`, unless `cheri` is on your path, and restart VS Code. Any other editor that speaks the Language Server Protocol can start `cheri lsp` the same way.
+
 ## Layout
 
 | Path | What's there |
@@ -111,15 +127,17 @@ The most useful options:
 | `src/parser` | the parser and the AST |
 | `src/sema` | name resolution and type checking |
 | `src/codegen` | lowering to LLVM IR |
+| `src/lsp` | the language server |
 | `runtime/` | the C runtime every program links with |
 | `tools/cheri/` | the `cheri` driver |
-| `tests/unit/` | Catch2 tests for the lexer, parser, sema, and runtime |
+| `editors/vscode/` | the VS Code extension |
+| `tests/unit/` | Catch2 tests for the lexer, parser, sema, runtime, and language server |
 | `tests/run/` | whole programs, each checked by its exit code |
 | `design/` | a design note for every commit |
 
 ## Tests
 
-The lexer, parser, sema, and runtime have unit tests in C++, under `tests/unit/`, and codegen is tested through whole programs. Those live in `tests/run/`: each one is a `.moya` file whose first line is the exit code it should produce, and the test suite builds it with `cheri` at `-O0` and at `-O3`, runs it, and compares. A program that should trap names the trap on a `# trap:` line, and its stderr has to contain it.
+The lexer, parser, sema, runtime, and language server have unit tests in C++, under `tests/unit/`, and codegen is tested through whole programs. Those live in `tests/run/`: each one is a `.moya` file whose first line is the exit code it should produce, and the test suite builds it with `cheri` at `-O0` and at `-O3`, runs it, and compares. A program that should trap names the trap on a `# trap:` line, and its stderr has to contain it.
 
 ```
 # exit: 134

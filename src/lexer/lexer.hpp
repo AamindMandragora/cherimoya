@@ -7,11 +7,12 @@
 #include "keywords.hpp"
 #include "operators.hpp"
 
-// the lexer holds the diagnostic engine, a view of the code, the tokens so far, and the current position
+// the lexer holds the diagnostic engine, a view of the code, the tokens so far, the comments, which aren't tokens but are kept on the side for the language server, and the current position
 class Lexer {
     DiagnosticEngine& engine;
     std::string_view code;
     std::vector<Token> tokens;
+    std::vector<Span> comments;
     SourceLoc pos;
 
     // checks whether the code at the current position matches the string
@@ -38,7 +39,9 @@ class Lexer {
         while (true) {
             while (pos < code.size() && std::isspace(static_cast<unsigned char>(code[pos]))) pos++;
             if (pos < code.size() && code[pos] == '#') {
+                SourceLoc start = pos;
                 while (pos < code.size() && code[pos] != '\n') pos++;
+                comments.push_back({start, pos});
                 continue;
             }
             break;
@@ -192,6 +195,7 @@ public:
     // lexes the whole code into tokens, ending with an Eof token
     std::vector<Token> lex() {
         tokens = std::vector<Token>();
+        comments = std::vector<Span>();
         pos = 0;
         while (pos < code.size()) {
             skipWhitespaceAndComments();
@@ -215,4 +219,7 @@ public:
         tokens.push_back({TokenKind::Eof, "", pos});
         return std::move(tokens);
     }
+
+    // every comment the last lex skipped, in order
+    const std::vector<Span>& allComments() const { return comments; }
 };

@@ -26,18 +26,19 @@ struct Diagnostic {
     bool isWarning;
 };
 
-// the diagnostic engine holds the source manager and every diagnostic reported so far
+// the diagnostic engine holds the source manager, every diagnostic reported so far, and where they're printed, which is nowhere for the language server, since its stdout carries the protocol
 class DiagnosticEngine {
     SourceManager& manager;
     std::vector<Diagnostic> diagnostics;
+    std::ostream* output;
 
-    // records a diagnostic, then prints it formatted to stdout
+    // records a diagnostic, then prints it formatted, if there's anywhere to print it
     void report(std::string_view message, Span span, std::vector<Note> notes, bool isWarning) {
         diagnostics.push_back({std::string(message), span, std::move(notes), isWarning});
-        std::cout << getErrorN(diagnostics.size() - 1) << std::endl;
+        if (output) *output << getErrorN(diagnostics.size() - 1) << std::endl;
     }
 public:
-    explicit DiagnosticEngine(SourceManager& m) : manager(m) {}
+    explicit DiagnosticEngine(SourceManager& m, std::ostream* o = &std::cout) : manager(m), output(o) {}
     SourceManager& getManager() { return manager; }
 
     // formats the line or lines a span is on with the span underlined, then the message, under a label like error or note
@@ -86,7 +87,7 @@ public:
         return out;
     }
 
-    // records an error with any notes that explain it, then prints it formatted to stdout
+    // records an error with any notes that explain it, then prints it
     void printError(std::string_view message, Span span, std::vector<Note> notes = {}) {
         report(message, span, std::move(notes), false);
     }
@@ -95,6 +96,9 @@ public:
     void printWarning(std::string_view message, Span span, std::vector<Note> notes = {}) {
         report(message, span, std::move(notes), true);
     }
+
+    // every diagnostic reported so far, in order
+    const std::vector<Diagnostic>& all() const { return diagnostics; }
 
     bool hadErrors() const { return errorCount() > 0; }
     size_t errorCount() const { return std::count_if(diagnostics.begin(), diagnostics.end(), [](const Diagnostic& d) { return !d.isWarning; }); }
