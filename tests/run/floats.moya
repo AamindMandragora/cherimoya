@@ -1,0 +1,16 @@
+# exit: 42
+# checks float arithmetic in several widths, literals in other bases, integer literals standing for floats, negated ones included, and conversions to and from integers
+let () -> main -> (code :: int) {
+    let a :: f32 <- 1.5;
+    let b <- a * 2 + 0.25;
+    let h :: f16 <- 0x1.8;
+    let q :: f128 <- 0b10.1;
+    let bf :: f16e8m7 <- 3.0;
+    let negative :: f32 <- -3;
+    let ok <- b == 3.25 && h == 1.5 && q == 2.5 && bf * 2 == 6.0 && negative * a == -4.5;
+    let wide <- f64(a) + f64(h);
+    match (ok && wide == 3.0) {
+        true -> { i32(wide) * 14 |> int -| main }
+        false -> { 1 -| main }
+    }
+}

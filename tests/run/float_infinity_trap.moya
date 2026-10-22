@@ -1,0 +1,9 @@
+# exit: 134
+# trap: trap at line 4: 'i32(x)' doesn't fit in i32
+# checks that converting an infinity to a trapping integer traps, even from f16, where the integer's minimum is past the float's range and rounds to -infinity
+let (x :: f16) -> narrow -> (r :: i32) { i32(x) -| }
+let () -> main -> (code :: int) {
+    let zero :: f16 <- 0.0;
+    let y <- narrow(-1.0 / zero);
+    0 -|
+}

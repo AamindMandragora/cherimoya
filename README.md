@@ -55,10 +55,11 @@ Bindings are immutable unless they're declared `mut`, a value can't be silently 
 Cherimoya is early. What works today:
 
 - **The whole front end:** the lexer, the parser for the whole grammar except macros, and diagnostics that say what was expected, what the language does instead, or which rule was broken and how to fix it.
-- **Name resolution and type checking** over `int`, `float`, and `bool`: functions (nested, and in any order), bindings, operators, calls and pipes, blocks, `match`, loops, yields and their labels, mutability, discards, and the entry point.
-- **Code generation through LLVM** for all of that, with optimization, native object files, cross-compilation, and linking with a small runtime. Runtime `assert`s trap with their line.
+- **Name resolution and type checking**: functions (nested, and in any order), bindings, operators, calls and pipes, blocks, `match`, loops, yields and their labels, mutability, discards, and the entry point.
+- **The numeric model**: every integer from 8 to 128 bits, signed or unsigned, trapping or wrapping, and every float from `f16` to `f128`, including bfloat16, NaN-free or NaN-carrying. Literals take the type their context wants, and conversions go between any two numbers.
+- **Code generation through LLVM** for all of that, with optimization, native object files, cross-compilation, and linking with a small runtime. Overflow, division by zero, out-of-range shifts, a NaN made in or converted into a NaN-free float, a conversion into a trapping integer that doesn't hold the value, and a failed `assert` trap with their line.
 
-Not yet: other integer and float widths, overflow traps, strings and chars, packs, ranges, comprehensions, and folds, for-each loops, handles and arrays, records, sums, interfaces, generics, closures and functions as values, operator overloading and the extra operators, modules, ownership checking, and verification with Z3.
+Not yet: FP8, strings and chars, packs, ranges, comprehensions, and folds, for-each loops, handles and arrays, records, sums, interfaces, generics, closures and functions as values, operator overloading and the extra operators, modules, ownership checking, and verification with Z3.
 
 ## Building
 

@@ -1,0 +1,14 @@
+# exit: 9
+# checks that converting a float to an integer truncates toward zero, including into an unsigned type from just above -1, and that a wrapping target saturates instead of trapping
+let () -> main -> (code :: int) {
+    let a <- i32(2.7);
+    let b <- i32(-2.7);
+    let c <- i8w(1000.0);
+    let d <- i8uw(-5.0);
+    let e <- i8u(7.9);
+    let f <- i64u(-0.5);
+    match (a = 2 && b = -2 && c = 127 && d = 0 && e = 7 && f = 0) {
+        true -> { 9 -| main }
+        false -> { 1 -| main }
+    }
+}
