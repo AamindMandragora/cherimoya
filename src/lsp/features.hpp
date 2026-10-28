@@ -161,8 +161,8 @@ inline std::string typeHelp(std::string_view type) {
     if (type == "int") return "`int` is `i64`, a 64-bit signed integer that traps on overflow.";
     if (type == "float") return "`float` is `f64`, IEEE double precision, which traps when an operation makes a NaN.";
     if (type == "bool") return "`true` or `false`.";
-    if (type == "char") return "A 1-byte character, which cheri doesn't support yet.";
-    if (type == "rune") return "A 4-byte Unicode code point, which cheri doesn't support yet.";
+    if (type == "char") return "One ASCII character, 0 to 7F, held in a byte.";
+    if (type == "rune") return "One Unicode scalar value, 0 to 10FFFF but not the surrogates D800 to DFFF, held in 4 bytes.";
     if (type == "boolf") return "Reserved for a fuzzy boolean, which has no meaning yet.";
     if (type[0] == 'i') {
         // the width is the digits after the i, and the suffix is u for unsigned and w for wrapping

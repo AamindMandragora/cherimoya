@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include "diagnostics.hpp"
+#include "escape.hpp"
 #include "keywords.hpp"
 #include "operators.hpp"
 
@@ -107,7 +108,7 @@ class Lexer {
         tokens.push_back({kind, code.substr(start, pos - start), start});
     }
 
-    // scans a string or char literal up to its closing quote, skipping over \ escapes, and reports one that's never closed at its opening quote
+    // scans a string or char literal up to its closing quote, skipping over \ escapes, and reports one that's never closed at its opening quote, then checks what it holds
     void scanQuoted(SourceLoc start, char quote) {
         bool isString = quote == '"';
         pos++;
@@ -123,7 +124,24 @@ class Lexer {
             return;
         }
         pos++;
-        tokens.push_back({isString ? TokenKind::StringLiteral : TokenKind::CharLiteral, code.substr(start, pos - start), start});
+        // reads every character between the quotes, reporting each one that's malformed, where a char literal has to hold exactly one
+        std::string_view contents = code.substr(start + 1, pos - start - 2);
+        size_t count = 0;
+        bool isValid = true;
+        for (size_t at = 0; at < contents.size(); count++) {
+            Decoded decoded = decodeCharacter(contents.substr(at));
+            if (!decoded.error.empty()) {
+                engine.printError(decoded.error, {start + 1 + at, start + 1 + at + decoded.length});
+                isValid = false;
+            }
+            at += decoded.length;
+        }
+        if (!isString && isValid && count != 1) {
+            engine.printError("cherimoya expected one character in a char literal, got " + (count == 0 ? std::string("none") : std::to_string(count)) + " instead", {start, pos});
+            isValid = false;
+        }
+        auto kind = !isValid ? TokenKind::Error : isString ? TokenKind::StringLiteral : TokenKind::CharLiteral;
+        tokens.push_back({kind, code.substr(start, pos - start), start});
     }
 
     // tries every operator spelling from longest to shortest, then falls back to punctuation, errors on no match

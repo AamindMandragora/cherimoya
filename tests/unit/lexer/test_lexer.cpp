@@ -177,6 +177,24 @@ TEST_CASE("Lexer: strings, chars, escapes, and comments", "[lexer]") {
     CHECK(kindsOf(lexStr("/* a */")) == (std::vector<K>{K::Slash, K::Star, K::Identifier, K::Star, K::Slash}));
 }
 
+// checks every escape and UTF-8 character a literal can hold, and that a char literal holds exactly one
+TEST_CASE("Lexer: escapes and characters in literals", "[lexer]") {
+    for (auto ok : {"'a'", "'\\n'", "'\\t'", "'\\r'", "'\\0'", "'\\\\'", "'\\''", "'\\\"'", "'\\x41'", "'\\xFF'", "'\\u{1F600}'", "'\\u{0}'", "'\xC3\xA9'", "'\xF0\x9F\x98\x80'"}) {
+        CHECK(has(lexStr(ok), K::CharLiteral, ok));
+        CHECK(errorsOf(ok) == 0);
+    }
+    CHECK(decodeCharacter("\\u{10FFFF}").value == 0x10FFFF);
+    CHECK(decodeCharacter("\xC3\xA9").value == 0xE9);
+    CHECK(decodeCharacter("\\xFF").value == 0xFF);
+    CHECK(has(lexStr("\"a\\tb\\u{E9}\""), K::StringLiteral, "\"a\\tb\\u{E9}\""));
+    // each malformed escape or character is one error, and the literal becomes an error token
+    for (auto bad : {"'\\q'", "'\\x4'", "'\\xG1'", "'\\u{}'", "'\\u41'", "'\\u{1234567}'", "'\\u{D800}'", "'\\u{110000}'", "'\xFF'", "'\xC0\x80'", "''", "'ab'", "\"\\q\""}) {
+        CHECK(kindsOf(lexStr(bad)) == std::vector<K>{K::Error});
+        CHECK(errorsOf(bad) == 1);
+    }
+    CHECK(errorsOf("\"\\q \\x\"") == 2);
+}
+
 // checks the production of error tokens without stopping to lex
 TEST_CASE("Lexer: errors produce Error tokens and lexing continues", "[lexer]") {
     bool err = false;

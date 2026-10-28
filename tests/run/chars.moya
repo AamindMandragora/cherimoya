@@ -1,0 +1,20 @@
+# exit: 29
+# checks char and rune literals, their comparisons and matches, annotations, and conversions to and from integers
+let (c :: char) -> kind -> (r :: int) {
+    match (c) {
+        'a' -> { 1 -| }
+        '\n' -> { 2 -| }
+        _ -> { 3 -| }
+    } -|
+}
+let () -> main -> (code :: int) {
+    let smile <- '\u{1F600}';
+    let e :: rune <- 'é';
+    let isLower <- 'a' <= 'q' <= 'z';
+    let shifted <- char(int('A') + 1);
+    let wide <- rune('b');
+    match (isLower && shifted = 'B' && wide = 'b' && e < smile && int(smile) = 0x1F600 && i8u('\x7F') = 127) {
+        true -> { kind('a') + kind('\n') * 10 + kind('z') + (5 :: int) + int(e) - 0xE9 -| main }
+        false -> { 1 -| main }
+    }
+}

@@ -56,12 +56,13 @@ Cherimoya is early. What works today:
 
 - **The whole front end:** the lexer, the parser for the whole grammar except macros, and diagnostics that say what was expected, what the language does instead, or which rule was broken and how to fix it.
 - **Name resolution and type checking**: functions (nested, and in any order), bindings, operators, calls and pipes, blocks, `match`, loops, yields and their labels, mutability, discards, and the entry point.
+- **Characters**: `char`, one ASCII character, and `rune`, one Unicode scalar value, with escapes like `'\n'`, `'\x41'`, and `'\u{1F600}'`, comparisons, `match`, and conversions to and from integers, plus annotations, `(5 :: i8)`, which give a value a type without converting it.
 - **The numeric model**: every integer from 8 to 128 bits, signed or unsigned, trapping or wrapping, and every float from `f16` to `f128`, including bfloat16, NaN-free or NaN-carrying, and both FP8 encodings, stored as bytes and computed in f32. Literals take the type their context wants, and conversions go between any two numbers.
-- **Code generation through LLVM** for all of that, with optimization, native object files, cross-compilation, and linking with a small runtime. Overflow, division by zero, out-of-range shifts, a NaN made in or converted into a NaN-free float, an `f8` that overflows, a conversion into a trapping integer that doesn't hold the value, and a failed `assert` trap with their line.
+- **Code generation through LLVM** for all of that, with optimization, native object files, cross-compilation, and linking with a small runtime. Overflow, division by zero, out-of-range shifts, a NaN made in or converted into a NaN-free float, an `f8` that overflows, a conversion into a trapping integer or a character that doesn't hold the value, and a failed `assert` trap with their line.
 
 - **A language server**, `cheri lsp`, with a VS Code extension: diagnostics as you type, highlighting by meaning, hover, go to definition, references, rename, an outline, completion ranked by the type a position expects, and signature help.
 
-Not yet: strings and chars, packs, ranges, comprehensions, and folds, for-each loops, handles and arrays, records, sums, interfaces, generics, closures and functions as values, operator overloading and the extra operators, modules, ownership checking, and verification with Z3.
+Not yet: strings, packs, ranges, comprehensions, and folds, for-each loops, handles and arrays, records, sums, interfaces, generics, closures and functions as values, operator overloading and the extra operators, modules, ownership checking, and verification with Z3.
 
 ## Building
 
