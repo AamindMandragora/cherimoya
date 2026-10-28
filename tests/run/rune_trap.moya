@@ -1,0 +1,8 @@
+# exit: 134
+# trap: trap at line 4: 'rune(n)' doesn't fit in rune
+# checks that converting a surrogate, which isn't a Unicode scalar value, into a rune traps
+let (n :: int) -> toRune -> (r :: rune) { rune(n) -| }
+let () -> main -> (code :: int) {
+    let r <- toRune(0xD800);
+    0 -|
+}

@@ -20,9 +20,11 @@ public:
     virtual std::string toString() const = 0;
 };
 
-// never is the type of a yield, since control doesn't continue past one
+// a char is one ASCII character, a rune is one Unicode scalar value, and never is the type of a yield, since control doesn't continue past one
 enum class PrimitiveKind {
     Bool,
+    Char,
+    Rune,
     Void,
     Never
 };
@@ -35,6 +37,10 @@ public:
         switch (primitive) {
         case PrimitiveKind::Bool:
             return "bool";
+        case PrimitiveKind::Char:
+            return "char";
+        case PrimitiveKind::Rune:
+            return "rune";
         case PrimitiveKind::Void:
             return "void";
         case PrimitiveKind::Never:
@@ -85,6 +91,13 @@ inline IntSemaType* asInt(SemaType* type) {
 // the float type a sema type is, or null if it isn't one
 inline FloatSemaType* asFloat(SemaType* type) {
     return type != nullptr && type->kind == SemaTypeKind::Float ? static_cast<FloatSemaType*>(type) : nullptr;
+}
+
+// checks whether a sema type is one of the character types, char or rune
+inline bool isCharacter(SemaType* type) {
+    if (type == nullptr || type->kind != SemaTypeKind::Primitive) return false;
+    auto primitive = static_cast<PrimitiveSemaType*>(type)->primitive;
+    return primitive == PrimitiveKind::Char || primitive == PrimitiveKind::Rune;
 }
 
 // a function type is its parameters' types and the type it yields

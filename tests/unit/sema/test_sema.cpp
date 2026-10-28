@@ -195,11 +195,11 @@ TEST_CASE("Sema: discards", "[sema]") {
 
 // checks that what sema can't check yet is reported once and poisons silently from there
 TEST_CASE("Sema: unsupported forms", "[sema]") {
-    CHECK(semaErrors("let x :: char <- 5;") == 1);
+    CHECK(semaErrors("let x :: Id <- 5;") == 1);
     CHECK(semaErrors("type Id <- int;") == 1);
     CHECK(semaErrors("import [List] <- list;") == 1);
     CHECK(semaErrors("let [a, b] <- p;") == 2);
-    CHECK(semaErrors("let x :: char <- 5; let y <- x; let z <- y;") == 1);
+    CHECK(semaErrors("let x :: Id <- 5; let y <- x; let z <- y;") == 1);
     CHECK(semaErrors("let s <- \"hi\";") == 1);
     CHECK(semaErrors("let p <- [1, 2];") == 1);
     CHECK(semaErrors("let x <- 0; repeat (i) <- x { }") == 1);
@@ -443,3 +443,59 @@ TEST_CASE("Sema: float conversions", "[sema]") {
     CHECK(semaErrors("let y <- bool(1.0);") == 1);
 }
 
+// checks that a char literal adapts to a char or a rune, is a char when nothing decides and a rune when it isn't ASCII, and that a char only holds ASCII
+TEST_CASE("Sema: char literals", "[sema]") {
+    CHECK(symbolType("let c <- 'a';", "c") == "char");
+    CHECK(symbolType("let c <- '\\n';", "c") == "char");
+    CHECK(symbolType("let c <- '\xC3\xA9';", "c") == "rune");
+    CHECK(symbolType("let c <- '\\u{1F600}';", "c") == "rune");
+    CHECK(symbolType("let c :: rune <- 'a';", "c") == "rune");
+    CHECK(symbolType("let c :: char <- '\\x7F';", "c") == "char");
+    CHECK(semaErrors("let c :: char <- '\\x80';") == 1);
+    CHECK(semaErrors("let c :: char <- '\\u{E9}';") == 1);
+    CHECK(semaErrors("let c :: int <- 'a';") == 1);
+    CHECK(semaErrors("let c :: char <- 97;") == 1);
+}
+
+// checks that characters compare and match like integers, but have no arithmetic and never mix with each other or with numbers
+TEST_CASE("Sema: character operators", "[sema]") {
+    CHECK(symbolType("let r :: rune <- 'z'; let b <- 'a' < r;", "b") == "bool");
+    CHECK(symbolType("let c <- 'q'; let b <- 'a' <= c <= 'z';", "b") == "bool");
+    CHECK(symbolType("let r :: rune <- 'x'; let b <- r = 'x';", "b") == "bool");
+    CHECK(semaErrors("let c <- 'a'; let r :: rune <- 'b'; let b <- c < r;") == 1);
+    CHECK(semaErrors("let c <- 'a'; let b <- c < 5;") == 1);
+    CHECK(semaErrors("let c <- 'a' + 'b';") == 1);
+    CHECK(semaErrors("let c <- -'a';") == 1);
+    CHECK(semaErrors("let c <- 'a'; let d <- !c;") == 1);
+    CHECK(semaErrors("let c <- 'a'; let n <- match (c) { 'a' -> { 1 -| } 'b' -> { 2 -| } _ -> { 3 -| } };") == 0);
+    CHECK(semaErrors("let r :: rune <- 'a'; let n <- match (r) { '\\u{E9}' -> { 1 -| } _ -> { 2 -| } };") == 0);
+    CHECK(semaErrors("let c <- 'a'; let n <- match (c) { '\\u{E9}' -> { 1 -| } _ -> { 2 -| } };") == 1);
+    CHECK(semaErrors("let c <- 'a'; match (c) { 'a' -> { } }") == 1);
+}
+
+// checks that characters convert to each other and to and from integers, but never to or from floats or bools
+TEST_CASE("Sema: character conversions", "[sema]") {
+    CHECK(symbolType("let c <- 'a'; let n <- int(c);", "n") == "int");
+    CHECK(symbolType("let c <- char(97);", "c") == "char");
+    CHECK(symbolType("let r <- rune(0x1F600);", "r") == "rune");
+    CHECK(symbolType("let c <- 'a'; let r <- rune(c);", "r") == "rune");
+    CHECK(symbolType("let r :: rune <- 'a'; let c <- char(r);", "c") == "char");
+    CHECK(symbolType("let n <- 'a' |> i8u;", "n") == "i8u");
+    CHECK(semaErrors("let c <- char(1.5);") == 1);
+    CHECK(semaErrors("let f <- f32('a');") == 1);
+    CHECK(semaErrors("let c <- char(true);") == 1);
+    CHECK(semaErrors("let b <- bool('a');") == 1);
+}
+
+// checks that an annotation checks its value against the type without converting it, so a literal takes the type
+TEST_CASE("Sema: annotations", "[sema]") {
+    CHECK(symbolType("let x <- (5 :: i8);", "x") == "i8");
+    CHECK(symbolType("let x <- (2.5 :: f32);", "x") == "f32");
+    CHECK(symbolType("let r <- ('a' :: rune);", "r") == "rune");
+    CHECK(symbolType("let x :: i16 <- 3; let y <- (x :: i16) + 1;", "y") == "i16");
+    CHECK(symbolType("let b <- (1 :: i8u) < 2;", "b") == "bool");
+    CHECK(semaErrors("let x :: int <- 3; let y <- (x :: i8);") == 1);
+    CHECK(semaErrors("let x <- (300 :: i8);") == 1);
+    CHECK(semaErrors("let x :: i8 <- (5 :: i16);") == 1);
+    CHECK(semaErrors("let c <- ('\\u{E9}' :: char);") == 1);
+}

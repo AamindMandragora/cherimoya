@@ -103,6 +103,8 @@ class Sema {
                     if (IntSemaType* integer = context.intType(name)) return integer;
                     if (FloatSemaType* floating = context.floatType(name)) return floating;
                     if (name == "bool") return context.semaBool;
+                    if (name == "char") return context.semaChar;
+                    if (name == "rune") return context.semaRune;
                 }
                 std::string text;
                 for (size_t i = 0; i < named.path.size(); i++) text += (i ? "." : "") + std::string(named.path[i].text);
@@ -466,7 +468,7 @@ class Sema {
         targets.pop_back();
         if (covered || (subject && isPoisoned(subject))) return finish(target, false, "this match");
         bool yieldsValue = target.yielded != nullptr && target.yielded != context.semaVoid && !isPoisoned(target.yielded);
-        if (isNumeric(subject) || yieldsValue) {
+        if (isNumeric(subject) || isCharacter(subject) || yieldsValue) {
             std::string what = subject ? "a match on '" + subject->toString() + "'" : "a match that yields a value";
             engine.printError("cherimoya requires " + what + " to cover every value, please add a '_ -> { ... }' arm", Span{m.span.start, m.span.start + 5});
             return context.semaError;
@@ -714,6 +716,17 @@ class Sema {
         return floating;
     }
 
+    // types a char literal, adapting to the expected type when that's a char or a rune and otherwise being a char, or a rune when it isn't ASCII, and checks that a char's value is ASCII
+    SemaType* charLiteral(CharLiteralExpr& literal, SemaType* expected) {
+        uint32_t value = charLiteralValue(literal.literal);
+        if (expected == context.semaRune) return context.semaRune;
+        if (expected == context.semaChar && value > 0x7F) {
+            engine.printError("cherimoya requires " + std::string(literal.literal) + " to fit in 'char', which is ASCII, please use a 'rune'", literal.span);
+            return context.semaError;
+        }
+        return value > 0x7F ? context.semaRune : context.semaChar;
+    }
+
     // the literal an expression is, looking through a minus, or null if it isn't a number literal: -128 is the literal 128, negated
     const Expr* literalOf(const Expr& e) {
         const Expr* inner = &e;
@@ -721,14 +734,15 @@ class Sema {
         return inner->kind == ExprKind::IntLiteral || inner->kind == ExprKind::FloatLiteral ? inner : nullptr;
     }
 
-    // checks whether an expression is a number literal, possibly negated, which takes its type from around it instead of deciding one
+    // checks whether an expression is a number literal, possibly negated, or a char literal, which takes its type from around it instead of deciding one
     bool isLiteral(const Expr& e) {
-        return literalOf(e) != nullptr;
+        return literalOf(e) != nullptr || e.kind == ExprKind::CharLiteral;
     }
 
     // checks whether an expression is a float literal, possibly negated, which decides the type of the whole numbers around it, since they can be exact in a float and never the other way round
     bool isFloatLiteral(const Expr& e) {
-        return isLiteral(e) && literalOf(e)->kind == ExprKind::FloatLiteral;
+        const Expr* literal = literalOf(e);
+        return literal != nullptr && literal->kind == ExprKind::FloatLiteral;
     }
 
     // reports an operand of the wrong type for an operator
@@ -765,8 +779,9 @@ class Sema {
         auto takes = [&](SemaType* side) {
             switch (op.category) {
                 case OpCategory::Arithmetic:
-                case OpCategory::Comparison:
                     return isNumeric(side);
+                case OpCategory::Comparison:
+                    return isNumeric(side) || isCharacter(side);
                 case OpCategory::Bitwise:
                     return asInt(side) != nullptr;
                 case OpCategory::Logical:
@@ -778,8 +793,10 @@ class Sema {
         std::string_view wanted;
         switch (op.category) {
             case OpCategory::Arithmetic:
-            case OpCategory::Comparison:
                 wanted = "an int or a float";
+                break;
+            case OpCategory::Comparison:
+                wanted = "an int, a float, or a character";
                 break;
             case OpCategory::Bitwise:
                 wanted = "an int";
@@ -808,7 +825,7 @@ class Sema {
         return result;
     }
 
-    // checks a conversion, a type called on one value: i32(x) converts any number to i32, and f32(x) any number to f32, where codegen checks the ones that can lose the value
+    // checks a conversion, a type called on one value: i32(x) converts any number or character to i32, f32(x) any number to f32, and rune(x) any integer or character to rune, where codegen checks the ones that can lose the value
     SemaType* checkConversion(TypeExprExpr& callee, const std::vector<Expr*>& args, Span span) {
         auto target = resolveType(*callee.typeExpr);
         callee.type = target;
@@ -820,11 +837,22 @@ class Sema {
         }
         auto source = args[0]->type;
         if (isPoisoned(source)) return context.semaError;
-        if (!isNumeric(target) || !isNumeric(source)) {
-            engine.printError("cherimoya requires a conversion to be between numbers, please convert '" + source->toString() + "' to '" + target->toString() + "' some other way", span);
+        // numbers convert to each other, and characters convert to each other and to and from integers, but never to or from floats
+        bool isValid = (isNumeric(target) && isNumeric(source)) || (isCharacter(target) && (isCharacter(source) || asInt(source))) || (asInt(target) && isCharacter(source));
+        if (!isValid) {
+            engine.printError("cherimoya requires a conversion to be between numbers, or between characters and integers, please convert '" + source->toString() + "' to '" + target->toString() + "' some other way", span);
             return context.semaError;
         }
         return callee.type;
+    }
+
+    // checks an annotation, (value :: T), which checks the value against T and never converts it, so a literal takes T's type
+    SemaType* checkAnnotation(AnnExpr& annotation) {
+        auto target = resolveType(*annotation.annotation);
+        auto actual = checkExpr(*annotation.expr, target);
+        if (target == nullptr) return actual;
+        if (!isCompatible(target, actual)) mismatch(target, actual, annotation.expr->span);
+        return target;
     }
 
     // checks a call: the callee has to be a function's name, and the arguments have to match its parameters
@@ -874,7 +902,6 @@ class Sema {
     std::string_view unsupportedName(const Expr& e) {
         switch (e.kind) {
             case ExprKind::StringLiteral: return "strings";
-            case ExprKind::CharLiteral: return "chars";
             case ExprKind::OpRef: return "operators as values";
             case ExprKind::Old: return "'old'";
             case ExprKind::Index: return "indexing";
@@ -884,7 +911,6 @@ class Sema {
             case ExprKind::Range: return "ranges";
             case ExprKind::Compr: return "comprehensions";
             case ExprKind::Fold: return "folds";
-            case ExprKind::Ann: return "annotations";
             case ExprKind::TypeExpr: return "types as values";
             case ExprKind::Closure: return "closures";
             default: return "this expression";
@@ -918,6 +944,10 @@ class Sema {
                 return floatLiteral(static_cast<FloatLiteralExpr&>(e), expected, false, e.span);
             case ExprKind::BoolLiteral:
                 return context.semaBool;
+            case ExprKind::CharLiteral:
+                return charLiteral(static_cast<CharLiteralExpr&>(e), expected);
+            case ExprKind::Ann:
+                return checkAnnotation(static_cast<AnnExpr&>(e));
             case ExprKind::Identifier:
                 return checkIdentifier(static_cast<IdentifierExpr&>(e), false);
             case ExprKind::Wildcard:

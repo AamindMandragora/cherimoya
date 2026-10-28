@@ -1,6 +1,8 @@
 #pragma once
 
+#include "expr.hpp"
 #include "sema.hpp"
+#include "type.hpp"
 
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -47,7 +49,7 @@ class Codegen {
     // sema interns its types, so each one is lowered once and looked up by pointer after that
     std::unordered_map<SemaType*, llvm::Type*> lowered;
 
-    // turns a sema type into an LLVM type: an integer is as wide as its type, bool is i1, a float is LLVM's type for its encoding, FP8 is a byte, and void and never are void
+    // turns a sema type into an LLVM type: an integer is as wide as its type, bool is i1, char is a byte, rune is 32 bits, a float is LLVM's type for its encoding, FP8 is a byte, and void and never are void
     llvm::Type* lower(SemaType* type) {
         auto found = lowered.find(type);
         if (found != lowered.end()) return found->second;
@@ -56,6 +58,10 @@ class Codegen {
                 switch (static_cast<PrimitiveSemaType*>(type)->primitive) {
                     case PrimitiveKind::Bool:
                         return lowered[type] = irbuilder.getInt1Ty();
+                    case PrimitiveKind::Char:
+                        return lowered[type] = irbuilder.getInt8Ty();
+                    case PrimitiveKind::Rune:
+                        return lowered[type] = irbuilder.getInt32Ty();
                     case PrimitiveKind::Void:
                     case PrimitiveKind::Never:
                         return lowered[type] = irbuilder.getVoidTy();
@@ -174,6 +180,9 @@ class Codegen {
             }
             case ExprKind::Chain:
                 for (auto& operand : static_cast<ChainExpr&>(e).operands) collectExpr(*operand, prefix);
+                break;
+            case ExprKind::Ann:
+                collectExpr(*static_cast<AnnExpr&>(e).expr, prefix);
                 break;
             case ExprKind::Call:
                 for (auto& arg : static_cast<CallExpr&>(e).args) collectExpr(*arg, prefix);
@@ -337,6 +346,33 @@ class Codegen {
         return converted;
     }
 
+    // the unsigned integer type a character is converted and compared as, which holds its code point: a char is 8 bits and a rune 32, named after the character, so a trap says which one a value didn't fit in
+    IntSemaType charBits{8, false, false, "char"};
+    IntSemaType runeBits{32, false, false, "rune"};
+    IntSemaType& codePointOf(SemaType* type) {
+        if (IntSemaType* integer = asInt(type)) return *integer;
+        return static_cast<PrimitiveSemaType*>(type)->primitive == PrimitiveKind::Char ? charBits : runeBits;
+    }
+
+    // converts to or from a character as the integer holding its code point, where a value becoming a character also has to be one it can hold: a char is at most 7F, and a rune at most 10FFFF and not a surrogate, D800 to DFFF
+    llvm::Value* convertCharacter(llvm::Value* value, SemaType* from, SemaType* to, Span span) {
+        IntSemaType& target = codePointOf(to);
+        // converts as integers first, which already traps when the value doesn't fit in the target's bits, and an integer target is done there, since every code point fits wherever intToInt let it through
+        llvm::Value* converted = intToInt(value, codePointOf(from), target, span);
+        if (asInt(to)) return converted;
+        auto constant = [&](uint32_t c) { return llvm::ConstantInt::get(converted->getType(), c); };
+        llvm::Value* fails;
+        if (&target == &charBits) {
+            fails = irbuilder.CreateICmpUGT(converted, constant(0x7F));
+        } else {
+            // subtracting D800 puts the surrogates at 0 to 7FF, so one unsigned comparison finds them, since anything below D800 wraps around to a huge value
+            llvm::Value* isSurrogate = irbuilder.CreateICmpULE(irbuilder.CreateSub(converted, constant(0xD800)), constant(0x7FF));
+            fails = irbuilder.CreateOr(isSurrogate, irbuilder.CreateICmpUGT(converted, constant(0x10FFFF)));
+        }
+        trapIf(fails, quoted(span) + " doesn't fit in " + target.toString(), span);
+        return converted;
+    }
+
     // checks whether a float is a NaN, which is the one value that isn't ordered with itself
     llvm::Value* isNaN(llvm::Value* value) {
         return irbuilder.CreateFCmpUNO(value, value);
@@ -475,7 +511,7 @@ class Codegen {
         return intArithmetic(op, lhs, rhs, *asInt(type), span);
     }
 
-    // emits one built-in comparison on two values of the same type, where FP8's = and != compare its bytes and everything else compares in f32, and a bool, the one other type that's compared, only has equality, and its bits are its value
+    // emits one built-in comparison on two values of the same type, where FP8's = and != compare its bytes and everything else compares in f32, a character compares as its code point, and a bool, the one other type that's compared, only has equality, and its bits are its value
     llvm::Value* compare(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, SemaType* type) {
         if (FloatSemaType* floating = asFloat(type)) {
             if (!isFp8(*floating)) return floatCompare(op, lhs, rhs, *floating);
@@ -483,7 +519,7 @@ class Codegen {
             if (op == TokenKind::Ne) return irbuilder.CreateICmpNE(lhs, rhs);
             return floatCompare(op, widen(lhs, *floating), widen(rhs, *floating), *floating);
         }
-        if (IntSemaType* integer = asInt(type)) return intCompare(op, lhs, rhs, *integer);
+        if (asInt(type) || isCharacter(type)) return intCompare(op, lhs, rhs, codePointOf(type));
         return op == TokenKind::Eq || op == TokenKind::EqEq ? irbuilder.CreateICmpEQ(lhs, rhs) : irbuilder.CreateICmpNE(lhs, rhs);
     }
 
@@ -495,8 +531,9 @@ class Codegen {
         return checked(TokenKind::Minus, llvm::ConstantInt::get(value->getType(), 0), value, integer, span);
     }
 
-    // converts between any two numbers, by whether each side is an integer or a float, where FP8 is widened to f32 before it converts to anything, and anything converting to FP8 becomes a double first and is narrowed from there
+  // converts between any two numbers, or a character and an integer, by whether each side is an integer or a float, where a character converts as the integer holding its code point, FP8 is widened to f32 before it converts to anything, and anything converting to FP8 becomes a double first and is narrowed from there
     llvm::Value* convert(llvm::Value* value, SemaType* from, SemaType* to, Span span) {
+        if (isCharacter(from) || isCharacter(to)) return convertCharacter(value, from, to, span);
         IntSemaType* fromInt = asInt(from);
         IntSemaType* toInt = asInt(to);
         if (fromInt && toInt) return intToInt(value, *fromInt, *toInt, span);
@@ -603,6 +640,11 @@ class Codegen {
                 return emitFloatLiteral(static_cast<FloatLiteralExpr&>(e));
             case ExprKind::BoolLiteral:
                 return irbuilder.getInt1(static_cast<BoolLiteralExpr&>(e).literal);
+            case ExprKind::CharLiteral:
+                return llvm::ConstantInt::get(lower(e.type), charLiteralValue(static_cast<CharLiteralExpr&>(e).literal));
+            // an annotation only told sema the value's type, so it's the value itself
+            case ExprKind::Ann:
+                return emitExpr(*static_cast<AnnExpr&>(e).expr);
             // prefix operators, where ! and ~ are both a bitwise not, which on an i1 is logical not
             case ExprKind::Unary: {
                 auto& unary = static_cast<UnaryExpr&>(e);

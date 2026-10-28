@@ -6,6 +6,7 @@
 #include <vector>
 #include "token.hpp"
 #include "diagnostics.hpp"
+#include "escape.hpp"
 #include "type.hpp"
 #include "pattern.hpp"
 
@@ -109,6 +110,11 @@ public:
     std::string_view literal;
     CharLiteralExpr(std::string_view l, Span s) : Expr(ExprKind::CharLiteral, s), literal(l) {}
 };
+
+// the code point a char literal stands for, which sema and codegen both read, where the lexer already made sure it holds exactly one character
+inline uint32_t charLiteralValue(std::string_view literal) {
+    return decodeCharacter(literal.substr(1, literal.size() - 2)).value;
+}
 
 // identifiers hold their name as well, and sema fills in the symbol it resolves to
 class IdentifierExpr : public Expr {

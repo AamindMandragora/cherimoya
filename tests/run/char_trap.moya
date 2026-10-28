@@ -1,0 +1,8 @@
+# exit: 134
+# trap: trap at line 4: 'char(n)' doesn't fit in char
+# checks that converting a value that isn't ASCII into a char traps
+let (n :: int) -> toChar -> (c :: char) { char(n) -| }
+let () -> main -> (code :: int) {
+    let c <- toChar(200);
+    0 -|
+}

@@ -64,6 +64,8 @@ public:
     std::unordered_map<std::string, IntSemaType*> ints = makeInts();
     IntSemaType* semaInt = ints.at("int");
     PrimitiveSemaType* semaBool = make<PrimitiveSemaType>(PrimitiveKind::Bool);
+    PrimitiveSemaType* semaChar = make<PrimitiveSemaType>(PrimitiveKind::Char);
+    PrimitiveSemaType* semaRune = make<PrimitiveSemaType>(PrimitiveKind::Rune);
     // every float type by the name it's written with, float included
     std::unordered_map<std::string, FloatSemaType*> floats = makeFloats();
     FloatSemaType* semaFloat = floats.at("float");
