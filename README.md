@@ -117,7 +117,18 @@ npm run package
 code --install-extension cherimoya.vsix
 ```
 
-Then set `cherimoya.compilerPath` to your `build/cheri`, unless `cheri` is on your path, and restart VS Code. Any other editor that speaks the Language Server Protocol can start `cheri lsp` the same way.
+Then set `cherimoya.compilerPath` to your `build/cheri`, unless `cheri` is on your path, and restart VS Code.
+
+`editors/emacs/cherimoya-mode.el` is an Emacs mode for `.moya` files that starts `cheri lsp` with eglot, which is built into Emacs, or with lsp-mode, if it's installed. Eglot colors the code from Emacs 31 on, and lsp-mode does once `lsp-semantic-tokens-enable` is set. To use it:
+
+```elisp
+(add-to-list 'load-path "/path/to/cherimoya/editors/emacs")
+(require 'cherimoya-mode)
+(setopt cherimoya-compiler-path "/path/to/cherimoya/build/cheri")   ; unless cheri is on your path
+(add-hook 'cherimoya-mode-hook #'eglot-ensure)                      ; or #'lsp
+```
+
+Any other editor that speaks the Language Server Protocol can start `cheri lsp` the same way.
 
 ## Layout
 
