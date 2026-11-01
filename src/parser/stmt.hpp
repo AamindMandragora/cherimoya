@@ -88,9 +88,9 @@ public:
 class AttrStmt : public Stmt {
 public:
     Token name;
-    std::vector<std::unique_ptr<Expr>> args;
+    std::vector<Elem> args;
     std::unique_ptr<Stmt> target;
-    AttrStmt(Token n, std::vector<std::unique_ptr<Expr>> a, std::unique_ptr<Stmt> t, Span s) : Stmt(StmtKind::Attr, s), name(n), args(std::move(a)), target(std::move(t)) {}
+    AttrStmt(Token n, std::vector<Elem> a, std::unique_ptr<Stmt> t, Span s) : Stmt(StmtKind::Attr, s), name(n), args(std::move(a)), target(std::move(t)) {}
 };
 
 // error statements don't hold anything special

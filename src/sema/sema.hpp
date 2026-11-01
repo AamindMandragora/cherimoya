@@ -20,11 +20,19 @@ struct Expectation {
     SemaType* type;
 };
 
-// a call of a function by name, with each argument's span, which the language server's signature help and parameter hints read, where a pipe is a call with its one argument outside any parentheses
+// one argument of a call by name: its span, name included, whether it's named, and the input it goes to, when it goes to one
+struct CallArg {
+    Span span;
+    bool isNamed;
+    std::optional<size_t> input;
+};
+
+// a call of a function by name, with its arguments and where its ) is, which the language server's signature help and parameter hints read, where a pipe's first argument is the piped value, outside any parentheses, and a pipe of a bare name has no )
 struct Call {
     Span span;
     Symbol* function;
-    std::vector<Span> args;
+    std::vector<CallArg> args;
+    std::optional<size_t> close;
     bool isPipe;
 };
 
@@ -258,7 +266,16 @@ class Sema {
         }
     }
 
-    // the last pass for a function: its parameters and their refinements, its obligations, then its body in a scope of its own
+    // checks an input's default against the input's type, where it sees the inputs before it and nothing a yield could target, since it runs before the function does
+    void checkDefault(Expr& fallback, SemaType* type) {
+        auto saved = std::move(targets);
+        targets.clear();
+        auto actual = checkExpr(fallback, type);
+        if (!isCompatible(type, actual)) mismatch(type, actual, fallback.span);
+        targets = std::move(saved);
+    }
+
+    // the last pass for a function: its parameters, their defaults, and their refinements, its obligations, then its body in a scope of its own
     void checkFn(FnDecl& fn) {
         if (fn.name.kind != TokenKind::Identifier) return;
         // the signature was resolved when the function was hoisted, so its parameters and outputs are only ever reported once
@@ -270,6 +287,7 @@ class Sema {
         inScope(fn.span, [&] {
             for (size_t i = 0; i < fn.inputs.size(); i++) {
                 auto& p = fn.inputs[i];
+                if (p.fallback) checkDefault(*p.fallback, signature->params[i]);
                 bool isMutable = p.type && isMut(*p.type);
                 auto param = makeSymbol(p.name.text, SymbolKind::Param, signature->params[i], isMutable, tokSpan(p.name));
                 p.decl = param;
@@ -279,6 +297,10 @@ class Sema {
             // outputs are only visible to contracts, so they get a scope the body never sees, and only a single output has a type of its own
             inScope(fn.span, [&] {
                 for (auto& o : fn.outputs) {
+                    if (o.fallback) {
+                        size_t from = o.type ? o.type->span.end : tokSpan(o.name).end;
+                        engine.printError("cherimoya requires defaults to be on a function's inputs, please remove '<- " + textOf(o.fallback->span) + "'", o.fallback->span, {}, {{"Remove the default", {{{from, o.fallback->span.end}, ""}}}});
+                    }
                     auto type = fn.outputs.size() == 1 ? signature->returns : context.semaError;
                     auto output = makeSymbol(o.name.text, SymbolKind::Param, type, false, tokSpan(o.name));
                     scope->insert(output);
@@ -935,17 +957,34 @@ class Sema {
         return result;
     }
 
+    // an argument as sema checks it: the name it's given, if any, its value, and the span of both, where a pipe's value is an argument with no name
+    struct Argument {
+        std::optional<Token> name;
+        Expr* value;
+        Span span;
+    };
+
+    // a call's arguments, as sema checks them
+    std::vector<Argument> argumentsOf(std::vector<Elem>& elems) {
+        std::vector<Argument> args;
+        for (auto& e : elems) args.push_back({e.name, e.value.get(), Span{e.name ? e.name->loc : e.value->span.start, e.value->span.end}});
+        return args;
+    }
+
     // checks a conversion, a type called on one value: i32(x) converts any number or character to i32, f32(x) any number or boolf to f32, rune(x) any integer or character to rune, and boolf(x) a float, a byte, or a bool to boolf, where codegen checks the ones that can lose the value
-    SemaType* checkConversion(TypeExprExpr& callee, const std::vector<Expr*>& args, Span span) {
+    SemaType* checkConversion(TypeExprExpr& callee, const std::vector<Argument>& args, Span span) {
         auto target = resolveType(*callee.typeExpr);
         callee.type = target;
-        for (auto arg : args) checkExpr(*arg);
+        for (auto& arg : args) {
+            checkExpr(*arg.value);
+            if (arg.name) engine.printError("cherimoya requires a conversion's value to be unnamed, please remove '" + std::string(arg.name->text) + " <-'", tokSpan(*arg.name), {}, {{"Remove '" + std::string(arg.name->text) + " <-'", {{{arg.name->loc, arg.value->span.start}, ""}}}});
+        }
         if (target == nullptr || isPoisoned(target)) return context.semaError;
         if (args.size() != 1) {
             engine.printError("cherimoya expected 1 value to convert in the call to '" + target->toString() + "', got " + std::to_string(args.size()) + " instead", span);
             return context.semaError;
         }
-        auto source = args[0]->type;
+        auto source = args[0].value->type;
         if (isPoisoned(source)) return context.semaError;
         // numbers convert to each other, and characters convert to each other and to and from integers, but never to or from floats
         bool isValid = (isNumeric(target) && isNumeric(source)) || (isCharacter(target) && (isCharacter(source) || asInt(source))) || (asInt(target) && isCharacter(source));
@@ -953,7 +992,7 @@ class Sema {
         if (target == context.semaBoolf) isValid = asFloat(source) || isByte(source) || source == context.semaBool || source == context.semaBoolf;
         if (source == context.semaBoolf && target != context.semaBoolf) isValid = asFloat(target) || isByte(target);
         if (source == context.semaBoolf && target == context.semaBool) {
-            engine.printError("cherimoya requires a boolf to become a bool by a cutoff, please compare it, like 'x > 0.5'", span, {}, {cutoff(*args[0], span)});
+            engine.printError("cherimoya requires a boolf to become a bool by a cutoff, please compare it, like 'x > 0.5'", span, {}, {cutoff(*args[0].value, span)});
             return context.semaError;
         }
         if (!isValid) {
@@ -972,8 +1011,79 @@ class Sema {
         return target;
     }
 
-    // checks a call: the callee has to be a function's name, and the arguments have to match its parameters
-    SemaType* checkCall(Expr& callee, const std::vector<Expr*>& args, Span span, bool isPipe = false) {
+    // reports a call with the wrong number of arguments, where bound is "at least " or "at most " when the function's defaults leave a range
+    void countMismatch(const std::string& name, size_t expected, const std::string& bound, size_t got, Span span, const std::vector<Note>& notes) {
+        engine.printError("cherimoya expected " + bound + std::to_string(expected) + " argument" + (expected == 1 ? "" : "s") + " in the call to '" + name + "', got " + std::to_string(got) + " instead", span, notes);
+    }
+
+    // works out which input of a function each argument goes to, unnamed ones in order and then named ones by name, reporting an argument that goes nowhere and every input without a default that gets nothing, where inputs gets the value each input takes, null where it takes its default, and the result is each argument's input, if it has one
+    std::vector<std::optional<size_t>> matchArguments(const Symbol& function, const std::vector<Argument>& args, Span span, std::vector<Expr*>& inputs) {
+        auto& params = function.function->inputs;
+        std::string name(function.name);
+        std::vector<Note> declared{{"'" + name + "' is declared here", function.span}};
+        inputs.assign(params.size(), nullptr);
+        std::vector<std::optional<size_t>> slots(args.size());
+        // the first input that no argument has gone to yet, which the next unnamed argument goes to
+        auto nextFree = [&]() -> std::optional<size_t> {
+            for (size_t i = 0; i < params.size(); i++) {
+                if (inputs[i] == nullptr) return i;
+            }
+            return std::nullopt;
+        };
+        bool hasDefaults = std::any_of(params.begin(), params.end(), [](const Param& p) { return p.fallback != nullptr; });
+        size_t required = std::count_if(params.begin(), params.end(), [](const Param& p) { return p.fallback == nullptr; });
+        bool isNamed = false;
+        size_t position = 0;
+        for (size_t i = 0; i < args.size(); i++) {
+            auto& arg = args[i];
+            std::optional<size_t> slot;
+            if (arg.name) {
+                isNamed = true;
+                auto found = std::find_if(params.begin(), params.end(), [&](const Param& p) { return p.name.text == arg.name->text; });
+                if (found == params.end()) {
+                    std::string names;
+                    for (size_t j = 0; j < params.size(); j++) names += (j ? ", '" : "'") + std::string(params[j].name.text) + "'";
+                    std::string fix = params.empty() ? "please remove it, since it has none" : "please use one of its inputs: " + names;
+                    engine.printError("cherimoya requires a named argument to name an input of '" + name + "', " + fix, tokSpan(*arg.name), declared);
+                    continue;
+                }
+                slot = found - params.begin();
+            } else if (isNamed) {
+                // it still goes to the first input nothing has gone to, so the inputs after it aren't reported as missing too
+                engine.printError("cherimoya requires unnamed arguments to come before named ones, please name this one too", arg.span);
+                slot = nextFree();
+            } else if (position < params.size()) {
+                slot = position++;
+            } else {
+                // only the first argument past the end is reported, since the rest are past it too
+                if (position++ == params.size()) countMismatch(name, params.size(), hasDefaults ? "at most " : "", args.size(), arg.span, declared);
+                continue;
+            }
+            if (!slot) continue;
+            if (inputs[*slot] != nullptr) {
+                engine.printError("cherimoya requires each input to get one argument, please remove one of the arguments for '" + std::string(params[*slot].name.text) + "'", arg.span, {{"'" + std::string(params[*slot].name.text) + "' already gets this argument", inputs[*slot]->span}});
+                continue;
+            }
+            inputs[*slot] = arg.value;
+            slots[i] = slot;
+        }
+        std::vector<std::string> missing;
+        for (size_t i = 0; i < params.size(); i++) {
+            if (inputs[i] == nullptr && params[i].fallback == nullptr) missing.push_back("'" + std::string(params[i].name.text) + "'");
+        }
+        // a call with fewer arguments than the inputs that need one says how many, and one that has enough but leaves a needed input out, which only naming can do, says which
+        if (args.size() < required) {
+            countMismatch(name, required, hasDefaults ? "at least " : "", args.size(), span, declared);
+        } else if (!missing.empty()) {
+            std::string list = missing[0];
+            for (size_t i = 1; i < missing.size(); i++) list += (i + 1 == missing.size() ? " and " : ", ") + missing[i];
+            engine.printError("cherimoya requires the call to '" + name + "' to pass " + list + ", please add an argument for " + (missing.size() == 1 ? "it" : "each"), span, declared);
+        }
+        return slots;
+    }
+
+    // checks a call: the callee has to be a function's name, and each argument has to match the input it goes to, where close is where the call's ) is, if it has one, and inputs gets the value each input takes
+    SemaType* checkCall(Expr& callee, const std::vector<Argument>& args, Span span, std::vector<Expr*>& inputs, std::optional<size_t> close, bool isPipe = false) {
         SemaType* type;
         if (callee.kind == ExprKind::Identifier) {
             type = checkIdentifier(static_cast<IdentifierExpr&>(callee), true);
@@ -984,35 +1094,29 @@ class Sema {
         }
         callee.type = type;
         Symbol* function = callee.kind == ExprKind::Identifier ? static_cast<IdentifierExpr&>(callee).decl : nullptr;
-        if (function && function->kind == SymbolKind::Function) {
-            std::vector<Span> argSpans;
-            for (auto arg : args) argSpans.push_back(arg->span);
-            calls.push_back({span, function, argSpans, isPipe});
+        bool isFunction = function && function->kind == SymbolKind::Function && type->kind == SemaTypeKind::Function;
+        std::vector<std::optional<size_t>> slots(args.size());
+        if (isFunction) {
+            slots = matchArguments(*function, args, span, inputs);
+            std::vector<CallArg> recorded;
+            for (size_t i = 0; i < args.size(); i++) recorded.push_back({args[i].span, args[i].name.has_value(), slots[i]});
+            calls.push_back({span, function, recorded, close, isPipe});
         }
-        // each argument takes its parameter's type when the callee is a function with the right number of them
-        auto fnType = type->kind == SemaTypeKind::Function ? static_cast<FunctionSemaType*>(type) : nullptr;
+        // each argument takes the type of the input it goes to, when it goes to one
+        auto fnType = isFunction ? static_cast<FunctionSemaType*>(type) : nullptr;
         std::vector<SemaType*> actual;
         for (size_t i = 0; i < args.size(); i++) {
-            SemaType* parameter = (fnType && fnType->params.size() > i) ? fnType->params[i] : nullptr;
-            actual.push_back(checkExpr(*args[i], parameter));
+            SemaType* parameter = slots[i] ? fnType->params[*slots[i]] : nullptr;
+            actual.push_back(checkExpr(*args[i].value, parameter));
+            if (parameter && !isCompatible(parameter, actual.back())) mismatch(parameter, actual.back(), args[i].value->span);
         }
         if (type == context.semaError) return context.semaError;
-        bool neverReturns = std::find(actual.begin(), actual.end(), context.semaNever) != actual.end();
         if (type->kind != SemaTypeKind::Function) {
             engine.printError("cherimoya requires a call's callee to be a function, please call a function by name", callee.span);
             return context.semaError;
         }
-        auto fn = static_cast<FunctionSemaType*>(type);
-        auto decl = static_cast<IdentifierExpr&>(callee).decl;
-        if (args.size() != fn->params.size()) {
-            engine.printError("cherimoya expected " + std::to_string(fn->params.size()) + " argument" + (fn->params.size() == 1 ? "" : "s") + " in the call to '"
-                + std::string(decl->name) + "', got " + std::to_string(args.size()) + " instead", span, {{"'" + std::string(decl->name) + "' is declared here", decl->span}});
-            return fn->returns;
-        }
-        for (size_t i = 0; i < args.size(); i++) {
-            if (!isCompatible(fn->params[i], actual[i])) mismatch(fn->params[i], actual[i], args[i]->span);
-        }
-        return neverReturns ? context.semaNever : fn->returns;
+        bool neverReturns = std::find(actual.begin(), actual.end(), context.semaNever) != actual.end();
+        return neverReturns ? context.semaNever : static_cast<FunctionSemaType*>(type)->returns;
     }
 
     // names the kinds of expression sema doesn't check yet, for their diagnostic
@@ -1126,17 +1230,26 @@ class Sema {
             }
             case ExprKind::Call: {
                 auto& call = static_cast<CallExpr&>(e);
-                std::vector<Expr*> args;
-                for (auto& a : call.args) args.push_back(a.get());
-                return checkCall(*call.callee, args, e.span);
+                return checkCall(*call.callee, argumentsOf(call.args), e.span, call.inputs, e.span.end - 1);
             }
-            // x |> f and f <| x are both f(x)
+            // x |> f and f <| x are both f(x), and x |> f(b <- 2) is f(x, b <- 2)
             case ExprKind::Pipe: {
                 auto& pipe = static_cast<PipeExpr&>(e);
                 bool forward = pipe.op.kind == TokenKind::PipeFwd;
                 auto& fn = forward ? *pipe.rhs : *pipe.lhs;
                 auto& arg = forward ? *pipe.lhs : *pipe.rhs;
-                auto type = checkCall(fn, {&arg}, e.span, true);
+                // a call in the function's place gives the rest of the arguments, after the piped value
+                std::vector<Argument> args{{std::nullopt, &arg, arg.span}};
+                Expr* callee = &fn;
+                std::optional<size_t> close = std::nullopt;
+                if (fn.kind == ExprKind::Call) {
+                    auto& call = static_cast<CallExpr&>(fn);
+                    for (auto& a : argumentsOf(call.args)) args.push_back(a);
+                    callee = call.callee.get();
+                    close = call.span.end - 1;
+                }
+                auto type = checkCall(*callee, args, e.span, pipe.inputs, close, true);
+                if (fn.kind == ExprKind::Call) fn.type = type;
                 // a forward pipe reads top to bottom, so each one is a step, and so is the value it starts from, when that isn't a forward pipe itself, where a step with a poisoned type has nothing to show
                 if (forward) {
                     bool continues = arg.kind == ExprKind::Pipe && static_cast<PipeExpr&>(arg).op.kind == TokenKind::PipeFwd;

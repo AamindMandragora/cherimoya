@@ -98,13 +98,25 @@ class Codegen {
         return found->second;
     }
 
-    // creates the LLVM function for a declaration, named prefix.name, then declares the functions nested in its body under its own name
+    // the LLVM function for every input's default, which takes the inputs before it and gives the default's value
+    std::unordered_map<const Param*, llvm::Function*> defaults;
+
+    // creates the LLVM function for a declaration, named prefix.name, and one for each of its defaults, named prefix.name(input), which can't collide with a nested function, since no name holds parentheses, then declares the functions nested in its defaults and its body under its own name
     void declare(FnDecl& fn, std::string prefix) {
         auto type = llvm::cast<llvm::FunctionType>(lower(fn.decl->type));
-        llvm::Function* f = llvm::Function::Create(type, llvm::Function::ExternalLinkage, prefix + "." + std::string(fn.decl->name), *module);
+        std::string name = prefix + "." + std::string(fn.decl->name);
+        llvm::Function* f = llvm::Function::Create(type, llvm::Function::ExternalLinkage, name, *module);
         declared[fn.decl] = f;
         functions.push_back(&fn);
-        if (fn.body) collectStmts(fn.body->stmts, prefix + "." + std::string(fn.decl->name));
+        for (size_t i = 0; i < fn.inputs.size(); i++) {
+            auto& input = fn.inputs[i];
+            if (!input.fallback) continue;
+            std::vector<llvm::Type*> before(type->param_begin(), type->param_begin() + i);
+            auto defaultType = llvm::FunctionType::get(type->getParamType(i), before, false);
+            defaults[&input] = llvm::Function::Create(defaultType, llvm::Function::InternalLinkage, name + "(" + std::string(input.name.text) + ")", *module);
+            collectExpr(*input.fallback, name);
+        }
+        if (fn.body) collectStmts(fn.body->stmts, name);
     }
 
     // finds the functions declared anywhere in a list of statements, including inside scopes nested in expressions, and declares them under prefix
@@ -187,7 +199,7 @@ class Codegen {
                 collectExpr(*static_cast<AnnExpr&>(e).expr, prefix);
                 break;
             case ExprKind::Call:
-                for (auto& arg : static_cast<CallExpr&>(e).args) collectExpr(*arg, prefix);
+                for (auto& arg : static_cast<CallExpr&>(e).args) collectExpr(*arg.value, prefix);
                 break;
             case ExprKind::Pipe: {
                 auto& pipe = static_cast<PipeExpr&>(e);
@@ -676,11 +688,21 @@ class Codegen {
         return isBoolf(type) ? boolfXor(lhs, rhs) : irbuilder.CreateXor(lhs, rhs);
     }
 
-    // emits a call of one value, which is what both pipes are, where a type in the function's place converts the value instead: x |> i8 is i8(x)
-    llvm::Value* emitPipe(Expr& callee, Expr& arg, Span span) {
-        llvm::Value* value = emitExpr(arg);
-        if (callee.kind == ExprKind::TypeExpr) return convert(value, arg.type, callee.type, span);
-        return emitCall(functionOf(static_cast<IdentifierExpr&>(callee).decl), {value});
+    // emits a conversion, a type called on one value: i8(x), and x |> i8
+    llvm::Value* emitConversion(Expr& callee, Expr& arg, Span span) {
+        return convert(emitExpr(arg), arg.type, callee.type, span);
+    }
+
+    // calls a function by name: the arguments are evaluated in the order they're written, then each input that didn't get one takes its default, which is a call of its own on the inputs before it, in order
+    llvm::Value* emitArguments(Symbol* function, std::vector<Expr*> written, const std::vector<Expr*>& inputs) {
+        std::sort(written.begin(), written.end(), [](Expr* a, Expr* b) { return a->span.start < b->span.start; });
+        std::unordered_map<Expr*, llvm::Value*> values;
+        for (Expr* arg : written) values[arg] = emitExpr(*arg);
+        std::vector<llvm::Value*> args;
+        for (size_t i = 0; i < inputs.size(); i++) {
+            args.push_back(inputs[i] ? values[inputs[i]] : emitCall(defaults[&function->function->inputs[i]], args));
+        }
+        return emitCall(functionOf(function), args);
     }
 
     // calls a function, where a void function's call has no value
@@ -776,16 +798,25 @@ class Codegen {
             // a call's callee is always a function's name, so it's looked up instead of emitted, and a type called on a value converts it
             case ExprKind::Call: {
                 auto& call = static_cast<CallExpr&>(e);
-                if (call.callee->kind == ExprKind::TypeExpr) return emitPipe(*call.callee, *call.args[0], e.span);
-                std::vector<llvm::Value*> args;
-                for (auto& arg : call.args) args.push_back(emitExpr(*arg));
-                return emitCall(functionOf(static_cast<IdentifierExpr&>(*call.callee).decl), args);
+                if (call.callee->kind == ExprKind::TypeExpr) return emitConversion(*call.callee, *call.args[0].value, e.span);
+                std::vector<Expr*> written;
+                for (auto& arg : call.args) written.push_back(arg.value.get());
+                return emitArguments(static_cast<IdentifierExpr&>(*call.callee).decl, written, call.inputs);
             }
-            // x |> f and f <| x are both f(x)
+            // x |> f and f <| x are both f(x), and x |> f(b <- 2) is f(x, b <- 2)
             case ExprKind::Pipe: {
                 auto& pipe = static_cast<PipeExpr&>(e);
                 bool isForward = pipe.op.kind == TokenKind::PipeFwd;
-                return emitPipe(isForward ? *pipe.rhs : *pipe.lhs, isForward ? *pipe.lhs : *pipe.rhs, e.span);
+                Expr* callee = isForward ? pipe.rhs.get() : pipe.lhs.get();
+                Expr& arg = isForward ? *pipe.lhs : *pipe.rhs;
+                std::vector<Expr*> written{&arg};
+                if (callee->kind == ExprKind::Call) {
+                    auto& call = static_cast<CallExpr&>(*callee);
+                    for (auto& a : call.args) written.push_back(a.value.get());
+                    callee = call.callee.get();
+                }
+                if (callee->kind == ExprKind::TypeExpr) return emitConversion(*callee, arg, e.span);
+                return emitArguments(static_cast<IdentifierExpr&>(*callee).decl, written, pipe.inputs);
             }
             case ExprKind::Block: {
                 auto& block = static_cast<BlockExpr&>(e);
@@ -1071,6 +1102,26 @@ class Codegen {
         return result ? irbuilder.CreateLoad(result->getAllocatedType(), result) : nullptr;
     }
 
+    // emits an input's default as a function of the inputs before it, each copied into its slot so the default reads them the way the body does
+    void defineDefault(FnDecl& fn, size_t index) {
+        llvm::Function* f = defaults[&fn.inputs[index]];
+        irbuilder.SetInsertPoint(llvm::BasicBlock::Create(context, "definition", f));
+        for (size_t i = 0; i < index; i++) {
+            Symbol* symbol = fn.inputs[i].decl;
+            (f->args().begin() + i)->setName(symbol->name);
+            irbuilder.CreateStore(f->args().begin() + i, makeSlot(symbol));
+        }
+        llvm::Value* value = emitExpr(*fn.inputs[index].fallback);
+        // a default that never finishes, like one that traps, leaves nothing to return
+        if (!irbuilder.GetInsertBlock()->getTerminator()) {
+            if (value) {
+                irbuilder.CreateRet(value);
+            } else {
+                irbuilder.CreateUnreachable();
+            }
+        }
+    }
+
     // emits a function's body: every parameter is copied into a slot so it acts like a binding, then the statements run in the function's own scope
     void define(FnDecl& fn) {
         llvm::Function* f = functionOf(fn.decl);
@@ -1110,6 +1161,9 @@ public:
         // externs have no body, so they stay declarations for the linker to fill in
         for (FnDecl* fn : functions) {
             if (fn->body) define(*fn);
+            for (size_t i = 0; i < fn->inputs.size(); i++) {
+                if (fn->inputs[i].fallback) defineDefault(*fn, i);
+            }
         }
         // the entry point is the main declared at the top of the file, looking through attributes, and not one nested in a top-level block, which gets the same prefix
         for (auto& stmt : program) {

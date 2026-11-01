@@ -164,12 +164,13 @@ public:
     ChainExpr(std::vector<std::unique_ptr<Expr>> o, std::vector<Token> p, Span s) : Expr(ExprKind::Chain, s), operands(std::move(o)), ops(std::move(p)) {}
 };
 
-// pipes hold their direction token, and the value and function in source order: x |> f and f <| x
+// pipes hold their direction token, and the value and function in source order: x |> f and f <| x, where the function can be a call with the rest of the arguments, x |> clamp(hi <- 10), and sema fills in which value each of the function's inputs takes, like a call's
 class PipeExpr : public Expr {
 public:
     Token op;
     std::unique_ptr<Expr> lhs;
     std::unique_ptr<Expr> rhs;
+    std::vector<Expr*> inputs;
     PipeExpr(Token o, std::unique_ptr<Expr> l, std::unique_ptr<Expr> r, Span s) : Expr(ExprKind::Pipe, s), op(o), lhs(std::move(l)), rhs(std::move(r)) {}
 };
 
@@ -187,12 +188,19 @@ public:
     OldExpr(std::unique_ptr<Expr> e, Span s) : Expr(ExprKind::Old, s), operand(std::move(e)) {}
 };
 
-// call expressions hold the expression that called them and the arguments being passed in
+// a value that can be named: a pack's element, the x in [x <- 1.0], or an argument, the b in f(b <- 2)
+struct Elem {
+    std::optional<Token> name;
+    std::unique_ptr<Expr> value;
+};
+
+// call expressions hold the expression that called them and the arguments being passed in, and sema fills in which argument's value each of the function's inputs takes, null where it takes its default
 class CallExpr : public Expr {
 public:
     std::unique_ptr<Expr> callee;
-    std::vector<std::unique_ptr<Expr>> args;
-    CallExpr(std::unique_ptr<Expr> c, std::vector<std::unique_ptr<Expr>> a, Span s) : Expr(ExprKind::Call, s), callee(std::move(c)), args(std::move(a)) {}
+    std::vector<Elem> args;
+    std::vector<Expr*> inputs;
+    CallExpr(std::unique_ptr<Expr> c, std::vector<Elem> a, Span s) : Expr(ExprKind::Call, s), callee(std::move(c)), args(std::move(a)) {}
 };
 
 // index expressions hold the object and everything in the brackets: no args is a dereference, a range is a slice, and sema decides whether the rest is an index or an instantiation
@@ -219,17 +227,11 @@ public:
     ConstructExpr(std::unique_ptr<Expr> t, std::unique_ptr<Expr> p, Span s) : Expr(ExprKind::Construct, s), target(std::move(t)), pack(std::move(p)) {}
 };
 
-// a pack element is a value, optionally named: the x in [x <- 1.0]
-struct PackElem {
-    std::optional<Token> name;
-    std::unique_ptr<Expr> value;
-};
-
 // packs hold their elements in order
 class PackExpr : public Expr {
 public:
-    std::vector<PackElem> elems;
-    PackExpr(std::vector<PackElem> e, Span s) : Expr(ExprKind::Pack, s), elems(std::move(e)) {}
+    std::vector<Elem> elems;
+    PackExpr(std::vector<Elem> e, Span s) : Expr(ExprKind::Pack, s), elems(std::move(e)) {}
 };
 
 // a range element is either ... (no value) or a value, and an endpoint's exclusivity marker is a comparison on the bound: >0 means stay above 0

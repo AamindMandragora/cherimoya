@@ -33,10 +33,10 @@ $ cheri run collatz.moya; echo $?
 
 The syntax follows the way data moves:
 
-- **`<-`** flows values backward into whatever receives them: bindings, assignments, construction.
+- **`<-`** flows values backward into whatever receives them: bindings, assignments, construction, a named argument, `f(b <- 2)`, and an input's default, `(b :: int <- 1)`.
 - **`->`** flows definitions forward: from a function's inputs to its name to its outputs, and from a match pattern to its arm.
 - **`-|`** yields a value out of a scope or a function, where a scope is a block, a `match` or one of its arms, a loop, or a `chunk`. There's no `return`, `break`, or `continue`. A bare `-|` leaves the innermost scope, and `-| name` leaves the scope or function with that name, so every early exit is visible.
-- **`|>` and `<|`** pipe a value into a function.
+- **`|>` and `<|`** pipe a value into a function, or into a call that gives the rest of the arguments: `x |> clamp(hi <- 10)` is `clamp(x, hi <- 10)`.
 
 Brackets have fixed jobs: `{ }` makes scopes, `[ ]` packs data together, and `( )` is for calls, math, and conditions. There's no `if`: every conditional is a `match`, with a subject or with guards.
 
@@ -55,13 +55,13 @@ Bindings are immutable unless they're declared `mut`, a value can't be silently 
 Cherimoya is early. What works today:
 
 - **The whole front end:** the lexer, the parser for the whole grammar, and diagnostics that say what was expected, what the language does instead, or which rule was broken and how to fix it.
-- **Name resolution and type checking**: functions (nested, and in any order), bindings, operators, calls and pipes, blocks, `match`, loops, yields and their labels, mutability, discards, and the entry point.
+- **Name resolution and type checking**: functions (nested, and in any order), bindings, operators, calls and pipes with named arguments and defaults, blocks, `match`, loops, yields and their labels, mutability, discards, and the entry point.
 - **Characters**: `char`, one ASCII character, and `rune`, one Unicode scalar value, with escapes like `'\n'`, `'\x41'`, and `'\u{1F600}'`, comparisons, `match`, and conversions to and from integers, plus annotations, `(5 :: i8)`, which give a value a type without converting it.
 - **Fuzzy booleans**: `boolf`, a truth value from 0 to 1 held in a byte, where `&&` is the minimum, `||` the maximum, `*` the product, and `!x` is 1 - x, with conversions to and from floats, its raw byte, and `bool`, and a cutoff like `x > 0.5` to turn one back into a `bool`.
 - **The numeric model**: every integer from 8 to 128 bits, signed or unsigned, trapping or wrapping, and every float from `f16` to `f128`, including bfloat16, NaN-free or NaN-carrying, and both FP8 encodings, stored as bytes and computed in f32. Literals take the type their context wants, and conversions go between any two numbers.
 - **Code generation through LLVM** for all of that, with optimization, native object files, cross-compilation, and linking with a small runtime. Overflow, division by zero, out-of-range shifts, a NaN made in or converted into a NaN-free float, an `f8` that overflows, a conversion into a trapping integer, a character, or a boolf that doesn't hold the value, and a failed `assert` trap with their line.
 
-- **A language server**, `cheri lsp`, with a VS Code extension: diagnostics as you type, highlighting by meaning, hover with the documentation your comments give a name, go to definition, references, rename, an outline, completion ranked by the type a position expects, signature help, quick fixes for the mistakes that have one, which `cheri check --fix` applies from the command line too, and inlay hints: the types cherimoya inferred, the parameter each argument goes to, the type of each step of a pipe spread over lines, and the name of a long function at its closing brace.
+- **A language server**, `cheri lsp`, with a VS Code extension: diagnostics as you type, highlighting by meaning, hover with the documentation your comments give a name, go to definition, references, rename, an outline, completion ranked by the type a position expects, signature help, quick fixes for the mistakes that have one, which `cheri check --fix` applies from the command line too, and inlay hints: the types cherimoya inferred, the input each argument goes to, the defaults a call leaves out, the type of each step of a pipe spread over lines, and the name of a long function at its closing brace.
 
 Not yet: strings, packs, ranges, comprehensions, and folds, for-each loops, handles and arrays, records, sums, protocols, generics, closures and functions as values, operator overloading and the extra operators, modules, ownership checking, and verification with Z3.
 

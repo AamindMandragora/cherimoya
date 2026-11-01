@@ -59,7 +59,7 @@ static std::string dumpExpr(const Expr& e) {
         case ExprKind::Call: {
             auto& c = static_cast<const CallExpr&>(e);
             std::string s = "(call " + dumpExpr(*c.callee);
-            for (auto& a : c.args) s += " " + dumpExpr(*a);
+            for (auto& a : c.args) s += " " + (a.name ? std::string(a.name->text) + "<-" : "") + dumpExpr(*a.value);
             return s + ")";
         }
         case ExprKind::Index: {
@@ -232,6 +232,7 @@ static std::string dumpParams(const std::vector<Param>& ps) {
         if (i) s += " ";
         s += std::string(ps[i].name.text);
         if (ps[i].type) s += ":" + dumpType(*ps[i].type);
+        if (ps[i].fallback) s += "<-" + dumpExpr(*ps[i].fallback);
     }
     return s + ")";
 }
@@ -322,7 +323,7 @@ static std::string dumpStmt(const Stmt& s) {
         case StmtKind::Attr: {
             auto& a = static_cast<const AttrStmt&>(s);
             std::string r = "(@" + std::string(a.name.text);
-            for (auto& arg : a.args) r += " " + dumpExpr(*arg);
+            for (auto& arg : a.args) r += " " + (arg.name ? std::string(arg.name->text) + "<-" : "") + dumpExpr(*arg.value);
             if (a.target) r += " " + dumpStmt(*a.target);
             return r + ")";
         }
@@ -540,6 +541,10 @@ TEST_CASE("Parser: calls are postfix", "[parser]") {
     CHECK(parseDump("f()") == "(call f)");
     CHECK(parseDump("f(a)") == "(call f a)");
     CHECK(parseDump("f(a, b, c)") == "(call f a b c)");
+    // a name and <- in front of an argument name it, so a construction in a call goes in parentheses, the way it does in a pack
+    CHECK(parseDump("f(a, c <- 2, b <- g(x))") == "(call f a c<-2 b<-(call g x))");
+    CHECK(parseDump("f(Point <- [0, 0])") == "(call f Point<-(pack 0 0))");
+    CHECK(parseDump("x |> clamp(hi <- 10)") == "(|> x (call clamp hi<-10))");
     CHECK(parseDump("f(g(x))") == "(call f (call g x))");
     CHECK(parseDump("len(xs) - 1") == "(- (call len xs) 1)");
     CHECK(parseDump("-f(x)") == "(pre:- (call f x))");
@@ -684,7 +689,7 @@ TEST_CASE("Parser: comprehensions", "[parser]") {
     CHECK(parseDump("[o : o <- orders && o.status = Paid]") == "(compr o (in o orders) (= (. o status) Paid))");
     CHECK(parseDump("[v : v <- [o : o <- os && f(o)]]") == "(compr v (in v (compr o (in o os) (call f o))))");
     CHECK(parseDump("[p : p <- ps && p = Point <- [0, 0]]") == "(compr p (in p ps) (in <error-pattern> (pack 0 0)))");
-    CHECK(parseDump("[p : p <- ps && f(Point <- [0, 0])]") == "(compr p (in p ps) (call f (<- Point (pack 0 0))))");
+    CHECK(parseDump("[p : p <- ps && f((Point <- [0, 0]))]") == "(compr p (in p ps) (call f (<- Point (pack 0 0))))");
     CHECK(parseDump("[x : x <- xs && (a || b)]") == "(compr x (in x xs) (|| a b))");
     CHECK(parseKind("[x : x <- xs]") == ExprKind::Compr);
     CHECK(parseErrors("[x : x <- xs && a || b]") > 0);
@@ -1129,6 +1134,7 @@ TEST_CASE("Parser: statement error recovery", "[parser][stmt]") {
 TEST_CASE("Parser: functions", "[parser][decl]") {
     CHECK(stmtDump("let () -> main -> (code :: int) { 0 -| }") == "(fn-decl main () -> (code:int) (block (-| 0)))");
     CHECK(stmtDump("let (x :: int) -> inc -> (r :: int) { x + 1 -| }") == "(fn-decl inc (x:int) -> (r:int) (block (-| (+ x 1))))");
+    CHECK(stmtDump("let (a :: int, b :: int <- a + 1) -> f -> () { }") == "(fn-decl f (a:int b:int<-(+ a 1)) -> () (block))");
     CHECK(stmtDump("let (a :: int {a >= 0}, b :: int {b > 0}) -> divmod -> (q :: int, r :: int {0 <= r < b && a = q * b + r}) { [a / b, a % b] -| }")
         == "(fn-decl divmod (a:(refine int (chain a >= 0)) b:(refine int (chain b > 0))) -> (q:int r:(refine int (&& (chain 0 <= r < b) (= a (+ (* q b) r))))) (block (-| (pack (/ a b) (% a b)))))");
     CHECK(stmtDump("let [T :: Ord] (a :: T, b :: T) -> max -> (m :: T) { }") == "(fn-decl max [T::Ord] (a:T b:T) -> (m:T) (block))");

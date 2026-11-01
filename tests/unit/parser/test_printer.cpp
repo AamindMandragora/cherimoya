@@ -118,6 +118,13 @@ class Printer {
         return s;
     }
 
+    // joins a list of arguments with commas, each with its name when it has one
+    std::string arguments(const std::vector<Elem>& es, int depth) {
+        std::string s;
+        for (size_t i = 0; i < es.size(); i++) s += (i ? ", " : "") + (es[i].name ? std::string(es[i].name->text) + " <- " : "") + expr(*es[i].value, depth, false);
+        return s;
+    }
+
     // the inside of a range's brackets, shared by range expressions and range patterns
     template <typename Elems>
     std::string rangeElems(const Elems& elems, int depth) {
@@ -138,6 +145,7 @@ class Printer {
             if (i) s += ", ";
             s += std::string(ps[i].name.text);
             if (ps[i].type) s += " :: " + type(*ps[i].type, depth);
+            if (ps[i].fallback) s += " <- " + expr(*ps[i].fallback, depth, false);
         }
         return s + ")";
     }
@@ -246,7 +254,7 @@ public:
                 return std::string(static_cast<const OpRefExpr&>(e).op.text);
             case ExprKind::Call: {
                 auto& c = static_cast<const CallExpr&>(e);
-                return operand(*c.callee, 1, depth, arrow) + "(" + list(c.args, depth) + ")";
+                return operand(*c.callee, 1, depth, arrow) + "(" + arguments(c.args, depth) + ")";
             }
             case ExprKind::Index: {
                 auto& i = static_cast<const IndexExpr&>(e);
@@ -469,7 +477,7 @@ public:
                 auto& a = static_cast<const AttrStmt&>(s);
                 std::string r = "@" + std::string(a.name.text);
                 auto target = a.target ? stmt(*a.target, depth) : "";
-                if (!a.args.empty() || (a.target && target[0] == '(')) r += "(" + list(a.args, depth) + ")";
+                if (!a.args.empty() || (a.target && target[0] == '(')) r += "(" + arguments(a.args, depth) + ")";
                 return r + (a.target ? " " + target : ";");
             }
             case StmtKind::Error:

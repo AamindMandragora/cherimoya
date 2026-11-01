@@ -195,7 +195,7 @@ TEST_CASE("LSP: quick fixes", "[lsp]") {
     CHECK(at("let () ->").empty());
 }
 
-// checks every kind of inlay hint: an inferred type with the edit that writes it in, parameter names but not for an argument that's already the parameter's name or a pipe's argument, the type of each step of a pipe spread over lines but not its last, and labels on a long function's closing brace but not a short one's
+// checks every kind of inlay hint: an inferred type with the edit that writes it in, parameter names but not for an argument that's already the parameter's name, a named argument, or a pipe's argument, the defaults a call leaves out, the type of each step of a pipe spread over lines but not its last, and labels on a long function's closing brace but not a short one's
 TEST_CASE("LSP: inlay hints", "[lsp]") {
     std::string text =
         "let (a :: int, b :: int) -> add -> (r :: int) { a + b -| }\n"
@@ -230,6 +230,21 @@ TEST_CASE("LSP: inlay hints", "[lsp]") {
     CHECK(hints[7].getAsObject()->getObject("position")->getInteger("line") == 12);
     // a range only gets the hints inside it
     CHECK(inlayHints(document, Span{0, offsetOf(text, "let () -> main")}).empty());
+    // a named argument gets no hint, only the last unnamed argument's hint writes itself in, and the defaults a call leaves out go before its ), which a pipe of a bare name doesn't have
+    std::string named =
+        "let (a :: int, b :: int <- 10, c :: int <- a + b) -> f -> (r :: int) { a + b + c -| }\n"
+        "let x <- f(1, 2);\n"
+        "let y <- f(c <- 3, a <- 1);\n"
+        "let z <- 4 |> f;\n"
+        "let w <- 5 |> f(c <- 1);\n";
+    Document defaults("file:///t.moya", named);
+    auto defaultHints = inlayHints(defaults, Span{0, named.size()});
+    std::vector<std::string> defaultLabels;
+    for (auto& hint : defaultHints) defaultLabels.push_back(stringOf(hint, "label"));
+    CHECK(defaultLabels == std::vector<std::string>{":: int", "a <-", "b <-", ", c <- a + b", ":: int", ", b <- 10", ":: int", ":: int", ", b <- 10"});
+    CHECK(defaultHints[1].getAsObject()->getArray("textEdits") == nullptr);
+    CHECK(stringOf((*defaultHints[2].getAsObject()->getArray("textEdits"))[0], "newText") == "b <- ");
+    CHECK(defaultHints[3].getAsObject()->getObject("position")->getInteger("character") == 15);
 }
 
 // checks that rename edits every use, and refuses a non-name, a clash in one scope, and a rename that would change what a use means
@@ -314,6 +329,17 @@ TEST_CASE("LSP: signature help", "[lsp]") {
     CHECK(help.getAsObject()->getInteger("activeParameter") == 0);
     CHECK(signatureHelp(document, offsetOf(text, "2)")).getAsObject()->getInteger("activeParameter") == 1);
     CHECK(signatureHelp(document, offsetOf(text, "a +")).kind() == Value::Null);
+    // a named argument highlights the input it names, the signature shows defaults, and between arguments it's the first input nothing before has gone to
+    std::string named = "let (a :: int, b :: int <- 10, c :: int <- a + b) -> f -> (r :: int) { a + b + c -| }\nlet x <- f(c <- 3, a <- 1);";
+    Document defaults("file:///t.moya", named);
+    auto inNamed = signatureHelp(defaults, offsetOf(named, "3,"));
+    CHECK(stringOf((*inNamed.getAsObject()->getArray("signatures"))[0], "label") == "let (a :: int, b :: int <- 10, c :: int <- a + b) -> f -> (r :: int)");
+    CHECK(inNamed.getAsObject()->getInteger("activeParameter") == 2);
+    CHECK(signatureHelp(defaults, offsetOf(named, " a <- 1")).getAsObject()->getInteger("activeParameter") == 0);
+    CHECK(signatureHelp(defaults, offsetOf(named, "1);")).getAsObject()->getInteger("activeParameter") == 0);
+    // hovering over an input shows its default
+    auto onInput = hover(defaults, offsetOf(named, "b ::"));
+    CHECK(onInput.getAsObject()->getObject("contents")->getString("value")->str().find("b :: int <- 10") != std::string::npos);
 }
 
 // checks a whole session: the server says what it can do, publishes diagnostics for an opened document, applies incremental changes, answers a request, and exits cleanly after a shutdown

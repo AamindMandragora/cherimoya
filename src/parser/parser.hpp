@@ -194,14 +194,24 @@ class Parser {
         return withArrowStops(false, [&] { return parseExpr(0); });
     }
 
+    // parses one argument, which a name and <- in front of it name: the b <- 2 in f(b <- 2)
+    Elem parseArg() {
+        std::optional<Token> name = std::nullopt;
+        if (peek().kind == TokenKind::Identifier && peekAt(1).kind == TokenKind::LArrow) {
+            name = advance();
+            advance();
+        }
+        return {name, parseNested()};
+    }
+
     // parses a parenthesized argument list, a call's or an attribute's
-    std::vector<std::unique_ptr<Expr>> parseArgList() {
-        std::vector<std::unique_ptr<Expr>> args;
+    std::vector<Elem> parseArgList() {
+        std::vector<Elem> args;
         if (peek().kind != TokenKind::RParen) {
-            args.push_back(parseNested());
+            args.push_back(parseArg());
             while (peek().kind == TokenKind::Comma) {
                 advance();
-                args.push_back(parseNested());
+                args.push_back(parseArg());
             }
         }
         expect(TokenKind::RParen, "')' after the arguments in 'f(a, b)'");
@@ -399,7 +409,7 @@ class Parser {
         }
 
         // anything else is a pack
-        std::vector<PackElem> pack;
+        std::vector<Elem> pack;
         for (auto& e : elems) {
             if (e.marker) engine.printError("cherimoya requires exclusivity markers to be inside a range, please add '...' or remove the marker", e.span);
             pack.push_back({e.name, std::move(e.value)});
@@ -475,7 +485,7 @@ class Parser {
         return std::make_unique<RefinedType>(std::move(inner), binder, std::move(predicate), Span{start, prevEnd()});
     }
 
-    // parses name :: type pairs up to the closing ), where a missing type is left to inference
+    // parses name :: type <- default up to the closing ), where a missing type is left to inference and the default is optional
     std::vector<Param> parseParamList() {
         std::vector<Param> params = {};
         while (peek().kind != TokenKind::RParen && peek().kind != TokenKind::Eof) {
@@ -485,7 +495,12 @@ class Parser {
                 advance();
                 type = parseType();
             }
-            params.push_back(Param{name, std::move(type)});
+            std::unique_ptr<Expr> fallback = nullptr;
+            if (peek().kind == TokenKind::LArrow) {
+                advance();
+                fallback = parseNested();
+            }
+            params.push_back(Param{name, std::move(type), std::move(fallback)});
             if (peek().kind != TokenKind::Comma) break;
             advance();
         }
@@ -928,7 +943,7 @@ class Parser {
     std::unique_ptr<Stmt> parseAttr() {
         auto start = advance();
         auto name = expect(TokenKind::Identifier, "an attribute name after '@' in '@name(args)'");
-        std::vector<std::unique_ptr<Expr>> args;
+        std::vector<Elem> args;
         if (peek().kind == TokenKind::LParen) {
             advance();
             args = parseArgList();
@@ -1003,7 +1018,7 @@ public:
                     while (true) {
                         auto name = expect(TokenKind::Identifier, "a field name in '[name :: Type]'");
                         expect(TokenKind::ColonColon, "'::' after the field name in '[name :: Type]'");
-                        fields.push_back(Param{name, parseType()});
+                        fields.push_back(Param{name, parseType(), nullptr});
                         if (peek().kind != TokenKind::Comma) break;
                         advance();
                     }
