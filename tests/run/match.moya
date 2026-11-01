@@ -7,6 +7,6 @@ let (n :: int) -> classify -> (r :: int) {
         m -> { m * 3 -| }
     } -|
 }
-let () -> main -> (code :: int) {
+let () -> start -> (code :: int) {
     classify(0) + classify(-1) + classify(6) -|
 }

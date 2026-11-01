@@ -3,6 +3,6 @@
 let (n :: int) -> clamp -> (r :: int) {
     { n -| clamp }
 }
-let () -> main -> (code :: int) {
-    { 88 -| main }
+let () -> start -> (code :: int) {
+    { 88 -| start }
 }

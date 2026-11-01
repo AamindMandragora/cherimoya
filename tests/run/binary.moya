@@ -1,3 +1,3 @@
 # exit: 67
 # checks binary integer literals
-let () -> main -> (code :: int) { 0b1000011 -| }
+let () -> start -> (code :: int) { 0b1000011 -| }

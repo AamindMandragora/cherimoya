@@ -24,7 +24,7 @@ Two helpers keep the edits tidy. `insertion` puts text at a location. `removal` 
 | an incomplete match | a `_ -> { }` arm before the closing brace, on its own line when the brace is on its own |
 | a `boolf` used as a condition, or converted to a `bool` | a cutoff, `x > 0.5`, with the value in parentheses unless it's a name, a call, or a literal, since `>` binds tighter than `&&` |
 | statements after a yield, or arms after a catch-all | every statement or arm from there on comes out, but the functions, which are hoisted, so something before the yield can still call them |
-| a program with no `main` | `let () -> main -> (code :: int) { 0 -| }` at the end |
+| a program with no `start` | `let () -> start -> (code :: int) { 0 -| }` at the end |
 
 A mix of operators that needs parentheses is reported once the operand after its second operator is parsed, since its fixes need to know where that operand ends, along with where the left side started and where its last operand began.
 
@@ -44,4 +44,4 @@ The language server answers `textDocument/codeAction` with a quick fix for every
 
 ## Current Limitations
 
-A fix that would be a guess has no fix: a literal that doesn't fit, a parameter with no type, or a mismatch, where only the programmer knows which side is wrong. The missing `main` fix only comes from `cheri check --fix`, since the language server checks a file as a module, not as a program. There's no fix-all request in the language server itself, so an editor applies fixes one diagnostic at a time unless it does fix-all on its own.
+A fix that would be a guess has no fix: a literal that doesn't fit, a parameter with no type, or a mismatch, where only the programmer knows which side is wrong. The missing `start` fix only comes from `cheri check --fix`, since the language server checks a file as a module, not as a program. There's no fix-all request in the language server itself, so an editor applies fixes one diagnostic at a time unless it does fix-all on its own.

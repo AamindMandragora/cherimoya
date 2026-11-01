@@ -78,4 +78,16 @@ if(CHERI_BUILD_TESTS)
     $<TARGET_FILE:cheri_bin> ${test}
     ${CMAKE_CURRENT_BINARY_DIR}/run)
   endforeach()
+
+  # every program in tests/debug is built with debug info, which llvm-dwarfdump checks, and debugged in gdb when it's installed
+  find_program(LLVM_DWARFDUMP llvm-dwarfdump HINTS ${LLVM_TOOLS_BINARY_DIR} REQUIRED)
+  file(GLOB DEBUG_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/debug/*.moya)
+  foreach(test ${DEBUG_TESTS})
+    get_filename_component(name ${test} NAME_WE)
+    add_test(NAME "Debug: ${name}"
+             COMMAND
+    ${CMAKE_CURRENT_SOURCE_DIR}/scripts/debug_test.sh
+    $<TARGET_FILE:cheri_bin> ${test}
+    ${CMAKE_CURRENT_BINARY_DIR}/debug ${LLVM_DWARFDUMP})
+  endforeach()
 endif()

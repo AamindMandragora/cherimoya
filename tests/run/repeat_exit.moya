@@ -1,6 +1,6 @@
 # exit: 77
 # checks an infinite loop yielding its value with -| repeat, and leaving a labeled loop from an inner one
-let () -> main -> (code :: int) {
+let () -> start -> (code :: int) {
     let n :: mut <- 0;
     let found <- repeat {
         n +<- 7;

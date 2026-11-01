@@ -108,7 +108,7 @@ TEST_CASE("LSP: semantic tokens", "[lsp]") {
 
 // checks that hover shows a name as it's declared, that definition jumps there, and that references find every use
 TEST_CASE("LSP: hover, definition, and references", "[lsp]") {
-    std::string text = "let (a :: int, b :: int) -> add -> (r :: int) { a + b -| }\nlet () -> main -> (code :: int) { let x :: mut <- add(1, 2); x <- add(x, 3); x -| }";
+    std::string text = "let (a :: int, b :: int) -> add -> (r :: int) { a + b -| }\nlet () -> start -> (code :: int) { let x :: mut <- add(1, 2); x <- add(x, 3); x -| }";
     Document document("file:///t.moya", text);
     auto shown = [&](size_t offset) { return stringOf(*hover(document, offset).getAsObject()->get("contents"), "value"); };
     CHECK(shown(offsetOf(text, "add(1")) == "```cherimoya\nlet (a :: int, b :: int) -> add -> (r :: int)\n```");
@@ -146,7 +146,7 @@ TEST_CASE("LSP: documentation comments", "[lsp]") {
         "let limit <- 4096;  # bytes per chunk\n"
         "let (n :: int) -> f -> (r :: int) { n -| }  # the identity\n"
         "let plain <- 1;\n"
-        "let () -> main -> (code :: int) { add(limit, ) -| }";
+        "let () -> start -> (code :: int) { add(limit, ) -| }";
     Document document("file:///t.moya", text);
     auto shown = [&](size_t offset) { return stringOf(*hover(document, offset).getAsObject()->get("contents"), "value"); };
     CHECK(shown(offsetOf(text, "add ->")) == "```cherimoya\nlet (a :: int, b :: int) -> add -> (r :: int)\n```\nadds two numbers\n  and gives their sum");
@@ -200,7 +200,7 @@ TEST_CASE("LSP: inlay hints", "[lsp]") {
     std::string text =
         "let (a :: int, b :: int) -> add -> (r :: int) { a + b -| }\n"
         "let (n :: int) -> double -> (r :: int) { n * 2 -| }\n"
-        "let () -> main -> (code :: int) {\n"
+        "let () -> start -> (code :: int) {\n"
         "    let a <- 1;\n"
         "    let total :: int <- add(a, double(2));\n"
         "    let piped <- total\n"
@@ -215,7 +215,7 @@ TEST_CASE("LSP: inlay hints", "[lsp]") {
     auto hints = inlayHints(document, Span{0, text.size()});
     std::vector<std::string> labels;
     for (auto& hint : hints) labels.push_back(stringOf(hint, "label"));
-    CHECK(labels == std::vector<std::string>{":: int", "b <-", "n <-", ":: int", ":: int", ":: int", ":: int", "# main"});
+    CHECK(labels == std::vector<std::string>{":: int", "b <-", "n <-", ":: int", ":: int", ":: int", ":: int", "# start"});
     // the first hint is a's type, right after its name, with the edit that writes it in
     auto& first = *hints[0].getAsObject();
     CHECK(first.getInteger("kind") == 1);
@@ -229,7 +229,7 @@ TEST_CASE("LSP: inlay hints", "[lsp]") {
     CHECK(hints[5].getAsObject()->getObject("position")->getInteger("character") == 17);
     CHECK(hints[7].getAsObject()->getObject("position")->getInteger("line") == 12);
     // a range only gets the hints inside it
-    CHECK(inlayHints(document, Span{0, offsetOf(text, "let () -> main")}).empty());
+    CHECK(inlayHints(document, Span{0, offsetOf(text, "let () -> start")}).empty());
     // a named argument gets no hint, only the last unnamed argument's hint writes itself in, and the defaults a call leaves out go before its ), which a pipe of a bare name doesn't have
     std::string named =
         "let (a :: int, b :: int <- 10, c :: int <- a + b) -> f -> (r :: int) { a + b + c -| }\n"
@@ -317,7 +317,7 @@ TEST_CASE("LSP: completion", "[lsp]") {
 
 // checks that signature help shows the call the cursor is in and which parameter it's at
 TEST_CASE("LSP: signature help", "[lsp]") {
-    std::string text = "let (a :: int, b :: int) -> add -> (r :: int) { a + b -| }\nlet () -> main -> (code :: int) { add(1, 2) -| }";
+    std::string text = "let (a :: int, b :: int) -> add -> (r :: int) { a + b -| }\nlet () -> start -> (code :: int) { add(1, 2) -| }";
     Document document("file:///t.moya", text);
     auto help = signatureHelp(document, offsetOf(text, "1,") + 1);
     REQUIRE(help.kind() == Value::Object);

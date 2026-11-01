@@ -3,4 +3,4 @@
 let () -> tick -> () { }
 let () -> stop -> () { -| }
 let () -> run -> () { tick() -| }
-let () -> main -> (code :: int) { tick(); stop(); run(); 9 -| }
+let () -> start -> (code :: int) { tick(); stop(); run(); 9 -| }

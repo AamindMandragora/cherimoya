@@ -100,6 +100,8 @@ struct Options {
     std::vector<std::string> linkArgs;
     // whether check rewrites the file with its fixes first
     bool isFixing = false;
+    // how much debug info the build carries, none unless -g or -gline-tables-only asks for it
+    DebugLevel debug = DebugLevel::None;
 };
 
 // prints every command and option
@@ -124,6 +126,10 @@ static void usage(std::ostream& out) {
            "optimization:\n"
            "  -O0 -O1 -O2 -O3       how hard to optimize, -O3 by default, where -O0 leaves the IR as codegen wrote it\n"
            "  -Os -Oz               optimize for size, or for size above everything else\n"
+           "\n"
+           "debugging:\n"
+           "  -g                    write debug info for a debugger: lines, functions, variables, types, and scopes\n"
+           "  -gline-tables-only    write only which source line each instruction came from, for backtraces\n"
            "\n"
            "target:\n"
            "  --target <triple>     the machine to build for, this one by default\n"
@@ -199,6 +205,10 @@ static bool parseOptions(int argc, char** argv, Options& options) {
             std::string link;
             if (!value(link)) return false;
             options.linkArgs.push_back(link);
+        } else if (arg == "-g") {
+            options.debug = DebugLevel::Full;
+        } else if (arg == "-gline-tables-only") {
+            options.debug = DebugLevel::Lines;
         } else if (arg == "--fix") {
             options.isFixing = true;
         } else if (arg.size() > 1 && arg[0] == '-') {
@@ -346,9 +356,13 @@ int main(int argc, char** argv) {
     if (engine.hadErrors()) return 1;
     if (options.command == "check") return 0;
 
-    // the module is named after the file, so prog.moya defines cheri.prog.main
+    // the machine to build for, which decides the debug format, CodeView for Windows' MSVC debuggers and DWARF everywhere else
+    llvm::Triple triple(options.triple.empty() ? llvm::sys::getDefaultTargetTriple() : options.triple);
+    DebugOptions debugOptions{options.debug, options.input, options.level != '0', triple.isWindowsMSVCEnvironment(), triple.isOSBinFormatELF()};
+
+    // the module is named after the file, so prog.moya defines cheri.prog.start
     std::string stem = std::filesystem::path(options.input).stem().string();
-    Codegen codegen(stem, manager);
+    Codegen codegen(stem, manager, debugOptions);
     auto module = codegen.generate(program);
     // broken IR is a codegen bug, so it's printed along with what's wrong with it before anything else touches it
     if (llvm::verifyModule(*module, &llvm::errs())) {
@@ -361,7 +375,6 @@ int main(int argc, char** argv) {
     llvm::InitializeAllTargets();
     llvm::InitializeAllTargetMCs();
     llvm::InitializeAllAsmPrinters();
-    llvm::Triple triple(options.triple.empty() ? llvm::sys::getDefaultTargetTriple() : options.triple);
     std::string error;
     const llvm::Target* target = llvm::TargetRegistry::lookupTarget(triple, error);
     if (!target) {
@@ -421,9 +434,11 @@ int main(int argc, char** argv) {
         std::filesystem::remove(object);
         return 1;
     }
-    // links the object with the runtime, whose C main calls cheri_init and cheri_main, and the linker brings in the C runtime that calls main, where every argument is quoted so paths with spaces stay whole
+    // links the object with the runtime, whose C main calls cheri_init and cheri_start, and the linker brings in the C runtime that calls main, where every argument is quoted so paths with spaces stay whole
     std::string command = platform::quote(options.linker) + " " + platform::quote(object) + " " + platform::quote(CHERI_RUNTIME) + platform::runtimeLibraries + " -o " + platform::quote(output);
     if (options.isStatic) command += " -static";
+    // the linker writes a CodeView build's PDB only when it's asked to, and -g changes nothing for one that keeps DWARF in the executable
+    if (options.debug != DebugLevel::None) command += " -g";
     for (auto& arg : options.linkArgs) command += " " + platform::quote(arg);
     int linked = std::system(platform::shell(command).c_str());
     std::filesystem::remove(object);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include "debug.hpp"
 #include "expr.hpp"
 #include "sema.hpp"
 #include "type.hpp"
@@ -23,10 +24,35 @@ class Codegen {
     llvm::LLVMContext context;
     std::unique_ptr<llvm::Module> module;
     llvm::IRBuilder<> irbuilder;
-    // what every symbol the module defines starts with, cheri. and the module's name, so main in prog.moya is cheri.prog.main, which nothing the runtime or LLVM defines can collide with
+    // what every symbol the module defines starts with, cheri. and the module's name, so start in prog.moya is cheri.prog.start, which nothing the runtime or LLVM defines can collide with
     std::string symbolPrefix;
     // the source, so a runtime trap can say which line it came from
     SourceManager& manager;
+    // the debug info being written alongside the code, or null for a build without it
+    std::unique_ptr<DebugInfo> debug;
+
+    // while one lives, every instruction codegen emits points at a span, for the debugger, and the location before it comes back once it goes, so an operator's own instructions point at the operator once its operands are done
+    class Located {
+        llvm::IRBuilder<>& builder;
+        llvm::DebugLoc saved;
+    public:
+        Located(llvm::IRBuilder<>& b, DebugInfo* debug, Span span) : builder(b), saved(b.getCurrentDebugLocation()) {
+            if (debug) builder.SetCurrentDebugLocation(debug->location(span));
+        }
+        ~Located() { builder.SetCurrentDebugLocation(saved); }
+    };
+
+    // starts a function's debug info, where the debugger names it by its symbol without the module's prefix, so a nested function is outer.inner and a default is clamp.lo<-, and what's emitted before its first statement, like storing its inputs, has no line, so a breakpoint on the function lands after its inputs are stored, the way clang does it
+    void beginFunction(llvm::Function* f, SemaType* returns, const std::vector<SemaType*>& params, Span span, bool isArtificial = false) {
+        if (!debug) return;
+        debug->beginFunction(f, f->getName().substr(symbolPrefix.size() + 1).str(), returns, params, span, isArtificial);
+        irbuilder.SetCurrentDebugLocation(llvm::DebugLoc());
+    }
+    void endFunction() {
+        if (!debug) return;
+        debug->endFunction();
+        irbuilder.SetCurrentDebugLocation(llvm::DebugLoc());
+    }
 
     // the APFloat semantics of a float encoding, which its LLVM type and every one of its constants are built from, where FP8 has no LLVM type, but its constants are still built in its semantics
     const llvm::fltSemantics& semantics(FloatFormat format) {
@@ -101,7 +127,7 @@ class Codegen {
     // the LLVM function for every input's default, which takes the inputs before it and gives the default's value
     std::unordered_map<const Param*, llvm::Function*> defaults;
 
-    // creates the LLVM function for a declaration, named prefix.name, and one for each of its defaults, named prefix.name(input), which can't collide with a nested function, since no name holds parentheses, then declares the functions nested in its defaults and its body under its own name
+    // creates the LLVM function for a declaration, named prefix.name, and one for each of its defaults, named prefix.name.input<-, which reads as the input's default and can't collide with a nested function, since no name holds <-, then declares the functions nested in its defaults and its body under its own name
     void declare(FnDecl& fn, std::string prefix) {
         auto type = llvm::cast<llvm::FunctionType>(lower(fn.decl->type));
         std::string name = prefix + "." + std::string(fn.decl->name);
@@ -113,7 +139,7 @@ class Codegen {
             if (!input.fallback) continue;
             std::vector<llvm::Type*> before(type->param_begin(), type->param_begin() + i);
             auto defaultType = llvm::FunctionType::get(type->getParamType(i), before, false);
-            defaults[&input] = llvm::Function::Create(defaultType, llvm::Function::InternalLinkage, name + "(" + std::string(input.name.text) + ")", *module);
+            defaults[&input] = llvm::Function::Create(defaultType, llvm::Function::InternalLinkage, name + "." + std::string(input.name.text) + "<-", *module);
             collectExpr(*input.fallback, name);
         }
         if (fn.body) collectStmts(fn.body->stmts, name);
@@ -713,6 +739,7 @@ class Codegen {
 
     // emits an expression into the current block and returns its value, or null for void and never, which have none
     llvm::Value* emitExpr(Expr& e) {
+        Located located(irbuilder, debug.get(), e.span);
         switch (e.kind) {
             case ExprKind::IntLiteral:
                 return emitIntLiteral(static_cast<IntLiteralExpr&>(e));
@@ -820,12 +847,12 @@ class Codegen {
             }
             case ExprKind::Block: {
                 auto& block = static_cast<BlockExpr&>(e);
-                return emitScope(block.stmts, TargetKind::Block, block.name, block.type);
+                return emitScope(block.stmts, TargetKind::Block, block.name, block.type, block.span);
             }
             // a chunk runs as a block, since it only differs once it has an allocator
             case ExprKind::Chunk: {
                 auto& chunk = static_cast<ChunkExpr&>(e);
-                return emitScope(chunk.body->stmts, TargetKind::Chunk, chunk.name, chunk.type);
+                return emitScope(chunk.body->stmts, TargetKind::Chunk, chunk.name, chunk.type, chunk.body->span);
             }
             case ExprKind::Match:
                 return emitMatch(static_cast<MatchExpr&>(e));
@@ -881,12 +908,14 @@ class Codegen {
     // the stack slot of every local and parameter
     std::unordered_map<Symbol*, llvm::AllocaInst*> locals;
 
-    // makes a symbol's stack slot, named after it
-    llvm::AllocaInst* makeSlot(Symbol* symbol) {
-        return locals[symbol] = makeAlloca(lower(symbol->type), symbol->name);
+    // makes a symbol's stack slot, named after it, and describes it to the debugger, where input is an input's number from 1, or 0 for a binding
+    llvm::AllocaInst* makeSlot(Symbol* symbol, unsigned input = 0) {
+        llvm::AllocaInst* slot = locals[symbol] = makeAlloca(lower(symbol->type), symbol->name);
+        if (debug) debug->declareVariable(slot, *symbol, input, irbuilder.GetInsertBlock());
+        return slot;
     }
 
-    // the global for every top-level binding, which the init function fills in before main runs
+    // the global for every top-level binding, which the init function fills in before start runs
     std::unordered_map<Symbol*, llvm::GlobalVariable*> globals;
 
     // finds where a symbol's value lives: a stack slot for locals and parameters, or a global for top-level bindings
@@ -903,11 +932,13 @@ class Codegen {
         llvm::Type* type = lower(symbol->type);
         auto* global = new llvm::GlobalVariable(*module, type, false, llvm::GlobalValue::InternalLinkage, llvm::Constant::getNullValue(type), symbolPrefix + "." + std::string(symbol->name));
         globals[symbol] = global;
+        if (debug) debug->declareGlobal(global, *symbol);
         return global;
     }
 
     // emits one statement into the current block
     void emitStmt(Stmt& s) {
+        Located located(irbuilder, debug.get(), s.span);
         switch (s.kind) {
             // a yield to the function returns, and a yield to anything else stores its value in the target's result and jumps to its end
             case StmtKind::Yield: {
@@ -955,8 +986,7 @@ class Codegen {
                 if (let.init->kind != ExprKind::Wildcard) irbuilder.CreateStore(emitExpr(*let.init), slot);
                 break;
             }
-            // _ <- value discards, place <- value stores, and place op<- value is place <- place op value
-            // place op<- value is place <- place op value, where &&<- and ||<- short-circuit like && and ||, so their value is only evaluated once the place's value doesn't decide the answer
+            // _ <- value discards, place <- value stores, and place op<- value is place <- place op value, where &&<- and ||<- short-circuit like && and ||, so their value is only evaluated once the place's value doesn't decide the answer
             case StmtKind::Assign: {
                 auto& assign = static_cast<AssignStmt&>(s);
                 TokenKind op = assign.op ? assign.op->op->base->kind : TokenKind::Error;
@@ -1048,10 +1078,12 @@ class Codegen {
             }
             // the body: a binder holds the subject's value, then the statements run as their own scope
             irbuilder.SetInsertPoint(body);
+            if (debug) debug->enterScope(arm.body->span);
             if (arm.pattern->kind == PatternKind::Binder) irbuilder.CreateStore(subject, makeSlot(static_cast<BinderPattern&>(*arm.pattern).decl));
             exits.push_back(Exit{TargetKind::Arm, std::nullopt, end, result});
             emitStmts(arm.body->stmts);
             exits.pop_back();
+            if (debug) debug->leaveScope();
             if (!irbuilder.GetInsertBlock()->getTerminator()) irbuilder.CreateBr(end);
             // the next arm's test goes where a failed test lands
             irbuilder.SetInsertPoint(next);
@@ -1082,20 +1114,24 @@ class Codegen {
         llvm::AllocaInst* result = carriesValue(repeat.type) ? makeAlloca(lower(repeat.type), "result") : nullptr;
         exits.push_back(Exit{TargetKind::Loop, labelOf(repeat.name), end, result});
         irbuilder.SetInsertPoint(body);
+        if (debug) debug->enterScope(repeat.body->span);
         emitStmts(repeat.body->stmts);
+        if (debug) debug->leaveScope();
         exits.pop_back();
         if (!irbuilder.GetInsertBlock()->getTerminator()) irbuilder.CreateBr(header);
         irbuilder.SetInsertPoint(end);
         return result ? irbuilder.CreateLoad(result->getAllocatedType(), result) : nullptr;
     }
 
-    // emits a block or a chunk as its own scope: yields to it store into result and jump to end, and its value is loaded there
-    llvm::Value* emitScope(std::vector<std::unique_ptr<Stmt>>& stmts, TargetKind kind, std::optional<Token> name, SemaType* type) {
+    // emits a block or a chunk as its own scope, which span covers: yields to it store into result and jump to end, and its value is loaded there
+    llvm::Value* emitScope(std::vector<std::unique_ptr<Stmt>>& stmts, TargetKind kind, std::optional<Token> name, SemaType* type, Span span) {
         llvm::Function* f = irbuilder.GetInsertBlock()->getParent();
         llvm::BasicBlock* end = llvm::BasicBlock::Create(context, kind == TargetKind::Chunk ? "chunk.end" : "block.end", f);
         llvm::AllocaInst* result = carriesValue(type) ? makeAlloca(lower(type), "result") : nullptr;
         exits.push_back(Exit{kind, labelOf(name), end, result});
+        if (debug) debug->enterScope(span);
         emitStmts(stmts);
+        if (debug) debug->leaveScope();
         exits.pop_back();
         if (!irbuilder.GetInsertBlock()->getTerminator()) irbuilder.CreateBr(end);
         irbuilder.SetInsertPoint(end);
@@ -1106,12 +1142,16 @@ class Codegen {
     void defineDefault(FnDecl& fn, size_t index) {
         llvm::Function* f = defaults[&fn.inputs[index]];
         irbuilder.SetInsertPoint(llvm::BasicBlock::Create(context, "definition", f));
+        auto& params = static_cast<FunctionSemaType*>(fn.decl->type)->params;
+        beginFunction(f, params[index], {params.begin(), params.begin() + index}, fn.inputs[index].fallback->span);
         for (size_t i = 0; i < index; i++) {
             Symbol* symbol = fn.inputs[i].decl;
             (f->args().begin() + i)->setName(symbol->name);
-            irbuilder.CreateStore(f->args().begin() + i, makeSlot(symbol));
+            irbuilder.CreateStore(f->args().begin() + i, makeSlot(symbol, i + 1));
         }
         llvm::Value* value = emitExpr(*fn.inputs[index].fallback);
+        // the return is at the default, so even a constant default has an instruction with a line, which a debugger needs before it shows the function's inputs
+        Located located(irbuilder, debug.get(), fn.inputs[index].fallback->span);
         // a default that never finishes, like one that traps, leaves nothing to return
         if (!irbuilder.GetInsertBlock()->getTerminator()) {
             if (value) {
@@ -1120,6 +1160,7 @@ class Codegen {
                 irbuilder.CreateUnreachable();
             }
         }
+        endFunction();
     }
 
     // emits a function's body: every parameter is copied into a slot so it acts like a binding, then the statements run in the function's own scope
@@ -1127,15 +1168,19 @@ class Codegen {
         llvm::Function* f = functionOf(fn.decl);
         llvm::BasicBlock* definition = llvm::BasicBlock::Create(context, "definition", f);
         irbuilder.SetInsertPoint(definition);
+        auto& signature = static_cast<FunctionSemaType&>(*fn.decl->type);
+        beginFunction(f, signature.returns, signature.params, fn.span);
         for (size_t i = 0; i < fn.inputs.size(); i++) {
             Symbol* symbol = fn.inputs[i].decl;
             (f->args().begin() + i)->setName(symbol->name);
-            irbuilder.CreateStore(f->args().begin() + i, makeSlot(symbol));
+            irbuilder.CreateStore(f->args().begin() + i, makeSlot(symbol, i + 1));
         }
         // the body is the function's own scope, so a yield at its top level returns
         exits.push_back(Exit{TargetKind::Function, fn.name.text, nullptr, nullptr});
         emitStmts(fn.body->stmts);
         exits.pop_back();
+        // falling off the end happens at the closing brace, so an empty function still has an instruction with a line
+        Located located(irbuilder, debug.get(), Span{fn.body->span.end - 1, fn.body->span.end});
         // a void function can fall off its end, and anything else ending here is a block nothing reaches, like the end of a scope every path left
         if (!irbuilder.GetInsertBlock()->getTerminator()) {
             if (f->getReturnType()->isVoidTy()) {
@@ -1144,19 +1189,24 @@ class Codegen {
                 irbuilder.CreateUnreachable();
             }
         }
+        endFunction();
     }
 public:
-    // name is the module's name, the source file's stem, and the source manager is only read, for trap messages
-    Codegen(std::string_view name, SourceManager& m) : module(std::make_unique<llvm::Module>(name, context)), irbuilder(context), symbolPrefix("cheri." + std::string(name)), manager(m) {}
-    // lowers a whole checked program: every function is declared first, nested ones included, then every body is defined, then main is exported for the runtime
+    // name is the module's name, the source file's stem, the source manager is only read, for trap messages and debug info, and the debug options say how much debug info to write
+    Codegen(std::string_view name, SourceManager& m, DebugOptions debugOptions = {}) : module(std::make_unique<llvm::Module>(name, context)), irbuilder(context), symbolPrefix("cheri." + std::string(name)), manager(m) {
+        if (debugOptions.level != DebugLevel::None) debug = std::make_unique<DebugInfo>(*module, manager.text(), std::move(debugOptions));
+    }
+    // lowers a whole checked program: every function is declared first, nested ones included, then every body is defined, then start is exported for the runtime
     std::unique_ptr<llvm::Module> generate(std::vector<std::unique_ptr<Stmt>>& program) {
         // functions can be declared anywhere at the top, including inside top-level blocks, so the whole program is searched
         collectStmts(program, symbolPrefix);
-        // everything at the top that isn't a function runs once, in order, in cheri.module.init, which the runtime calls before main
+        // everything at the top that isn't a function runs once, in order, in cheri.module.init, which the runtime calls before start
         llvm::Function* init = llvm::Function::Create(llvm::FunctionType::get(irbuilder.getVoidTy(), false), llvm::Function::ExternalLinkage, symbolPrefix + ".init", *module);
         irbuilder.SetInsertPoint(llvm::BasicBlock::Create(context, "definition", init));
+        beginFunction(init, nullptr, {}, Span{0, 0}, true);
         emitStmts(program);
         irbuilder.CreateRetVoid();
+        endFunction();
         llvm::GlobalAlias::create("cheri_init", init);
         // externs have no body, so they stay declarations for the linker to fill in
         for (FnDecl* fn : functions) {
@@ -1165,14 +1215,15 @@ public:
                 if (fn->inputs[i].fallback) defineDefault(*fn, i);
             }
         }
-        // the entry point is the main declared at the top of the file, looking through attributes, and not one nested in a top-level block, which gets the same prefix
+        // the entry point is the start declared at the top of the file, looking through attributes, and not one nested in a top-level block, which gets the same prefix
         for (auto& stmt : program) {
             Stmt* top = stmt.get();
             while (top != nullptr && top->kind == StmtKind::Attr) top = static_cast<AttrStmt&>(*top).target.get();
             if (top == nullptr || top->kind != StmtKind::Decl) continue;
             auto& decl = *static_cast<DeclStmt&>(*top).decl;
-            if (decl.kind == DeclKind::Fn && static_cast<FnDecl&>(decl).name.text == "main") llvm::GlobalAlias::create("cheri_main", declared[static_cast<FnDecl&>(decl).decl]);
+            if (decl.kind == DeclKind::Fn && static_cast<FnDecl&>(decl).name.text == "start") llvm::GlobalAlias::create("cheri_start", declared[static_cast<FnDecl&>(decl).decl]);
         }
+        if (debug) debug->finish();
         return std::move(module);
     }
 };

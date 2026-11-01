@@ -7,6 +7,6 @@ let (n :: int) -> f -> (r :: int) {
         _ -> { 0 -| f }
     }
 }
-let () -> main -> (code :: int) {
+let () -> start -> (code :: int) {
     f(3) -|
 }

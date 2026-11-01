@@ -4,13 +4,13 @@ let (x :: f16) -> toBrain -> (r :: f16e8m7) { f16e8m7(x) -| }
 let (x :: i8u) -> toSingle -> (r :: f32) { f32(x) -| }
 let (x :: int) -> toHalf -> (r :: f16) { f16(x) -| }
 let (x :: f32) -> toHalfFloat -> (r :: f16) { f16(x) -| }
-let () -> main -> (code :: int) {
+let () -> start -> (code :: int) {
     let a <- toBrain(1.5);
     let b <- toSingle(200);
     let c <- toHalf(100000);
     let d <- toHalfFloat(0.1);
     match (a == 1.5 && b == 200.0 && c > 65504.0 && d == 0.0999755859375) {
-        true -> { 12 -| main }
-        false -> { 1 -| main }
+        true -> { 12 -| start }
+        false -> { 1 -| start }
     }
 }

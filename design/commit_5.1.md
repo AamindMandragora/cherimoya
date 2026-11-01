@@ -2,7 +2,7 @@
 
 ## The Problem
 
-After commit 4, cherimoya can tell whether a program is right, but it can't run one. Sema has resolved every name and typed every expression, and nothing turns that into instructions. Commit 5.1 does: `cheri build prog.moya` checks the program, lowers it to LLVM IR, optimizes it, writes an object file, and links it with a small runtime into an executable whose exit code is what `main` yields.
+After commit 4, cherimoya can tell whether a program is right, but it can't run one. Sema has resolved every name and typed every expression, and nothing turns that into instructions. Commit 5.1 does: `cheri build prog.moya` checks the program, lowers it to LLVM IR, optimizes it, writes an object file, and links it with a small runtime into an executable whose exit code is what `start` yields.
 
 ## The Pipeline
 
@@ -24,15 +24,15 @@ Every setting LLVM offers on the way passes through the command line, and `cheri
 
 `cheri run` builds into the temporary directory, runs the program, removes it, and exits the way the program did, where a program killed by a signal exits with 128 plus the signal, as a shell reports it. Since it keeps nothing, it takes no `-o` or `--emit`. `cheri check` stops after the front end. The command comes first, and the file can go before, between, or after the options. Linking and running go through the shell, so every path in those commands is quoted, and a file or directory with spaces in its name works.
 
-The module is named after the file, and every function's symbol is `cheri`, its module, and its name joined with dots: `main` in `prog.moya` is `cheri.prog.main`, and a function `g` nested in `f` is `cheri.prog.f.g`. Dots are legal in LLVM and ELF symbols, they stay readable in a debugger, and modules slot into the same scheme later. The `cheri.` in front means nothing a program defines can collide with LLVM's intrinsics, which own every symbol starting with `llvm.`, so a file can be called `llvm.moya`.
+The module is named after the file, and every function's symbol is `cheri`, its module, and its name joined with dots: `start` in `prog.moya` is `cheri.prog.start`, and a function `g` nested in `f` is `cheri.prog.f.g`. Dots are legal in LLVM and ELF symbols, they stay readable in a debugger, and modules slot into the same scheme later. The `cheri.` in front means nothing a program defines can collide with LLVM's intrinsics, which own every symbol starting with `llvm.`, so a file can be called `llvm.moya`.
 
 ## The Runtime
 
-Every program links with `libcheri_rt`, a small C library built with the compiler. It defines C's `main`, which calls the program's init function and then its `main`, and hands the result back as the exit code. Codegen exports the entry module's `main` and init as `cheri_main` and `cheri_init` with aliases, so the runtime never needs to know the module's name, and declares them like any C function:
+Every program links with `libcheri_rt`, a small C library built with the compiler. It defines C's `main`, which calls the program's init function and then its `start`, and hands the result back as the exit code. Codegen exports the entry module's `start` and init as `cheri_start` and `cheri_init` with aliases, so the runtime never needs to know the module's name, and declares them like any C function:
 
 ```c
 void cheri_init(void);
-long long cheri_main(void);
+long long cheri_start(void);
 ```
 
 Every symbol a program defines has a dot in it and the runtime's names don't, so the two can never collide, even in a file called `cheri.moya`. The runtime also defines `cheri_trap`, which reports a failed runtime check with its line and aborts. It's where every future trap goes: overflow, division by zero, NaN, and bounds checks.
@@ -65,7 +65,7 @@ repeat.body:
 
 ## Top-Level Bindings
 
-A binding outside every function is a global, named like a function: `LIMIT` in `prog.moya` is `cheri.prog.LIMIT`. Everything at the top of a file that isn't a function, bindings and statements alike, runs once, in order, in a generated `cheri.prog.init`, which the runtime calls before `main`. An immutable binding whose initializer folds to a constant needs no code: the constant becomes the global's starting value, and the global is marked constant so the optimizer can replace every read with the value. Anything else is computed in init and stored each time its `let` runs, which a binding inside a top-level loop does once per iteration, so a `mut` one starts over every time round. Functions read and assign globals exactly like locals, through the same lookup.
+A binding outside every function is a global, named like a function: `LIMIT` in `prog.moya` is `cheri.prog.LIMIT`. Everything at the top of a file that isn't a function, bindings and statements alike, runs once, in order, in a generated `cheri.prog.init`, which the runtime calls before `start`. An immutable binding whose initializer folds to a constant needs no code: the constant becomes the global's starting value, and the global is marked constant so the optimizer can replace every read with the value. Anything else is computed in init and stored each time its `let` runs, which a binding inside a top-level loop does once per iteration, so a `mut` one starts over every time round. Functions read and assign globals exactly like locals, through the same lookup.
 
 ## Expressions
 
@@ -104,7 +104,7 @@ The trap is marked as never returning, so LLVM drops anything after it.
 
 ## The Entry Point
 
-A program that's built needs a top-level `main` declared as `let () -> main -> (code :: int)`, which is what the runtime calls: `cherimoya requires a program to have a 'main' function, please add 'let () -> main -> (code :: int) { 0 -| }'`. Sema checks it when asked, since a program being checked on its own, like every sema test, doesn't need one, and the driver always asks. A nested function named `main` doesn't count, including one inside a top-level block, so codegen exports the `main` declared at the top of the file, not just any function whose symbol ends in `.main`.
+A program that's built needs a top-level `start` declared as `let () -> start -> (code :: int)`, which is what the runtime calls: `cherimoya requires a program to have a 'start' function, please add 'let () -> start -> (code :: int) { 0 -| }'`. It's called `start` so it never shares a name with the C `main` the runtime defines, which a debugger would otherwise mix up with it. Sema checks it when asked, since a program being checked on its own, like every sema test, doesn't need one, and the driver always asks. A nested function named `start` doesn't count, including one inside a top-level block, so codegen exports the `start` declared at the top of the file, not just any function whose symbol ends in `.start`.
 
 ## Testing Whole Programs
 

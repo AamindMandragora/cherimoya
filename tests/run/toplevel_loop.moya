@@ -8,6 +8,6 @@ repeat (count < 3) {
     total +<- step;
     count +<- 1;
 }
-let () -> main -> (code :: int) {
+let () -> start -> (code :: int) {
     total -|
 }

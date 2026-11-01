@@ -1,0 +1,19 @@
+# flags: -g -O3
+# dwarf: DW_AT_name	("collatz")
+# gdb: break collatz
+# gdb: run
+# expect: collatz (n=27) at
+# checks that debug info survives optimization: a function the optimizer keeps can still be broken on by name
+let (n :: int) -> collatz -> (steps :: int) {
+    let x :: mut <- n;
+    let count :: mut <- 0;
+    repeat (x != 1) {
+        match ((x % 2) = 0) {
+            true -> { x <- x / 2; }
+            false -> { x <- 3 * x + 1; }
+        }
+        count +<- 1;
+    }
+    count -|
+}
+let () -> start -> (code :: int) { collatz(27) - 111 -| }

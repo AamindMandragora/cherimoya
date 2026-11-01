@@ -30,7 +30,7 @@ static size_t semaWarnings(const std::string& input) {
     return Checked(input).diag.warningCount();
 }
 
-// checks input as a whole program that will run, so it also needs a main, and returns how many diagnostics it produced
+// checks input as a whole program that will run, so it also needs a start, and returns how many diagnostics it produced
 static size_t entryErrors(const std::string& input) {
     SourceManager sm;
     sm.loadString(input);
@@ -336,17 +336,17 @@ TEST_CASE("Sema: chunk", "[sema]") {
     CHECK(semaErrors("chunk { let y <- 1; }") == 0);
 }
 
-// checks that a program that will run has a top-level main shaped the way the runtime calls it
+// checks that a program that will run has a top-level start shaped the way the runtime calls it
 TEST_CASE("Sema: entry point", "[sema]") {
-    CHECK(entryErrors("let () -> main -> (code :: int) { 0 -| }") == 0);
-    CHECK(entryErrors("let LIMIT <- 4; let () -> main -> (code :: int) { LIMIT -| }") == 0);
-    CHECK(entryErrors("let () -> start -> (code :: int) { 0 -| }") == 1);
-    CHECK(entryErrors("let (a :: int) -> main -> (code :: int) { a -| }") == 1);
-    CHECK(entryErrors("let () -> main -> () { }") == 1);
-    CHECK(entryErrors("let () -> main -> (code :: bool) { true -| }") == 1);
-    CHECK(entryErrors("let main <- 5;") == 1);
-    CHECK(entryErrors("let () -> f -> () { let () -> main -> (code :: int) { 0 -| } }") == 1);
-    CHECK(semaErrors("let () -> start -> (code :: int) { 0 -| }") == 0);
+    CHECK(entryErrors("let () -> start -> (code :: int) { 0 -| }") == 0);
+    CHECK(entryErrors("let LIMIT <- 4; let () -> start -> (code :: int) { LIMIT -| }") == 0);
+    CHECK(entryErrors("let () -> main -> (code :: int) { 0 -| }") == 1);
+    CHECK(entryErrors("let (a :: int) -> start -> (code :: int) { a -| }") == 1);
+    CHECK(entryErrors("let () -> start -> () { }") == 1);
+    CHECK(entryErrors("let () -> start -> (code :: bool) { true -| }") == 1);
+    CHECK(entryErrors("let start <- 5;") == 1);
+    CHECK(entryErrors("let () -> f -> () { let () -> start -> (code :: int) { 0 -| } }") == 1);
+    CHECK(semaErrors("let () -> main -> (code :: int) { 0 -| }") == 0);
 }
 
 // checks that every integer type resolves, and that integers of different types never mix without a conversion
@@ -623,8 +623,8 @@ TEST_CASE("Sema: fixes", "[sema]") {
     // code that never runs comes out whole lines at a time, leaving the functions, which are hoisted
     CHECK(fixed("let () -> f -> (r :: int) {\n    1 -|\n    let x <- 2;\n    let y <- 3;\n}\n") == "let () -> f -> (r :: int) {\n    1 -|\n}\n");
     CHECK(fixed("let n <- 3;\nmatch (n) {\n    _ -> { }\n    0 -> { }\n    1 -> { }\n}\n") == "let n <- 3;\nmatch (n) {\n    _ -> { }\n}\n");
-    // a program with no main gets one at the end
-    CHECK(fixed("let x <- 1;\n", 0, true) == "let x <- 1;\n\nlet () -> main -> (code :: int) { 0 -| }\n");
+    // a program with no start gets one at the end
+    CHECK(fixed("let x <- 1;\n", 0, true) == "let x <- 1;\n\nlet () -> start -> (code :: int) { 0 -| }\n");
     // a diagnostic with no single mechanical fix has none
     CHECK(fixed("let x :: i8 <- 300;").empty());
 }

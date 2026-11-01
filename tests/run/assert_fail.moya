@@ -5,6 +5,6 @@ let (n :: int) -> half -> (r :: int) {
     assert (n % 2 = 0);
     n / 2 -|
 }
-let () -> main -> (code :: int) {
+let () -> start -> (code :: int) {
     half(7) -|
 }
