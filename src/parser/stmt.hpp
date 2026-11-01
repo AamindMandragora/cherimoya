@@ -62,7 +62,7 @@ public:
     LetStmt(std::unique_ptr<Pattern> p, std::unique_ptr<Type> t, std::unique_ptr<Expr> i, Span s) : Stmt(StmtKind::Let, s), pattern(std::move(p)), type(std::move(t)), init(std::move(i)) {}
 };
 
-// wit {predicate}; or wit {T :: Interface}; where bound is the interface for the latter
+// wit {predicate}; or wit {T :: Protocol}; where bound is the protocol for the latter
 class WitStmt : public Stmt {
 public:
     std::unique_ptr<Expr> predicate;

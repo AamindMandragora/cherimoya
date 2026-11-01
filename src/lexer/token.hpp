@@ -26,8 +26,6 @@ enum class TokenKind {
     KwWit, KwAssert, KwOld,
     // the bool literals
     KwTrue, KwFalse,
-    // macro keywords
-    KwMacro, KwMoya,
     // flow: <- -> -|
     LArrow, RArrow, Yield,
     // pipes: |> <|
@@ -44,8 +42,8 @@ enum class TokenKind {
     Eq, Ne, EqEq, NeEq,
     // what the operator table generates: every X<- and every extra operator
     CompoundAssign, ExtraOp,
-    // macro tokens: @ $
-    At, Dollar,
+    // the attribute token: @
+    At,
     // punctuation: ( ) [ ] { } , ; . : :: ... _
     LParen, RParen, LBracket, RBracket, LBrace, RBrace,
     Comma, Semi, Dot, Colon, ColonColon, Ellipsis, Underscore,

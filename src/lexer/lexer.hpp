@@ -180,7 +180,6 @@ class Lexer {
             case ',': emit(TokenKind::Comma, 1); break;
             case ';': emit(TokenKind::Semi, 1); break;
             case '@': emit(TokenKind::At, 1); break;
-            case '$': emit(TokenKind::Dollar, 1); break;
             default: {
                 // a non-ASCII character is several bytes, a lead byte and its continuation bytes, and it's one mistake
                 size_t length = 1;

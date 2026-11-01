@@ -97,12 +97,12 @@ TEST_CASE("Lexer: single, double, and triple operators are distinct", "[lexer]")
     CHECK(kindsOf(lexStr("===")) == (std::vector<K>{K::EqEq, K::Eq}));
 }
 
-// checks if macro-related tokens lex correctly
-TEST_CASE("Lexer: macro tokens @ and $", "[lexer]") {
+// checks that @ lexes as the attribute token, and that $ is an extra operator
+TEST_CASE("Lexer: the attribute token @ and the extra operator $", "[lexer]") {
     CHECK(kindsOf(lexStr("@"))  == std::vector<K>{K::At});
-    CHECK(kindsOf(lexStr("$"))  == std::vector<K>{K::Dollar});
     CHECK(kindsOf(lexStr("@foo")) == (std::vector<K>{K::At, K::Identifier}));
-    CHECK(kindsOf(lexStr("$x"))   == (std::vector<K>{K::Dollar, K::Identifier}));
+    CHECK(kindsOf(lexStr("f $ x"))   == (std::vector<K>{K::Identifier, K::ExtraOp, K::Identifier}));
+    CHECK(lookupOperator("$")->assoc == Assoc::Right);
     CHECK(kindsOf(lexStr("@tier(strict);")) == (std::vector<K>{
         K::At, K::Identifier, K::LParen, K::Identifier, K::RParen, K::Semi}));
 }
@@ -239,8 +239,8 @@ TEST_CASE("Lexer: every keyword and built-in type lexes as its own kind", "[lexe
     CHECK(has(lexStr("old"),K::KwOld,"old"));
     CHECK(has(lexStr("true"),K::KwTrue,"true"));
     CHECK(has(lexStr("false"),K::KwFalse,"false"));
-    CHECK(has(lexStr("macro"),K::KwMacro,"macro"));
-    CHECK(has(lexStr("moya"),K::KwMoya,"moya"));
+    CHECK(has(lexStr("macro"),K::Identifier,"macro"));
+    CHECK(has(lexStr("moya"),K::Identifier,"moya"));
     for (const char* ty : {
         "i8","i16","i32","i64","i128","i8u","i16u","i32u","i64u","i128u",
         "i8w","i16w","i32w","i64w","i128w","i8uw","i16uw","i32uw","i64uw","i128uw",
@@ -407,13 +407,4 @@ TEST_CASE("Lexer: a complete function lexes to the expected sequence", "[lexer]"
     CHECK(std::count(ks.begin(), ks.end(), K::KwPtr) == 1);
     CHECK(std::count(ks.begin(), ks.end(), K::ExtraOp) == 1);
     CHECK(std::count(ks.begin(), ks.end(), K::RArrow) == 2);
-}
-
-// tests lexing a macro declaration
-TEST_CASE("Lexer: macro declaration lexes correctly", "[lexer]") {
-    const char* src = "macro (a :: expr, b :: expr) -> twice -> (stmt) { moya { $a; $b; } -| }";
-    auto ks = kindsOf(lexStr(src));
-    CHECK(ks.front() == K::KwMacro);
-    CHECK(std::count(ks.begin(), ks.end(), K::KwMoya) == 1);
-    CHECK(std::count(ks.begin(), ks.end(), K::Dollar) == 2);
 }
