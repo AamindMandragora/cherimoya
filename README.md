@@ -61,7 +61,7 @@ Cherimoya is early. What works today:
 - **The numeric model**: every integer from 8 to 128 bits, signed or unsigned, trapping or wrapping, and every float from `f16` to `f128`, including bfloat16, NaN-free or NaN-carrying, and both FP8 encodings, stored as bytes and computed in f32. Literals take the type their context wants, and conversions go between any two numbers.
 - **Code generation through LLVM** for all of that, with optimization, native object files, cross-compilation, and linking with a small runtime. Overflow, division by zero, out-of-range shifts, a NaN made in or converted into a NaN-free float, an `f8` that overflows, a conversion into a trapping integer, a character, or a boolf that doesn't hold the value, and a failed `assert` trap with their line.
 
-- **A language server**, `cheri lsp`, with a VS Code extension: diagnostics as you type, highlighting by meaning, hover, go to definition, references, rename, an outline, completion ranked by the type a position expects, and signature help.
+- **A language server**, `cheri lsp`, with a VS Code extension: diagnostics as you type, highlighting by meaning, hover with the documentation your comments give a name, go to definition, references, rename, an outline, completion ranked by the type a position expects, and signature help.
 
 Not yet: strings, packs, ranges, comprehensions, and folds, for-each loops, handles and arrays, records, sums, protocols, generics, closures and functions as values, operator overloading and the extra operators, modules, ownership checking, and verification with Z3.
 
