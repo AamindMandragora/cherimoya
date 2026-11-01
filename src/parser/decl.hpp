@@ -35,7 +35,7 @@ struct GenericParam {
 
 /*
 let [generics] (inputs) -> name -> (outputs) wit {obligations} body
-where name is an identifier or an overloadable operator, body is null for externs and interface members, and sema fills in the function's symbol
+where name is an identifier or an overloadable operator, body is null for externs and protocol members, and sema fills in the function's symbol
 */
 class FnDecl : public Decl {
 public:
@@ -56,7 +56,7 @@ enum class TypeForm {
     Product,     // type Point <- [x :: f64, y :: f64];  optionally with an invariant
     Sum,         // type Shape <- Circle[f64] | Rect[f64, f64];
     Enum,        // type Dir <- N | E | S | W;
-    Interface,   // type Ord[T] <- [ let (a :: peek T, b :: peek T) -> cmp -> (r :: int) ];
+    Protocol,    // type Ord[T] <- [ let (a :: peek T, b :: peek T) -> cmp -> (r :: int) ];
 };
 
 // a sum's variant and its payload types: Rect[f64, f64]
@@ -67,7 +67,7 @@ struct Variant {
 
 /*
 type name[generics] <- rhs;
-where rhs is the type for newtypes, refinements, and products, the variants for sums and enums, and the members for interfaces
+where rhs is the type for newtypes, refinements, and products, the variants for sums and enums, and the members for protocols
 */
 class TypeDecl : public Decl {
 public:

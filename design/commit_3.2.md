@@ -18,13 +18,13 @@ A function is `let [generics] (inputs) -> name -> (outputs) wit {obligations} { 
 - **Inputs and outputs** reuse the parameter list from closures, and refinements come along with the types. Outputs are always parenthesized, and `()` is void.
 - **The name** is an identifier or any overloadable operator token: the built-in `+ - * / % & | ^ << >> ~ ! ==` and every extra operator. The lexer's table already records which operators are overloadable, so the check is one line. Unary and binary `-` share a name and are told apart by arity, which is sema's job.
 - **`wit {obligations}`** is optional and holds an expression.
-- **The body** is a block. An extern has `;` instead, and an interface member has neither.
+- **The body** is a block. An extern has `;` instead, and a protocol member has neither.
 
 ## Type Definitions
 
 Every type definition is `type Name[generics] <- right side;`. There is one `TypeDecl` node, and the parser records which form the right side took:
 
-- **interface**: the right side opens with `[ let`. Members are signatures without bodies, separated by commas, parsed with the same `parseFnDecl` in member mode.
+- **protocol**: the right side opens with `[ let`. Members are signatures without bodies, separated by commas, parsed with the same `parseFnDecl` in member mode.
 - **sum**: the right side has more than one alternative separated by `|`. Each alternative is parsed as a type, so `Circle[f64]` comes out as a named type with type arguments, and is then turned into a variant with a payload. A dotted name or a value argument isn't a variant and is an error.
 - **enum**: a sum where no variant has a payload.
 - **product**: a record, optionally refined with an invariant.

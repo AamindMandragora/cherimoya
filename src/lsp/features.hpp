@@ -113,7 +113,7 @@ inline Array semanticTokens(const Document& document) {
     for (auto& token : document.tokens) {
         Span span{token.loc, token.loc + token.text.size()};
         auto kind = static_cast<int>(token.kind);
-        if (kind >= static_cast<int>(TokenKind::KwLet) && kind <= static_cast<int>(TokenKind::KwMoya)) {
+        if (kind >= static_cast<int>(TokenKind::KwLet) && kind <= static_cast<int>(TokenKind::KwFalse)) {
             pieces.push_back({span, TokenType::Keyword, 0});
         } else if (token.kind == TokenKind::TypeName) {
             pieces.push_back({span, TokenType::Type, 0});
@@ -213,8 +213,6 @@ inline std::string keywordHelp(std::string_view keyword) {
         {"old", "In an output refinement, a parameter's value on entry: `{count(g) = count(old g)}`."},
         {"true", "One of the two `bool` values."},
         {"false", "One of the two `bool` values."},
-        {"macro", "Reserved for macros, which come later."},
-        {"moya", "Reserved for macros, which come later."},
     };
     auto found = help.find(keyword);
     return found == help.end() ? "" : found->second;

@@ -478,7 +478,7 @@ public:
         return "<unknown-stmt>";
     }
 
-    // prints a declaration, where an interface member has no body and no ;
+    // prints a declaration, where a protocol member has no body and no ;
     std::string decl(const Decl& d, int depth, bool member = false) {
         switch (d.kind) {
             case DeclKind::Fn: {
@@ -495,7 +495,7 @@ public:
                 std::string s = "type " + std::string(t.name.text);
                 if (!t.generics.empty()) s += generics(t.generics, depth);
                 s += " <- ";
-                if (t.form == TypeForm::Interface) {
+                if (t.form == TypeForm::Protocol) {
                     s += "[ ";
                     for (size_t i = 0; i < t.members.size(); i++) s += (i ? ", " : "") + decl(*t.members[i], depth, true);
                     s += " ]";

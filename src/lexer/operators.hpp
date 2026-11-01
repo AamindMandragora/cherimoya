@@ -104,6 +104,7 @@ inline const std::deque<OpInfo>& operatorTable() {
         // combinators
         add(">>=", K::ExtraOp,     C::Extra,      true,  15, 0, A::Left,  false);
         add("=<<", K::ExtraOp,     C::Extra,      true,  15, 0, A::Right, false);
+        add("$",   K::ExtraOp,     C::Extra,      true,  15, 0, A::Right, false);
         add("<$>", K::ExtraOp,     C::Extra,      true,  15, 0, A::Left,  false);
         add("<~>", K::ExtraOp,     C::Extra,      true,  15, 0, A::Left,  false);
         add("~>",  K::ExtraOp,     C::Extra,      true,  15, 0, A::Left,  false);

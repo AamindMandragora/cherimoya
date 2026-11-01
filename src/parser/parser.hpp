@@ -613,7 +613,7 @@ class Parser {
         return std::make_unique<LetStmt>(std::move(pattern), std::move(type), std::move(init), Span{start.loc, prevEnd()});
     }
 
-    // parses wit {predicate}; or wit {T :: Interface};
+    // parses wit {predicate}; or wit {T :: Protocol};
     std::unique_ptr<Stmt> parseWit() {
         auto start = advance();
         expect(TokenKind::LBrace, "'{' after 'wit' in 'wit {predicate};'");
@@ -812,9 +812,9 @@ class Parser {
         std::unique_ptr<Type> rhs = nullptr;
         std::vector<Variant> variants;
         std::vector<std::unique_ptr<FnDecl>> members;
-        // an interface: a pack of signatures, recognized by the leading let
+        // a protocol: a pack of signatures, recognized by the leading let
         if (peek().kind == TokenKind::LBracket && peekAt(1).kind == TokenKind::KwLet) {
-            form = TypeForm::Interface;
+            form = TypeForm::Protocol;
             advance();
             while (peek().kind == TokenKind::KwLet) {
                 auto let = advance();
@@ -822,7 +822,7 @@ class Parser {
                 if (peek().kind != TokenKind::Comma) break;
                 advance();
             }
-            expect(TokenKind::RBracket, "']' after the interface's signatures in 'type Name <- [let ..., let ...];'");
+            expect(TokenKind::RBracket, "']' after the protocol's signatures in 'type Name <- [let ..., let ...];'");
         } else {
             rhs = parseType();
             // a sum or an enum: more than one alternative

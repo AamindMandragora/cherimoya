@@ -14,7 +14,7 @@ The hierarchies reference each other: a refinement holds a predicate expression,
 
 The type grammar is built from small pieces that nest:
 
-- `NamedType`: a dotted path and its generic arguments. `int`, `std.mem.Allocator`, `Map[K, V]`, and `Fn[F, [S, T], S]` are all named types. Function types don't need their own node, since `Fn` is an ordinary interface.
+- `NamedType`: a dotted path and its generic arguments. `int`, `std.mem.Allocator`, `Map[K, V]`, and `Fn[F, [S, T], S]` are all named types. Function types don't need their own node, since `Fn` is an ordinary protocol.
 - `HandleType`: `ptr` or `arr`, an optional bracketed argument, and the element type. `arr[16] T` and `arr[Chunk] T` look the same to the parser, and sema decides by kind whether the argument is a size or an allocator.
 - `QualifiedType`: `mut`, where it sits, and what it applies to. Where `mut` sits is the whole point. `mut arr T` rebinds the handle, `arr mut T` mutates the elements, and `mut int` is a mutable value. The parser records the position when it builds the node: a `mut` in front of a handle is `Handle`, a `mut` directly inside a handle is `Elements`, and anything else is `Value`. The position also falls out of the nesting, but storing it saves every later pass from re-deriving it.
 - `ModeType`: `unscoped`, `peek`, or `wit`, and the type it applies to.
@@ -58,7 +58,7 @@ At statement level, the parser reads an expression first and then looks at what 
 
 The expression has to stop before an assignment's `<-`, or `xs <- [1, 2];` would be read as constructing `xs` from a pack. The flag that turns `<-` into a stop for comprehension clauses in commit 2 does the same job here: it's set at the top of a statement, cleared inside every nested bracket, so `p <- Point <- [1, 2];` still constructs on the right side.
 
-A few statements start with a keyword. `let pattern :: type <- init;` needs an initializer, and `_` means uninitialized. `wit {p};` and `wit {T :: I};` share a node, with the interface as an optional bound. `assert (p);` holds its condition. `swap`, `take`, and `replace` are keywords but are called like functions, so their NUD produces a plain name for the call to wrap. Since no user name can collide with a keyword, sema can still tell an intrinsic call apart.
+A few statements start with a keyword. `let pattern :: type <- init;` needs an initializer, and `_` means uninitialized. `wit {p};` and `wit {T :: I};` share a node, with the protocol as an optional bound. `assert (p);` holds its condition. `swap`, `take`, and `replace` are keywords but are called like functions, so their NUD produces a plain name for the call to wrap. Since no user name can collide with a keyword, sema can still tell an intrinsic call apart.
 
 Yields take an optional value and an optional target: `count -|`, `-| i`, `100 -| early`, `-| repeat`. After `-|`, an identifier, `repeat`, or `match` is always the target. A statement after a bare yield in the same scope would be unreachable anyway.
 

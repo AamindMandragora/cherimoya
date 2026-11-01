@@ -379,7 +379,7 @@ static std::string dumpDecl(const Decl& d) {
                 case TypeForm::Product: s += " product"; break;
                 case TypeForm::Sum: s += " sum"; break;
                 case TypeForm::Enum: s += " enum"; break;
-                case TypeForm::Interface: s += " interface"; break;
+                case TypeForm::Protocol: s += " protocol"; break;
             }
             if (t.rhs) s += " " + dumpType(*t.rhs);
             for (auto& v : t.variants) {
@@ -1161,11 +1161,11 @@ TEST_CASE("Parser: type definitions", "[parser][decl]") {
     CHECK(stmtDump("type Dir <- N | E | S | W;") == "(type Dir enum N E S W)");
     CHECK(stmtDump("type Option[T] <- Some[T] | None;") == "(type Option [T] sum (Some T) None)");
     CHECK(stmtDump("type Ord[T] <- [ let (a :: peek T, b :: peek T) -> cmp -> (r :: int) ];")
-        == "(type Ord [T] interface (fn-decl cmp (a:(peek T) b:(peek T)) -> (r:int) no-body))");
+        == "(type Ord [T] protocol (fn-decl cmp (a:(peek T) b:(peek T)) -> (r:int) no-body))");
     CHECK(stmtDump("type Num[T] <- [ let (a :: T, b :: T) -> + -> (r :: T), let (a :: T) -> - -> (r :: T) ];")
-        == "(type Num [T] interface (fn-decl + (a:T b:T) -> (r:T) no-body) (fn-decl - (a:T) -> (r:T) no-body))");
+        == "(type Num [T] protocol (fn-decl + (a:T b:T) -> (r:T) no-body) (fn-decl - (a:T) -> (r:T) no-body))");
     CHECK(stmtDump("type Spaceship[T] <- [ let (a :: peek T, b :: peek T) -> <=> -> (r :: int) ];")
-        == "(type Spaceship [T] interface (fn-decl <=> (a:(peek T) b:(peek T)) -> (r:int) no-body))");
+        == "(type Spaceship [T] protocol (fn-decl <=> (a:(peek T) b:(peek T)) -> (r:int) no-body))");
     CHECK(stmtDump("type List[T, A :: Allocator <- Global] <- [data :: arr[A] mut T, count :: i64u] {l : l.count <= len(l.data) && written(l.data) == [0, ..., <l.count]};")
         == "(type List [T A::Allocator<-Global] product (refine (record data:(arr [A] (mut@elems T)) count:i64u) l : "
            "(&& (chain (. l count) <= (call len (. l data))) (== (call written (. l data)) (range 0 ... <(. l count))))))");

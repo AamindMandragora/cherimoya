@@ -34,9 +34,6 @@ inline const std::unordered_map<std::string_view, TokenKind>& keywordTable() {
         // the bool literals
         {"true",      TokenKind::KwTrue},
         {"false",     TokenKind::KwFalse},
-        // macro keywords
-        {"macro",     TokenKind::KwMacro},
-        {"moya",      TokenKind::KwMoya},
 
         // signed trapping integers
         {"i8",    TokenKind::TypeName},
