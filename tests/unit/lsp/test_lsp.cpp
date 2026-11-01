@@ -123,6 +123,7 @@ TEST_CASE("LSP: hover, definition, and references", "[lsp]") {
     CHECK(typeHelp("f16n") == "IEEE half precision, which can hold a NaN and orders it below every number.");
     CHECK(typeHelp("f8") == typeHelp("f8e4m3"));
     CHECK(typeHelp("char") == "One ASCII character, 0 to 7F, held in a byte.");
+    CHECK(typeHelp("boolf").find("fuzzy boolean") != std::string::npos);
     CHECK(builtinHelp("add").empty());
     auto jump = definition(document, offsetOf(text, "add(x"));
     CHECK(jump.getAsObject()->getObject("range")->getObject("start")->getInteger("character") == 28);

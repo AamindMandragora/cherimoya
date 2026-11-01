@@ -20,9 +20,10 @@ public:
     virtual std::string toString() const = 0;
 };
 
-// a char is one ASCII character, a rune is one Unicode scalar value, and never is the type of a yield, since control doesn't continue past one
+// a boolf is a fuzzy boolean, a truth value from 0 to 1, a char is one ASCII character, a rune is one Unicode scalar value, and never is the type of a yield, since control doesn't continue past one
 enum class PrimitiveKind {
     Bool,
+    Boolf,
     Char,
     Rune,
     Void,
@@ -37,6 +38,8 @@ public:
         switch (primitive) {
         case PrimitiveKind::Bool:
             return "bool";
+        case PrimitiveKind::Boolf:
+            return "boolf";
         case PrimitiveKind::Char:
             return "char";
         case PrimitiveKind::Rune:
@@ -98,6 +101,11 @@ inline bool isCharacter(SemaType* type) {
     if (type == nullptr || type->kind != SemaTypeKind::Primitive) return false;
     auto primitive = static_cast<PrimitiveSemaType*>(type)->primitive;
     return primitive == PrimitiveKind::Char || primitive == PrimitiveKind::Rune;
+}
+
+// checks whether a sema type is boolf, the fuzzy boolean
+inline bool isBoolf(SemaType* type) {
+    return type != nullptr && type->kind == SemaTypeKind::Primitive && static_cast<PrimitiveSemaType*>(type)->primitive == PrimitiveKind::Boolf;
 }
 
 // a function type is its parameters' types and the type it yields
