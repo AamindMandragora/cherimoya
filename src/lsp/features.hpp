@@ -85,6 +85,60 @@ inline std::string render(const Symbol& symbol) {
     return "let (" + inputs + ") -> " + name + " -> (" + outputs + ")";
 }
 
+// what a user wrote to document a symbol: the run of comment lines directly above its declaration, with no blank line between, then a comment at the end of the line it's declared on, as long as no other declaration sits between the two, each without its # and the space after it
+inline std::string docOf(const Document& document, const Symbol& symbol) {
+    std::string_view text = document.manager.text();
+    auto lineOf = [&](size_t offset) { return document.lines->position(offset).line; };
+    // a comment's words, and whether it's alone on its line, with only whitespace before it
+    auto words = [&](Span comment) {
+        std::string_view body = text.substr(comment.start + 1, comment.length() - 1);
+        if (!body.empty() && body.front() == ' ') body.remove_prefix(1);
+        while (!body.empty() && (body.back() == '\r' || body.back() == ' ')) body.remove_suffix(1);
+        return std::string(body);
+    };
+    auto isAlone = [&](Span comment) {
+        for (size_t i = comment.start; i > 0 && text[i - 1] != '\n'; i--) {
+            if (!std::isspace(static_cast<unsigned char>(text[i - 1]))) return false;
+        }
+        return true;
+    };
+    // a function is declared from its let, and anything else from its name
+    size_t start = symbol.function ? symbol.function->span.start : symbol.span.start;
+    uint32_t wanted = lineOf(start);
+    std::vector<std::string> above;
+    const auto& comments = document.comments;
+    for (size_t i = comments.size(); i > 0; i--) {
+        Span comment = comments[i - 1];
+        if (comment.start >= start) continue;
+        uint32_t line = lineOf(comment.start);
+        if (wanted == 0 || line != wanted - 1 || !isAlone(comment)) break;
+        above.push_back(words(comment));
+        wanted = line;
+    }
+    std::string doc;
+    for (size_t i = above.size(); i > 0; i--) doc += (doc.empty() ? "" : "\n") + above[i - 1];
+    // the trailing comment is on the name's line, after it, with no other declaration in between, so a parameter's comment isn't its function's too, where a function's own outputs and locals are part of its declaration
+    uint32_t nameLine = lineOf(symbol.span.start);
+    for (Span comment : comments) {
+        if (comment.start < symbol.span.end || lineOf(comment.start) != nameLine) continue;
+        bool isTheirs = false;
+        for (auto& use : document.sema.allUses()) {
+            bool isOwn = symbol.function && isInside(use.span, symbol.function->span);
+            if (use.isDeclaration && !isOwn && use.symbol != &symbol && use.span.start >= symbol.span.end && use.span.start < comment.start) isTheirs = true;
+        }
+        if (!isTheirs) doc += (doc.empty() ? "" : "\n\n") + words(comment);
+        break;
+    }
+    return doc;
+}
+
+// a symbol's documentation as the editor's markdown, or nothing when it has none
+inline Value docValue(const Document& document, const Symbol& symbol) {
+    std::string doc = docOf(document, symbol);
+    if (doc.empty()) return nullptr;
+    return Object{{"kind", "markdown"}, {"value", doc}};
+}
+
 // every diagnostic as the editor's, where a warning is severity 2, an error is 1, and each note is related information pointing at its own span
 inline Array diagnostics(const Document& document) {
     Array result;
@@ -225,7 +279,7 @@ inline std::string builtinHelp(std::string_view word) {
     return *kind == TokenKind::TypeName ? typeHelp(word) : keywordHelp(word);
 }
 
-// what a name under the cursor is, shown as its declaration in a cherimoya code block, or what a built-in type or keyword means, or null where there's neither
+// what a name under the cursor is, shown as its declaration in a cherimoya code block and its documentation under it, or what a built-in type or keyword means, or null where there's neither
 inline Value hover(const Document& document, size_t offset) {
     const Use* use = useAt(document, offset);
     if (use == nullptr) {
@@ -238,7 +292,10 @@ inline Value hover(const Document& document, size_t offset) {
         }
         return nullptr;
     }
-    return Object{{"contents", Object{{"kind", "markdown"}, {"value", "```cherimoya\n" + render(*use->symbol) + "\n```"}}}, {"range", rangeOf(document, use->span)}};
+    // the declaration, then what the user wrote about it
+    std::string doc = docOf(document, *use->symbol);
+    std::string value = "```cherimoya\n" + render(*use->symbol) + "\n```" + (doc.empty() ? "" : "\n" + doc);
+    return Object{{"contents", Object{{"kind", "markdown"}, {"value", value}}}, {"range", rangeOf(document, use->span)}};
 }
 
 // where the name under the cursor is declared, or null where there's no name
@@ -340,7 +397,7 @@ inline Array documentSymbols(const Document& document) {
     return outlineOf(document, document.program);
 }
 
-// everything that could be typed at the cursor: the names visible there, then keywords and types, where a name whose type is what the position expects comes first, and a function counts when calling it gives that type
+// everything that could be typed at the cursor: the names visible there, each with its documentation, then keywords and types, where a name whose type is what the position expects comes first, and a function counts when calling it gives that type
 inline Array completion(const Document& document, size_t offset) {
     // the narrowest expected type around the cursor, which is the one for the position it's actually in
     const Expectation* expected = nullptr;
@@ -361,7 +418,10 @@ inline Array completion(const Document& document, size_t offset) {
         // what the name gives, where a function gives what calling it does, so it fits when its return type is the expected one
         SemaType* gives = symbol->kind == SymbolKind::Function ? static_cast<FunctionSemaType*>(symbol->type)->returns : symbol->type;
         bool fits = expected && gives == expected->type;
-        result.push_back(Object{{"label", std::string(name)}, {"kind", symbol->kind == SymbolKind::Function ? 3 : 6}, {"detail", render(*symbol)}, {"sortText", (fits ? "0" : "1") + std::string(name)}});
+        Object item{{"label", std::string(name)}, {"kind", symbol->kind == SymbolKind::Function ? 3 : 6}, {"detail", render(*symbol)}, {"sortText", (fits ? "0" : "1") + std::string(name)}};
+        Value doc = docValue(document, *symbol);
+        if (doc.kind() != Value::Null) item["documentation"] = std::move(doc);
+        result.push_back(std::move(item));
     }
     for (auto& [word, kind] : keywordTable()) {
         Object documentation{{"kind", "markdown"}, {"value", builtinHelp(word)}};
@@ -370,7 +430,7 @@ inline Array completion(const Document& document, size_t offset) {
     return result;
 }
 
-// the signature of the call the cursor is in, the innermost one, with the parameter the cursor is at highlighted, or null outside any call
+// the signature of the call the cursor is in, the innermost one, with the parameter the cursor is at highlighted, and the function's and each parameter's documentation, or null outside any call
 inline Value signatureHelp(const Document& document, size_t offset) {
     const Call* call = nullptr;
     for (auto& candidate : document.sema.allCalls()) {
@@ -386,7 +446,10 @@ inline Value signatureHelp(const Document& document, size_t offset) {
     for (size_t i = 0; i < function.function->inputs.size(); i++) {
         std::string text = std::string(function.function->inputs[i].name.text) + " :: " + type.params[i]->toString();
         size_t at = label.find(text, from);
-        parameters.push_back(Object{{"label", Array{static_cast<int64_t>(at), static_cast<int64_t>(at + text.size())}}});
+        Object parameter{{"label", Array{static_cast<int64_t>(at), static_cast<int64_t>(at + text.size())}}};
+        Value doc = docValue(document, *function.function->inputs[i].decl);
+        if (doc.kind() != Value::Null) parameter["documentation"] = std::move(doc);
+        parameters.push_back(std::move(parameter));
         from = at + text.size();
     }
     // the cursor is at the parameter after every argument that ends before it
@@ -395,8 +458,11 @@ inline Value signatureHelp(const Document& document, size_t offset) {
         if (arg.end < offset) active++;
     }
     if (!parameters.empty()) active = std::min(active, parameters.size() - 1);
+    Object signature{{"label", label}, {"parameters", std::move(parameters)}};
+    Value doc = docValue(document, function);
+    if (doc.kind() != Value::Null) signature["documentation"] = std::move(doc);
     return Object{
-        {"signatures", Array{Object{{"label", label}, {"parameters", std::move(parameters)}}}},
+        {"signatures", Array{std::move(signature)}},
         {"activeSignature", 0},
         {"activeParameter", static_cast<int64_t>(active)},
     };

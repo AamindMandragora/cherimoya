@@ -132,6 +132,45 @@ TEST_CASE("LSP: hover, definition, and references", "[lsp]") {
     CHECK(references(document, offsetOf(text, "x <-"), true).size() == 4);
 }
 
+// checks that a declaration's documentation is the comments right above it and the one at the end of its line, and that hover, completion, and signature help show it
+TEST_CASE("LSP: documentation comments", "[lsp]") {
+    std::string text =
+        "# not the docs, since a blank line follows\n"
+        "\n"
+        "# adds two numbers\n"
+        "#   and gives their sum\n"
+        "let (\n"
+        "    a :: int,  # the first\n"
+        "    b :: int\n"
+        ") -> add -> (r :: int) { a + b -| }\n"
+        "let limit <- 4096;  # bytes per chunk\n"
+        "let (n :: int) -> f -> (r :: int) { n -| }  # the identity\n"
+        "let plain <- 1;\n"
+        "let () -> main -> (code :: int) { add(limit, ) -| }";
+    Document document("file:///t.moya", text);
+    auto shown = [&](size_t offset) { return stringOf(*hover(document, offset).getAsObject()->get("contents"), "value"); };
+    CHECK(shown(offsetOf(text, "add ->")) == "```cherimoya\nlet (a :: int, b :: int) -> add -> (r :: int)\n```\nadds two numbers\n  and gives their sum");
+    CHECK(shown(offsetOf(text, "a ::")) == "```cherimoya\na :: int\n```\nthe first");
+    CHECK(shown(offsetOf(text, "b ::")) == "```cherimoya\nb :: int\n```");
+    CHECK(shown(offsetOf(text, "limit <-")) == "```cherimoya\nlet limit :: int\n```\nbytes per chunk");
+    // the identity is f's, since n is declared before f on that line
+    CHECK(shown(offsetOf(text, "f ->")) == "```cherimoya\nlet (n :: int) -> f -> (r :: int)\n```\nthe identity");
+    CHECK(shown(offsetOf(text, "n ::")) == "```cherimoya\nn :: int\n```");
+    CHECK(shown(offsetOf(text, "plain")) == "```cherimoya\nlet plain :: int\n```");
+    // completion and signature help carry the same documentation
+    std::string completed;
+    for (auto& item : completion(document, offsetOf(text, "limit, )"))) {
+        if (stringOf(item, "label") == "limit") completed = stringOf(*item.getAsObject()->get("documentation"), "value");
+    }
+    CHECK(completed == "bytes per chunk");
+    auto help = signatureHelp(document, offsetOf(text, ", )") + 2);
+    auto& signature = *(*help.getAsObject()->getArray("signatures"))[0].getAsObject();
+    CHECK(stringOf(*signature.get("documentation"), "value") == "adds two numbers\n  and gives their sum");
+    auto& parameters = *signature.getArray("parameters");
+    CHECK(stringOf(*parameters[0].getAsObject()->get("documentation"), "value") == "the first");
+    CHECK(parameters[1].getAsObject()->get("documentation") == nullptr);
+}
+
 // checks that rename edits every use, and refuses a non-name, a clash in one scope, and a rename that would change what a use means
 TEST_CASE("LSP: rename", "[lsp]") {
     std::string text = "let (n :: int) -> f -> (r :: int) { let x <- n; let y <- 2; { let z <- x; } x + y -| }";
