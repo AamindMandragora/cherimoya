@@ -9,9 +9,9 @@
 
 ;; edits .moya files and starts cheri's language server for them, with eglot, built into emacs, or lsp-mode, if
 ;; it's installed, which gives emacs the server's diagnostics, hovers, definitions, references, renames, outline,
-;; completion, and signature help. the server colors the code too, through semantic tokens, which eglot reads
-;; from emacs 31 and lsp-mode with lsp-semantic-tokens-enable, so the mode itself only knows comments, strings,
-;; brackets, and indentation
+;; completion, signature help, quick fixes, and inlay hints, which lsp-mode shows with lsp-inlay-hint-enable. the
+;; server colors the code too, through semantic tokens, which eglot reads from emacs 31 and lsp-mode with
+;; lsp-semantic-tokens-enable, so the mode itself only knows comments, strings, brackets, and indentation
 
 ;;; Code:
 
