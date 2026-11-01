@@ -68,17 +68,42 @@ inline bool isVisible(const Document& document, const Symbol& symbol, size_t off
     return ownerAt(document, offset) == symbol.owner;
 }
 
-// shows a symbol the way it's declared: a function as let (a :: int) -> f -> (r :: int), a binding as let x :: mut i8, and a parameter as n :: int
-inline std::string render(const Symbol& symbol) {
+// a span's text, cut at its first line break with ... after it, so something written over several lines fits on one
+inline std::string excerpt(const Document& document, Span span) {
+    std::string_view text = document.manager.text().substr(span.start, span.length());
+    size_t newline = text.find('\n');
+    return newline == std::string_view::npos ? std::string(text) : std::string(text.substr(0, newline)) + " ...";
+}
+
+// how one of a function's inputs is written in its signature, n :: int, with its default after it, b :: int <- 1
+inline std::string inputText(const Document& document, const Symbol& function, size_t i) {
+    auto& input = function.function->inputs[i];
+    std::string text = std::string(input.name.text) + " :: " + static_cast<const FunctionSemaType&>(*function.type).params[i]->toString();
+    return input.fallback ? text + " <- " + excerpt(document, input.fallback->span) : text;
+}
+
+// an input's default as it's written after the input, " <- 10", found from the function the input belongs to, or "" for anything without one
+inline std::string defaultOf(const Document& document, const Symbol& param) {
+    for (auto& symbol : document.sema.allSymbols()) {
+        if (symbol.kind != SymbolKind::Function) continue;
+        for (auto& input : symbol.function->inputs) {
+            if (input.decl == &param && input.fallback) return " <- " + excerpt(document, input.fallback->span);
+        }
+    }
+    return "";
+}
+
+// shows a symbol the way it's declared: a function as let (a :: int, b :: int <- 1) -> f -> (r :: int), a binding as let x :: mut i8, and a parameter as n :: int, or b :: int <- 1 when it's an input with a default
+inline std::string render(const Document& document, const Symbol& symbol) {
     std::string name(symbol.name);
     std::string mut = symbol.isMutable ? "mut " : "";
-    if (symbol.kind == SymbolKind::Param) return std::string(symbol.name) + " :: " + mut + symbol.type->toString();
+    if (symbol.kind == SymbolKind::Param) return std::string(symbol.name) + " :: " + mut + symbol.type->toString() + defaultOf(document, symbol);
     if (symbol.kind == SymbolKind::Binding) return "let " + std::string(symbol.name) + " :: " + mut + symbol.type->toString();
     auto& fn = *symbol.function;
     auto& type = static_cast<const FunctionSemaType&>(*symbol.type);
     std::string inputs;
     for (size_t i = 0; i < fn.inputs.size(); i++) {
-        inputs += std::string(fn.inputs[i].decl->name) + " :: " + type.params[i]->toString() + (i + 1 == fn.inputs.size() ? "" : ", ");
+        inputs += inputText(document, symbol, i) + (i + 1 == fn.inputs.size() ? "" : ", ");
     }
     std::string outputs;
     for (size_t i = 0; i < fn.outputs.size(); i++) {
@@ -323,7 +348,7 @@ inline Value hover(const Document& document, size_t offset) {
     }
     // the declaration, then what the user wrote about it
     std::string doc = docOf(document, *use->symbol);
-    std::string value = "```cherimoya\n" + render(*use->symbol) + "\n```" + (doc.empty() ? "" : "\n" + doc);
+    std::string value = "```cherimoya\n" + render(document, *use->symbol) + "\n```" + (doc.empty() ? "" : "\n" + doc);
     return Object{{"contents", Object{{"kind", "markdown"}, {"value", value}}}, {"range", rangeOf(document, use->span)}};
 }
 
@@ -409,7 +434,7 @@ inline Array outlineOf(const Document& document, const std::vector<std::unique_p
             if (let.pattern->kind != PatternKind::Binder) continue;
             auto& binder = static_cast<const BinderPattern&>(*let.pattern);
             if (!binder.decl) continue;
-            result.push_back(Object{{"name", std::string(binder.name.text)}, {"detail", render(*binder.decl)}, {"kind", 13}, {"range", rangeOf(document, let.span)}, {"selectionRange", rangeOf(document, binder.span)}});
+            result.push_back(Object{{"name", std::string(binder.name.text)}, {"detail", render(document, *binder.decl)}, {"kind", 13}, {"range", rangeOf(document, let.span)}, {"selectionRange", rangeOf(document, binder.span)}});
         }
     }
     return result;
@@ -418,7 +443,7 @@ inline Array outlineOf(const Document& document, const std::vector<std::unique_p
 inline Value outlineOf(const Document& document, const FnDecl& fn) {
     Array children = fn.body ? outlineOf(document, fn.body->stmts) : Array{};
     // kind 12 is a function, its range is the whole declaration, and its selection is the name, which is where the cursor jumps
-    return Object{{"name", std::string(fn.name.text)}, {"detail", render(*fn.decl)}, {"kind", 12}, {"range", rangeOf(document, fn.span)}, {"selectionRange", rangeOf(document, fn.decl->span)}, {"children", std::move(children)}};
+    return Object{{"name", std::string(fn.name.text)}, {"detail", render(document, *fn.decl)}, {"kind", 12}, {"range", rangeOf(document, fn.span)}, {"selectionRange", rangeOf(document, fn.decl->span)}, {"children", std::move(children)}};
 }
 
 // the outline: every top-level function and binding, with nested functions under the function around them
@@ -447,7 +472,7 @@ inline Array completion(const Document& document, size_t offset) {
         // what the name gives, where a function gives what calling it does, so it fits when its return type is the expected one
         SemaType* gives = symbol->kind == SymbolKind::Function ? static_cast<FunctionSemaType*>(symbol->type)->returns : symbol->type;
         bool fits = expected && gives == expected->type;
-        Object item{{"label", std::string(name)}, {"kind", symbol->kind == SymbolKind::Function ? 3 : 6}, {"detail", render(*symbol)}, {"sortText", (fits ? "0" : "1") + std::string(name)}};
+        Object item{{"label", std::string(name)}, {"kind", symbol->kind == SymbolKind::Function ? 3 : 6}, {"detail", render(document, *symbol)}, {"sortText", (fits ? "0" : "1") + std::string(name)}};
         Value doc = docValue(document, *symbol);
         if (doc.kind() != Value::Null) item["documentation"] = std::move(doc);
         result.push_back(std::move(item));
@@ -467,13 +492,12 @@ inline Value signatureHelp(const Document& document, size_t offset) {
     }
     if (!call) return nullptr;
     const Symbol& function = *call->function;
-    std::string label = render(function);
+    std::string label = render(document, function);
     // each parameter is a range of the label, found in order, so a parameter's text that also appears earlier can't be found twice
     Array parameters;
     size_t from = label.find('(') + 1;
-    auto& type = static_cast<const FunctionSemaType&>(*function.type);
     for (size_t i = 0; i < function.function->inputs.size(); i++) {
-        std::string text = std::string(function.function->inputs[i].name.text) + " :: " + type.params[i]->toString();
+        std::string text = inputText(document, function, i);
         size_t at = label.find(text, from);
         Object parameter{{"label", Array{static_cast<int64_t>(at), static_cast<int64_t>(at + text.size())}}};
         Value doc = docValue(document, *function.function->inputs[i].decl);
@@ -481,11 +505,16 @@ inline Value signatureHelp(const Document& document, size_t offset) {
         parameters.push_back(std::move(parameter));
         from = at + text.size();
     }
-    // the cursor is at the parameter after every argument that ends before it
+    // the cursor is at the input of the argument it's in, and between arguments, at the first input that no argument before it goes to, which is where the next unnamed argument would go
     size_t active = 0;
+    std::vector<bool> isFilled(parameters.size(), false);
+    std::optional<size_t> inside;
     for (auto& arg : call->args) {
-        if (arg.end < offset) active++;
+        if (arg.span.start <= offset && offset <= arg.span.end) inside = arg.input;
+        if (arg.span.end < offset && arg.input) isFilled[*arg.input] = true;
     }
+    while (active < isFilled.size() && isFilled[active]) active++;
+    if (inside) active = *inside;
     if (!parameters.empty()) active = std::min(active, parameters.size() - 1);
     Object signature{{"label", label}, {"parameters", std::move(parameters)}};
     Value doc = docValue(document, function);
@@ -506,7 +535,7 @@ inline bool endsLine(std::string_view text, size_t offset) {
     return offset == text.size() || text[offset] == '\n' || text[offset] == '\r' || text[offset] == '#';
 }
 
-// the hints the editor draws into the code in a range, in order: the type of every binding that wasn't given one, which double-clicking writes in, the parameter each argument goes to, unless the argument is a name that already says so, the type of each step of a pipe spread over lines, at the end of its line, and the name of a long function or named scope after its closing brace
+// the hints the editor draws into the code in a range, in order: the type of every binding that wasn't given one, which double-clicking writes in, the input each unnamed argument goes to, unless the argument is a name that already says so, the defaults a call leaves out, the type of each step of a pipe spread over lines, at the end of its line, and the name of a long function or named scope after its closing brace
 inline Array inlayHints(const Document& document, Span range) {
     std::string_view text = document.manager.text();
     std::vector<std::pair<size_t, Object>> hints;
@@ -522,13 +551,29 @@ inline Array inlayHints(const Document& document, Span range) {
         add(symbol->span.end, label, Object{{"kind", 1}, {"paddingLeft", true}, {"textEdits", Array{std::move(edit)}}});
     }
     for (auto& call : document.sema.allCalls()) {
-        if (call.isPipe) continue;
         auto& inputs = call.function->function->inputs;
-        for (size_t i = 0; i < call.args.size() && i < inputs.size(); i++) {
-            std::string_view name = inputs[i].name.text;
-            if (text.substr(call.args[i].start, call.args[i].length()) == name) continue;
-            add(call.args[i].start, std::string(name) + " <-", Object{{"kind", 2}, {"paddingRight", true}});
+        std::vector<bool> isFilled(inputs.size(), false);
+        for (size_t i = 0; i < call.args.size(); i++) {
+            auto& arg = call.args[i];
+            if (arg.input) isFilled[*arg.input] = true;
+            // a pipe's value sits outside the parentheses, and a named argument already says where it goes
+            if ((call.isPipe && i == 0) || arg.isNamed || !arg.input) continue;
+            std::string name(inputs[*arg.input].name.text);
+            if (text.substr(arg.span.start, arg.span.length()) == name) continue;
+            Object hint{{"kind", 2}, {"paddingRight", true}};
+            // naming an argument is only valid when every argument after it is named too, so only then does double-clicking write it in
+            bool isLastUnnamed = std::all_of(call.args.begin() + i + 1, call.args.end(), [](const CallArg& later) { return later.isNamed; });
+            if (isLastUnnamed) hint["textEdits"] = Array{Object{{"range", rangeOf(document, Span{arg.span.start, arg.span.start})}, {"newText", name + " <- "}}};
+            add(arg.span.start, name + " <-", std::move(hint));
         }
+        // the defaults a call leaves out go before its ), after a comma when there are arguments inside the parentheses
+        if (!call.close) continue;
+        std::string left;
+        for (size_t i = 0; i < inputs.size(); i++) {
+            if (!isFilled[i] && inputs[i].fallback) left += (left.empty() ? "" : ", ") + std::string(inputs[i].name.text) + " <- " + excerpt(document, inputs[i].fallback->span);
+        }
+        bool hasInside = call.args.size() > (call.isPipe ? 1 : 0);
+        if (!left.empty()) add(*call.close, (hasInside ? ", " : "") + left, Object{{"kind", 2}});
     }
     auto& steps = document.sema.allSteps();
     for (auto& step : steps) {

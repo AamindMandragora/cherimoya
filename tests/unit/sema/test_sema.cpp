@@ -153,8 +153,31 @@ TEST_CASE("Sema: calls and pipes", "[sema]") {
     CHECK(semaErrors(fns + "tick();") == 0);
     CHECK(semaErrors(fns + "let x <- 5; x(1);") == 1);
     CHECK(semaErrors(fns + "let g <- inc;") == 1);
-    CHECK(semaErrors(fns + "let x <- 2 |> add(1);") == 1);
+    CHECK(symbolType(fns + "let x <- 2 |> add(1);", "x") == "int");
+    CHECK(semaErrors(fns + "let x <- 2 |> add(a <- 1);") == 2);
     CHECK(semaErrors(fns + "let x <- float(1);") == 0);
+}
+
+// checks named arguments, which go after the unnamed ones and name an input once, and defaults, which see the inputs before them, have to fit their input, and only go on inputs
+TEST_CASE("Sema: named arguments and defaults", "[sema]") {
+    const std::string fns = "let (a :: int, b :: int <- 10, c :: int <- a + b) -> f -> (r :: int) { a + b + c -| } ";
+    for (const char* call : {"f(1)", "f(1, 2)", "f(1, 2, 3)", "f(1, c <- 3)", "f(c <- 3, a <- 1)", "f(a <- 1)", "1 |> f(c <- 3)", "f(b <- 2) <| 1", "1 |> f"}) {
+        CHECK(semaErrors(fns + "let x <- " + call + ";") == 0);
+    }
+    CHECK(symbolType(fns + "let x <- f(c <- 3, a <- 1);", "x") == "int");
+    CHECK(semaErrors(fns + "let x <- f();") == 1);
+    CHECK(semaErrors(fns + "let x <- f(b <- 1);") == 1);
+    CHECK(semaErrors(fns + "let x <- f(1, d <- 1);") == 1);
+    CHECK(semaErrors(fns + "let x <- f(a <- 1, 2);") == 1);
+    CHECK(semaErrors(fns + "let x <- f(1, a <- 2);") == 1);
+    CHECK(semaErrors(fns + "let x <- f(1, 2, 3, 4);") == 1);
+    CHECK(semaErrors(fns + "let x <- f(1, b <- true);") == 1);
+    CHECK(semaErrors(fns + "let x <- 1 |> f(a <- 2);") == 1);
+    CHECK(semaErrors("let (a :: int <- true) -> g -> () { }") == 1);
+    CHECK(semaErrors("let (a :: int <- b, b :: int) -> g -> () { }") == 1);
+    CHECK(semaErrors("let (a :: int <- { 1 -| g }) -> g -> () { }") == 1);
+    CHECK(semaErrors("let () -> g -> (r :: int <- 1) { 1 -| }") == 1);
+    CHECK(semaErrors("let x <- i32(v <- 1);") == 1);
 }
 
 // checks that assignments and compound assignments keep the place's type, and that a discard takes anything
@@ -579,6 +602,11 @@ TEST_CASE("Sema: fixes", "[sema]") {
     CHECK(fixed("let t <- (1, 2);") == "let t <- [1, 2];");
     CHECK(fixed("let x :: mut int;") == "let x :: mut int <- _;");
     CHECK(fixed("let r <- [lo <- 1, ..., 5];") == "let r <- [1, ..., 5];");
+    // arguments and defaults
+    const std::string add = "let (a :: int, b :: int) -> add -> (r :: int) { a + b -| } ";
+    CHECK(fixed(add + "let x <- add(a <- 1, 2);") == "");
+    CHECK(fixed("let x <- i32(v <- 1);") == "let x <- i32(1);");
+    CHECK(fixed("let () -> g -> (r :: int <- 1) { 1 -| }") == "let () -> g -> (r :: int) { 1 -| }");
     // both ways to parenthesize a mix that needs it
     CHECK(fixed("let a <- 1; let b <- 2; let c <- 3; let x <- a = b != c;") == "let a <- 1; let b <- 2; let c <- 3; let x <- (a = b) != c;");
     CHECK(fixed("let a <- 1; let b <- 2; let c <- 3; let x <- a = b != c;", 1) == "let a <- 1; let b <- 2; let c <- 3; let x <- a = (b != c);");

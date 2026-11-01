@@ -79,10 +79,11 @@ public:
     TupleType(std::vector<std::unique_ptr<Type>> e, Span s) : Type(TypeKind::Tuple, s), elems(std::move(e)) {}
 };
 
-// name :: type, used for record fields and for parameters, where the type is null when a closure leaves it to inference, and sema fills in a parameter's symbol
+// name :: type <- fallback, used for record fields and for parameters, where the type is null when a closure leaves it to inference, the fallback is an input's default, null when it has none, and sema fills in a parameter's symbol
 struct Param {
     Token name;
     std::unique_ptr<Type> type;
+    std::unique_ptr<Expr> fallback;
     Symbol* decl = nullptr;
 };
 
