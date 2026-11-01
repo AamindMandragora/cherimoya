@@ -195,6 +195,43 @@ TEST_CASE("LSP: quick fixes", "[lsp]") {
     CHECK(at("let () ->").empty());
 }
 
+// checks every kind of inlay hint: an inferred type with the edit that writes it in, parameter names but not for an argument that's already the parameter's name or a pipe's argument, the type of each step of a pipe spread over lines but not its last, and labels on a long function's closing brace but not a short one's
+TEST_CASE("LSP: inlay hints", "[lsp]") {
+    std::string text =
+        "let (a :: int, b :: int) -> add -> (r :: int) { a + b -| }\n"
+        "let (n :: int) -> double -> (r :: int) { n * 2 -| }\n"
+        "let () -> main -> (code :: int) {\n"
+        "    let a <- 1;\n"
+        "    let total :: int <- add(a, double(2));\n"
+        "    let piped <- total\n"
+        "        |> double  # twice\n"
+        "        |> double;\n"
+        "    let flat <- piped |> double;\n"
+        "\n"
+        "\n"
+        "    flat -|\n"
+        "}\n";
+    Document document("file:///t.moya", text);
+    auto hints = inlayHints(document, Span{0, text.size()});
+    std::vector<std::string> labels;
+    for (auto& hint : hints) labels.push_back(stringOf(hint, "label"));
+    CHECK(labels == std::vector<std::string>{":: int", "b <-", "n <-", ":: int", ":: int", ":: int", ":: int", "# main"});
+    // the first hint is a's type, right after its name, with the edit that writes it in
+    auto& first = *hints[0].getAsObject();
+    CHECK(first.getInteger("kind") == 1);
+    CHECK(first.getObject("position")->getInteger("line") == 3);
+    CHECK(first.getObject("position")->getInteger("character") == 9);
+    CHECK(stringOf((*first.getArray("textEdits"))[0], "newText") == " :: int");
+    CHECK(hints[1].getAsObject()->getInteger("kind") == 2);
+    // the steps are total, at the end of its line, and the first double, before its comment
+    CHECK(hints[4].getAsObject()->getObject("position")->getInteger("line") == 5);
+    CHECK(hints[5].getAsObject()->getObject("position")->getInteger("line") == 6);
+    CHECK(hints[5].getAsObject()->getObject("position")->getInteger("character") == 17);
+    CHECK(hints[7].getAsObject()->getObject("position")->getInteger("line") == 12);
+    // a range only gets the hints inside it
+    CHECK(inlayHints(document, Span{0, offsetOf(text, "let () -> main")}).empty());
+}
+
 // checks that rename edits every use, and refuses a non-name, a clash in one scope, and a rename that would change what a use means
 TEST_CASE("LSP: rename", "[lsp]") {
     std::string text = "let (n :: int) -> f -> (r :: int) { let x <- n; let y <- 2; { let z <- x; } x + y -| }";
@@ -297,6 +334,7 @@ TEST_CASE("LSP: a session", "[lsp]") {
     REQUIRE(session.sent.size() == 6);
     auto& capabilities = *session.sent[0].getAsObject()->getObject("result")->getObject("capabilities");
     CHECK(capabilities.getObject("textDocumentSync")->getInteger("change") == 2);
+    CHECK(capabilities.getBoolean("inlayHintProvider") == true);
     CHECK(capabilities.getObject("semanticTokensProvider")->getObject("legend")->getArray("tokenTypes")->size() == tokenTypes.size());
     CHECK(stringOf(session.sent[1], "method") == "textDocument/publishDiagnostics");
     CHECK(session.sent[1].getAsObject()->getObject("params")->getArray("diagnostics")->size() == 1);

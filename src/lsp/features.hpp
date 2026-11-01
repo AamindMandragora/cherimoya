@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cctype>
 #include <map>
 #include <string>
@@ -19,10 +20,15 @@ inline const std::vector<std::string> tokenTypes = {"keyword", "type", "number",
 enum TokenModifier : uint32_t { Declaration = 1, Readonly = 2 };
 inline const std::vector<std::string> tokenModifiers = {"declaration", "readonly"};
 
+// an offset in a document as the editor's position
+inline Value positionAt(const Document& document, size_t offset) {
+    Position position = document.lines->position(offset);
+    return Object{{"line", position.line}, {"character", position.character}};
+}
+
 // a span as the editor's range, from the position it starts at to the one it ends at
 inline Value rangeOf(const Document& document, Span span) {
-    auto toJson = [](Position position) { return Object{{"line", position.line}, {"character", position.character}}; };
-    return Object{{"start", toJson(document.lines->position(span.start))}, {"end", toJson(document.lines->position(span.end))}};
+    return Object{{"start", positionAt(document, span.start)}, {"end", positionAt(document, span.end)}};
 }
 
 // a span in a document as the editor's location
@@ -489,4 +495,55 @@ inline Value signatureHelp(const Document& document, size_t offset) {
         {"activeSignature", 0},
         {"activeParameter", static_cast<int64_t>(active)},
     };
+}
+
+// how many lines a scope has to span before its closing brace is labeled, since a short one's opening is still in view
+inline constexpr uint32_t labelLines = 10;
+
+// checks whether nothing but spaces and a comment follows an offset on its line, so a hint there sits at the end of the line
+inline bool endsLine(std::string_view text, size_t offset) {
+    while (offset < text.size() && (text[offset] == ' ' || text[offset] == '\t')) offset++;
+    return offset == text.size() || text[offset] == '\n' || text[offset] == '\r' || text[offset] == '#';
+}
+
+// the hints the editor draws into the code in a range, in order: the type of every binding that wasn't given one, which double-clicking writes in, the parameter each argument goes to, unless the argument is a name that already says so, the type of each step of a pipe spread over lines, at the end of its line, and the name of a long function or named scope after its closing brace
+inline Array inlayHints(const Document& document, Span range) {
+    std::string_view text = document.manager.text();
+    std::vector<std::pair<size_t, Object>> hints;
+    // kind 1 is a type and kind 2 a parameter, and padding puts a space between the hint and the code on that side
+    auto add = [&](size_t offset, const std::string& label, Object hint) {
+        hint["position"] = positionAt(document, offset);
+        hint["label"] = label;
+        hints.push_back({offset, std::move(hint)});
+    };
+    for (auto* symbol : document.sema.allInferred()) {
+        std::string label = ":: " + symbol->type->toString();
+        Object edit{{"range", rangeOf(document, Span{symbol->span.end, symbol->span.end})}, {"newText", " " + label}};
+        add(symbol->span.end, label, Object{{"kind", 1}, {"paddingLeft", true}, {"textEdits", Array{std::move(edit)}}});
+    }
+    for (auto& call : document.sema.allCalls()) {
+        if (call.isPipe) continue;
+        auto& inputs = call.function->function->inputs;
+        for (size_t i = 0; i < call.args.size() && i < inputs.size(); i++) {
+            std::string_view name = inputs[i].name.text;
+            if (text.substr(call.args[i].start, call.args[i].length()) == name) continue;
+            add(call.args[i].start, std::string(name) + " <-", Object{{"kind", 2}, {"paddingRight", true}});
+        }
+    }
+    auto& steps = document.sema.allSteps();
+    for (auto& step : steps) {
+        // a chain's steps all start where it does, and the last one gives the whole pipe's value, which shows wherever that goes, so only a step another one continues gets a hint
+        bool isContinued = std::any_of(steps.begin(), steps.end(), [&](const Step& other) { return other.span.start == step.span.start && other.span.end > step.span.end; });
+        if (isContinued && endsLine(text, step.span.end)) add(step.span.end, ":: " + step.type->toString(), Object{{"kind", 1}, {"paddingLeft", true}});
+    }
+    for (auto& label : document.sema.allLabels()) {
+        if (document.lines->position(label.span.end).line - document.lines->position(label.span.start).line + 1 < labelLines) continue;
+        add(label.span.end, "# " + std::string(label.name), Object{{"paddingLeft", true}});
+    }
+    std::stable_sort(hints.begin(), hints.end(), [](auto& a, auto& b) { return a.first < b.first; });
+    Array result;
+    for (auto& [offset, hint] : hints) {
+        if (range.start <= offset && offset <= range.end) result.push_back(std::move(hint));
+    }
+    return result;
 }

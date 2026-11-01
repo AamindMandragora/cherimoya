@@ -20,17 +20,30 @@ struct Expectation {
     SemaType* type;
 };
 
-// a call of a function by name, with each argument's span, which the language server's signature help reads
+// a call of a function by name, with each argument's span, which the language server's signature help and parameter hints read, where a pipe is a call with its one argument outside any parentheses
 struct Call {
     Span span;
     Symbol* function;
     std::vector<Span> args;
+    bool isPipe;
 };
 
 // a function's span and the owner number its own locals get, so the language server can tell which locals a position can reach
 struct Body {
     Span span;
     size_t owner;
+};
+
+// a step of a forward pipe, or the value the pipe starts from, and the type it gives, which the language server shows at the end of each line of a pipe spread over several
+struct Step {
+    Span span;
+    SemaType* type;
+};
+
+// a scope with a name, a function's body or a named block, match, loop, or chunk, whose closing brace the language server labels with that name
+struct Label {
+    Span span;
+    std::string_view name;
 };
 
 // sema resolves every name to its symbol and gives every expression a type, writing both straight into the AST
@@ -46,11 +59,14 @@ class Sema {
     size_t functions;
     // every construct a yield could target right now, innermost last
     std::vector<Target> targets;
-    // what the language server reads once checking is done: every use of a name, every expected type, every call, and every function body
+    // what the language server reads once checking is done: every use of a name, every expected type, every call, every function body, every binding whose type was inferred, every pipe step, and every named scope
     std::vector<Use> uses;
     std::vector<Expectation> expectations;
     std::vector<Call> calls;
     std::vector<Body> bodies;
+    std::vector<const Symbol*> inferred;
+    std::vector<Step> steps;
+    std::vector<Label> labels;
 
     // reports something sema doesn't check yet, and poisons the result
     SemaType* unsupported(std::string_view what, Span span) {
@@ -250,6 +266,7 @@ class Sema {
         size_t saved = owner;
         owner = ++functions;
         bodies.push_back({fn.span, owner});
+        if (fn.body) labels.push_back({fn.body->span, fn.name.text});
         inScope(fn.span, [&] {
             for (size_t i = 0; i < fn.inputs.size(); i++) {
                 auto& p = fn.inputs[i];
@@ -319,6 +336,7 @@ class Sema {
         binder.decl = symbol;
         scope->insert(symbol);
         if (let.type) checkRefinements(*let.type, symbol);
+        if (!let.type && !isPoisoned(type)) inferred.push_back(symbol);
     }
 
     // checks whether a value of type actual can go where expected is wanted, where errors and never fit anywhere
@@ -367,6 +385,7 @@ class Sema {
     // checks statements as a scope a yield can target, in a new lexical scope, and gives the type of what reaches its end, where what names the scope for diagnostics
     SemaType* checkScope(std::vector<std::unique_ptr<Stmt>>& stmts, TargetKind kind, const std::optional<Token>& name, Span span, std::string_view what) {
         targets.push_back(Target{kind, labelOf(name), nullptr, nullptr, {}, false, span});
+        if (name) labels.push_back({span, name->text});
         bool completes = true;
         inScope(span, [&] { completes = checkStmts(stmts); });
         auto target = targets.back();
@@ -493,6 +512,7 @@ class Sema {
     SemaType* checkMatch(MatchExpr& m) {
         auto subject = m.subject ? checkExpr(*m.subject) : nullptr;
         targets.push_back(Target{TargetKind::Match, labelOf(m.name), nullptr, nullptr, {}, false, m.span});
+        if (m.name) labels.push_back({m.span, m.name->text});
         bool covered = false;
         bool seenTrue = false;
         bool seenFalse = false;
@@ -540,6 +560,7 @@ class Sema {
         if (r.cond) expectBool(*r.cond, "a loop's condition");
         if (r.invariant) expectBool(*r.invariant, "a loop's invariant");
         targets.push_back(Target{TargetKind::Loop, labelOf(r.name), nullptr, nullptr, {}, r.cond == nullptr, r.span});
+        if (r.name) labels.push_back({r.span, r.name->text});
         inScope(r.span, [&] { checkStmts(r.body->stmts); });
         auto target = targets.back();
         targets.pop_back();
@@ -952,7 +973,7 @@ class Sema {
     }
 
     // checks a call: the callee has to be a function's name, and the arguments have to match its parameters
-    SemaType* checkCall(Expr& callee, const std::vector<Expr*>& args, Span span) {
+    SemaType* checkCall(Expr& callee, const std::vector<Expr*>& args, Span span, bool isPipe = false) {
         SemaType* type;
         if (callee.kind == ExprKind::Identifier) {
             type = checkIdentifier(static_cast<IdentifierExpr&>(callee), true);
@@ -966,7 +987,7 @@ class Sema {
         if (function && function->kind == SymbolKind::Function) {
             std::vector<Span> argSpans;
             for (auto arg : args) argSpans.push_back(arg->span);
-            calls.push_back({span, function, argSpans});
+            calls.push_back({span, function, argSpans, isPipe});
         }
         // each argument takes its parameter's type when the callee is a function with the right number of them
         auto fnType = type->kind == SemaTypeKind::Function ? static_cast<FunctionSemaType*>(type) : nullptr;
@@ -1115,7 +1136,14 @@ class Sema {
                 bool forward = pipe.op.kind == TokenKind::PipeFwd;
                 auto& fn = forward ? *pipe.rhs : *pipe.lhs;
                 auto& arg = forward ? *pipe.lhs : *pipe.rhs;
-                return checkCall(fn, {&arg}, e.span);
+                auto type = checkCall(fn, {&arg}, e.span, true);
+                // a forward pipe reads top to bottom, so each one is a step, and so is the value it starts from, when that isn't a forward pipe itself, where a step with a poisoned type has nothing to show
+                if (forward) {
+                    bool continues = arg.kind == ExprKind::Pipe && static_cast<PipeExpr&>(arg).op.kind == TokenKind::PipeFwd;
+                    if (!continues && !isPoisoned(arg.type)) steps.push_back({arg.span, arg.type});
+                    if (!isPoisoned(type)) steps.push_back({e.span, type});
+                }
+                return type;
             }
             case ExprKind::Block:
                 return checkBlock(static_cast<BlockExpr&>(e));
@@ -1161,9 +1189,12 @@ public:
     // every symbol sema declared, in order
     const std::deque<Symbol>& allSymbols() const { return symbols; }
 
-    // every place a name is declared or used, every expected type, every call by name, and every function body, in the order sema met them
+    // every place a name is declared or used, every expected type, every call by name, every function body, every binding with an inferred type, every pipe step, and every named scope, in the order sema met them
     const std::vector<Use>& allUses() const { return uses; }
     const std::vector<Expectation>& allExpectations() const { return expectations; }
     const std::vector<Call>& allCalls() const { return calls; }
     const std::vector<Body>& allBodies() const { return bodies; }
+    const std::vector<const Symbol*>& allInferred() const { return inferred; }
+    const std::vector<Step>& allSteps() const { return steps; }
+    const std::vector<Label>& allLabels() const { return labels; }
 };
