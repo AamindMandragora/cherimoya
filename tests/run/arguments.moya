@@ -2,7 +2,7 @@
 # checks named arguments in any order, defaults that read the inputs before them, a default that calls its own function, and pipes into calls with the rest of the arguments
 let (a :: int, b :: int <- a * 2, c :: int <- a + b) -> sum -> (r :: int) { a + b + c -| }
 let (n :: int, m :: int <- inc(n, 1)) -> inc -> (r :: int) { n + m -| }
-let () -> main -> (code :: int) {
+let () -> start -> (code :: int) {
     let defaults <- sum(1);
     let reordered <- sum(c <- 10, a <- 2);
     let mixed <- sum(1, b <- 5);

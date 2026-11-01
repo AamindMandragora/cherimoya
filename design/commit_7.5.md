@@ -11,7 +11,7 @@ Cherimoya infers a lot that the code doesn't say. `let total <- add(a, double(2)
 | an inferred type | right after the name of a binding that has no annotation | `let a :: int <- 1;` |
 | a parameter's name | in front of each argument of a call | `add(b <- double(n <- 2))` |
 | a pipe step's type | at the end of each line of a pipe spread over lines | `total :: int` then `\|> double :: int` |
-| a scope's name | after the closing brace of a long function or named scope | `} # main` |
+| a scope's name | after the closing brace of a long function or named scope | `} # start` |
 
 **Inferred types** are written the way an annotation is, so double-clicking one, in editors that support it, writes it into the file as a real `:: int`. A binding whose type is poisoned, because its initializer had an error or never finishes, gets no hint, since it would only show the error.
 
@@ -19,7 +19,7 @@ Cherimoya infers a lot that the code doesn't say. `let total <- add(a, double(2)
 
 **Pipe steps** are hinted for a forward pipe only, which reads top to bottom: the value it starts from and each step after it, where a step gets a hint only when it ends its line, with nothing after it but spaces and a comment. A step's hint goes before its comment. A pipe written on one line gets none, and neither does its last step, which gives the whole pipe's value, so that type already shows wherever the value goes, as a binding's inferred type or a parameter's name.
 
-**Scope names** go after the closing brace of a function's body, and of a block, match, loop, or chunk with a name, once it spans at least 10 lines, since a shorter one's opening line is usually still on the screen. It reads like a comment, `# main`, since it is one in all but being there.
+**Scope names** go after the closing brace of a function's body, and of a block, match, loop, or chunk with a name, once it spans at least 10 lines, since a shorter one's opening line is usually still on the screen. It reads like a comment, `# start`, since it is one in all but being there.
 
 ## How the Server Finds Them
 

@@ -12,4 +12,4 @@ let (x :: int) -> helper -> (r :: int) {
     let (y :: int) -> square -> (r :: int) { y + 1 -| }
     square(x) -|
 }
-let () -> main -> (code :: int) { outer(4) -| }
+let () -> start -> (code :: int) { outer(4) -| }

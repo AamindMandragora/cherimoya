@@ -6,6 +6,6 @@ let (n :: i8) -> bump -> (r :: i8) {
     x +<- 100;
     x -|
 }
-let () -> main -> (code :: int) {
+let () -> start -> (code :: int) {
     int(bump(100)) -|
 }

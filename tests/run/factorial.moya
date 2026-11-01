@@ -9,4 +9,4 @@ let (n :: int) -> factorial -> (r :: int) {
     }
     product -|
 }
-let () -> main -> (code :: int) { factorial(5) -| }
+let () -> start -> (code :: int) { factorial(5) -| }

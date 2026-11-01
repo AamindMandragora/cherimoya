@@ -764,7 +764,7 @@ TEST_CASE("Printer: a reference program round trip", "[printer]") {
         "    }\n"
         "    count -|\n"
         "}\n"
-        "let () -> main -> (code :: int) {\n"
+        "let () -> start -> (code :: int) {\n"
         "    let rate    <- 2;\n"
         "    let v       <- Vec2 <- [x <- 1.0, y <- 2.0] <+> Vec2 <- [3.0, 4.0];\n"
         "    let doubled <- ((acc, x) -> { acc + x * rate -| }, 0)[[1, 2, 3]];\n"

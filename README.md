@@ -19,7 +19,7 @@ let (n :: int {n > 0}) -> steps -> (count :: int) {
     taken -|
 }
 
-let () -> main -> (code :: int) {
+let () -> start -> (code :: int) {
     27 |> steps -|
 }
 ```
@@ -55,11 +55,12 @@ Bindings are immutable unless they're declared `mut`, a value can't be silently 
 Cherimoya is early. What works today:
 
 - **The whole front end:** the lexer, the parser for the whole grammar, and diagnostics that say what was expected, what the language does instead, or which rule was broken and how to fix it.
-- **Name resolution and type checking**: functions (nested, and in any order), bindings, operators, calls and pipes with named arguments and defaults, blocks, `match`, loops, yields and their labels, mutability, discards, and the entry point.
+- **Name resolution and type checking**: functions (nested, and in any order), bindings, operators, calls and pipes with named arguments and defaults, blocks, `match`, loops, yields and their labels, mutability, discards, and the entry point, `start`, which a program defines the way C's runtime calls `main`.
 - **Characters**: `char`, one ASCII character, and `rune`, one Unicode scalar value, with escapes like `'\n'`, `'\x41'`, and `'\u{1F600}'`, comparisons, `match`, and conversions to and from integers, plus annotations, `(5 :: i8)`, which give a value a type without converting it.
 - **Fuzzy booleans**: `boolf`, a truth value from 0 to 1 held in a byte, where `&&` is the minimum, `||` the maximum, `*` the product, and `!x` is 1 - x, with conversions to and from floats, its raw byte, and `bool`, and a cutoff like `x > 0.5` to turn one back into a `bool`.
 - **The numeric model**: every integer from 8 to 128 bits, signed or unsigned, trapping or wrapping, and every float from `f16` to `f128`, including bfloat16, NaN-free or NaN-carrying, and both FP8 encodings, stored as bytes and computed in f32. Literals take the type their context wants, and conversions go between any two numbers.
 - **Code generation through LLVM** for all of that, with optimization, native object files, cross-compilation, and linking with a small runtime. Overflow, division by zero, out-of-range shifts, a NaN made in or converted into a NaN-free float, an `f8` that overflows, a conversion into a trapping integer, a character, or a boolf that doesn't hold the value, and a failed `assert` trap with their line.
+- **Debug info** with `-g`: DWARF, or CodeView on Windows, for gdb and lldb, with source names, every variable and its type, and printers that gdb loads from the binary for the values C's rules would print wrong, like FP8 and `rune`.
 
 - **A language server**, `cheri lsp`, with a VS Code extension: diagnostics as you type, highlighting by meaning, hover with the documentation your comments give a name, go to definition, references, rename, an outline, completion ranked by the type a position expects, signature help, quick fixes for the mistakes that have one, which `cheri check --fix` applies from the command line too, and inlay hints: the types cherimoya inferred, the input each argument goes to, the defaults a call leaves out, the type of each step of a pipe spread over lines, and the name of a long function at its closing brace.
 
@@ -102,10 +103,31 @@ The most useful options:
 | `-O0` … `-O3`, `-Os`, `-Oz` | how hard to optimize, `-O3` by default |
 | `--target <triple>` | cross-compile, like `--target aarch64-linux-gnu -c` |
 | `--cpu <name>`, `--features <list>` | tune for a cpu, or `--cpu native` for this machine |
+| `-g`, `-gline-tables-only` | debug info: everything, or just lines and function names, for backtraces |
 | `--linker <program>`, `--static` | how to link |
 | `-L<dir>`, `-l<lib>`, `--link-arg <arg>` | passed straight to the linker |
 
 `cheri build prog.moya --emit-llvm -O0` prints the IR exactly as the compiler wrote it, before any optimization.
+
+## Debugging
+
+`cheri build prog.moya -g -O0` builds a program a debugger can see all of: every function by its source name, every binding and input with its type, a nested function as `outer.inner`, and an input's default as `clamp.lo<-`. Immutable bindings show as `const`, a `boolf` prints as its fraction, and the program starts at `start`, which the runtime's C `main` calls. `-g` works at any `-O`, where the optimizer can inline functions and leave some variables `<optimized out>`.
+
+```
+$ gdb ./prog
+(gdb) break clamp
+(gdb) run
+Breakpoint 1, clamp (n=150, lo=0) at prog.moya:3
+(gdb) info locals
+fuzzy = 0.70196078431
+tiny = 1.75
+```
+
+gdb can't decode FP8, bfloat16, or `f128` on its own, prints 1-byte integers as C chars, and prints a `rune` as a hex escape, so a `-g` build carries pretty-printers for those inside it, which gdb runs once it trusts the binary's directory. Add this to `~/.gdbinit`, with your own path:
+
+```
+add-auto-load-safe-path ~/projects
+```
 
 ## Editor Support
 
@@ -146,6 +168,7 @@ Any other editor that speaks the Language Server Protocol can start `cheri lsp` 
 | `editors/vscode/` | the VS Code extension |
 | `tests/unit/` | Catch2 tests for the lexer, parser, sema, runtime, and language server |
 | `tests/run/` | whole programs, each checked by its exit code |
+| `tests/debug/` | programs built with debug info, checked with llvm-dwarfdump and gdb |
 | `design/` | a design note for every commit |
 
 ## Tests
@@ -157,6 +180,16 @@ The lexer, parser, sema, runtime, and language server have unit tests in C++, un
 # trap: trap at line 5: assert (n % 2 = 0);
 # checks that a false assertion traps with its line, which aborts the program
 let (n :: int) -> half -> (r :: int) { ... }
+```
+
+Debug info is tested the same way, through programs in `tests/debug/`, each built with `-g -O0` unless a `# flags:` line says otherwise. Every `# dwarf:` line has to appear in what llvm-dwarfdump shows of the debug info, and the `# gdb:` lines run as one gdb session whose output has to contain every `# expect:` line, which is skipped when gdb isn't installed.
+
+```
+# gdb: break clamp
+# gdb: run
+# expect: clamp (n=150, lo=0) at
+# checks that a breakpoint on a function stops once its inputs are stored
+let (n :: int, lo :: int <- 0) -> clamp -> (r :: int) { ... }
 ```
 
 Adding a program test means adding a file.

@@ -1084,8 +1084,8 @@ TEST_CASE("Parser: golden count_pairs body", "[parser][stmt]") {
         " (-| count)))");
 }
 
-// checks a golden dump of a main body that uses most of the grammar
-TEST_CASE("Parser: golden main body", "[parser][stmt]") {
+// checks a golden dump of a start body that uses most of the grammar
+TEST_CASE("Parser: golden start body", "[parser][stmt]") {
     const char* src =
         "{\n"
         "    let rate    <- 2;\n"
@@ -1132,7 +1132,7 @@ TEST_CASE("Parser: statement error recovery", "[parser][stmt]") {
 
 // checks functions: generics, refinements, wit obligations, operator names, externs, and nesting
 TEST_CASE("Parser: functions", "[parser][decl]") {
-    CHECK(stmtDump("let () -> main -> (code :: int) { 0 -| }") == "(fn-decl main () -> (code:int) (block (-| 0)))");
+    CHECK(stmtDump("let () -> start -> (code :: int) { 0 -| }") == "(fn-decl start () -> (code:int) (block (-| 0)))");
     CHECK(stmtDump("let (x :: int) -> inc -> (r :: int) { x + 1 -| }") == "(fn-decl inc (x:int) -> (r:int) (block (-| (+ x 1))))");
     CHECK(stmtDump("let (a :: int, b :: int <- a + 1) -> f -> () { }") == "(fn-decl f (a:int b:int<-(+ a 1)) -> () (block))");
     CHECK(stmtDump("let (a :: int {a >= 0}, b :: int {b > 0}) -> divmod -> (q :: int, r :: int {0 <= r < b && a = q * b + r}) { [a / b, a % b] -| }")

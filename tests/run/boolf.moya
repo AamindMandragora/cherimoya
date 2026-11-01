@@ -9,7 +9,7 @@ let (x :: boolf) -> level -> (r :: int) {
 }
 # divides by n, so it traps when it's called with 0
 let (n :: int) -> bad -> (x :: boolf) { boolf(f64(1 / n)) -| }
-let () -> main -> (code :: int) {
+let () -> start -> (code :: int) {
     let warm :: boolf <- 0.8;
     let humid :: boolf <- 0.4;
     let both <- warm && humid;
@@ -24,7 +24,7 @@ let () -> main -> (code :: int) {
     let always :: boolf <- 1;
     let skipped <- (never && bad(0)) = 0 && (always || bad(0)) = 1;
     match (both = humid && either = warm && i8u(neither) = 51 && i8u(exactly) = 153 && i8u(back) = 64 && whole = 1.0 && warm > 0.5 && !(humid > 0.5) && skipped) {
-        true -> { int(i8u(product)) + level(0) + level(true) + level(0.5) -| main }
-        false -> { 1 -| main }
+        true -> { int(i8u(product)) + level(0) + level(true) + level(0.5) -| start }
+        false -> { 1 -| start }
     }
 }

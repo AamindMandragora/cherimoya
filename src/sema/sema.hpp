@@ -1272,30 +1272,30 @@ class Sema {
                 return unsupported(unsupportedName(e), e.span);
         }
     }
-    // checks the entry point of a program that will run: a top-level main, declared the way the runtime calls it
-    void checkMain(Scope& global) {
-        Symbol* main = global.lookup("main");
-        if (main == nullptr) {
+    // checks the entry point of a program that will run: a top-level start, declared the way the runtime calls it
+    void checkStart(Scope& global) {
+        Symbol* entry = global.lookup("start");
+        if (entry == nullptr) {
             std::string_view text = engine.getManager().text();
             std::string lead = text.empty() ? "" : text.back() == '\n' ? "\n" : "\n\n";
-            engine.printError("cherimoya requires a program to have a 'main' function, please add 'let () -> main -> (code :: int) { 0 -| }'", Span{0, 0}, {},
-                {{"Add a 'main' function", {insertion(text.size(), lead + "let () -> main -> (code :: int) { 0 -| }\n")}}});
+            engine.printError("cherimoya requires a program to have a 'start' function, please add 'let () -> start -> (code :: int) { 0 -| }'", Span{0, 0}, {},
+                {{"Add a 'start' function", {insertion(text.size(), lead + "let () -> start -> (code :: int) { 0 -| }\n")}}});
             return;
         }
-        if (isPoisoned(main->type)) return;
-        if (main->kind != SymbolKind::Function || main->type != context.functionType({context.semaInt})) {
-            engine.printError("cherimoya requires 'main' to be declared as 'let () -> main -> (code :: int)', please change its inputs and outputs", main->span);
+        if (isPoisoned(entry->type)) return;
+        if (entry->kind != SymbolKind::Function || entry->type != context.functionType({context.semaInt})) {
+            engine.printError("cherimoya requires 'start' to be declared as 'let () -> start -> (code :: int)', please change its inputs and outputs", entry->span);
         }
     }
 public:
     Sema(DiagnosticEngine& e) : engine(e), scope(nullptr), owner(0), functions(0) {}
 
-    // checks a whole program as one list of statements, and when entry is set, that it has a main to run
+    // checks a whole program as one list of statements, and when entry is set, that it has a start to run
     void check(std::vector<std::unique_ptr<Stmt>>& program, bool entry = false) {
         Scope global(nullptr, engine, Span{0, engine.getManager().text().size()});
         scope = &global;
         checkStmts(program);
-        if (entry) checkMain(global);
+        if (entry) checkStart(global);
         scope = nullptr;
     }
 

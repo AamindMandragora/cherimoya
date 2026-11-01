@@ -1,0 +1,24 @@
+# dwarf: DW_AT_name	("clamp")
+# dwarf: DW_AT_name	("clamp.lo<-")
+# dwarf: DW_AT_name	("init")
+# gdb: break clamp
+# gdb: break clamp.lo<-
+# gdb: run
+# gdb: info args
+# gdb: backtrace
+# gdb: continue
+# gdb: info args
+# gdb: finish
+# expect: clamp.lo<- (n=150) at
+# expect: #1  0x
+# expect: in start () at
+# expect: clamp (n=150, lo=0) at
+# expect: Value returned is $1 = 100
+# checks that functions go by their source names, that a breakpoint on one stops once its inputs are stored, that a default's function is clamp.lo<- so it doesn't catch breakpoints on clamp, and that a backtrace reaches the program's start
+let limit <- 100;
+let (n :: int, lo :: int <- 0) -> clamp -> (r :: int) {
+    match { (n > limit) -> { limit -| clamp } }
+    match { (n < lo) -> { lo -| clamp } }
+    n -|
+}
+let () -> start -> (code :: int) { clamp(150) - 100 -| }

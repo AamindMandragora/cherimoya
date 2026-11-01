@@ -26,7 +26,7 @@ A pipe's right side can be a call that gives every argument but the piped one: `
 
 ## Codegen
 
-Each default becomes a function of its own, which takes the inputs before it and gives the default's value, named after its function and its input, `cheri.prog.sum(b)`. No cherimoya name holds parentheses, so it can't collide with a nested function. A call evaluates its arguments in the order they're written, then fills its inputs in order, where an input with no argument calls its default with the inputs filled so far. Making the default a function instead of copying its expression into every call means a default that calls its own function, like `(n :: int, m :: int <- inc(n, 1))`, is ordinary recursion at run time, not an expansion that never ends at compile time. At `-O3`, LLVM inlines the small ones, so a default costs nothing over writing the argument.
+Each default becomes a function of its own, which takes the inputs before it and gives the default's value, named after its function and its input the way the default is written, `cheri.prog.sum.b<-`. No cherimoya name holds `<-`, so it can't collide with a nested function. A call evaluates its arguments in the order they're written, then fills its inputs in order, where an input with no argument calls its default with the inputs filled so far. Making the default a function instead of copying its expression into every call means a default that calls its own function, like `(n :: int, m :: int <- inc(n, 1))`, is ordinary recursion at run time, not an expansion that never ends at compile time. At `-O3`, LLVM inlines the small ones, so a default costs nothing over writing the argument.
 
 ## The Language Server
 

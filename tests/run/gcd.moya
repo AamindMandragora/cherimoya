@@ -10,4 +10,4 @@ let (a :: int, b :: int) -> gcd -> (r :: int) {
     }
     x -|
 }
-let () -> main -> (code :: int) { gcd(1071, 462) -| }
+let () -> start -> (code :: int) { gcd(1071, 462) -| }

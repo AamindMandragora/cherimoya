@@ -390,7 +390,7 @@ TEST_CASE("Lexer: a negative range end lexes <- unless it's spaced", "[lexer]") 
 
 // tests lexing a complete function and checking if it returns the expected tokens
 TEST_CASE("Lexer: a complete function lexes to the expected sequence", "[lexer]") {
-    const char* src = "let () -> main -> (code :: int) {\n    let x <- 42;\n    x -|\n}\n";
+    const char* src = "let () -> start -> (code :: int) {\n    let x <- 42;\n    x -|\n}\n";
     CHECK(kindsOf(lexStr(src)) == (std::vector<K>{
         K::KwLet, K::LParen, K::RParen, K::RArrow, K::Identifier, K::RArrow,
         K::LParen, K::Identifier, K::ColonColon, K::TypeName, K::RParen, K::LBrace,

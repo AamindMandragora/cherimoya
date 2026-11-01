@@ -2,4 +2,4 @@
 # checks calls with parameters, including a call as an argument
 let (a :: int, b :: int) -> add -> (r :: int) { a + b -| }
 let (n :: int) -> double -> (r :: int) { n * 2 -| }
-let () -> main -> (code :: int) { add(double(30), 1) -| }
+let () -> start -> (code :: int) { add(double(30), 1) -| }

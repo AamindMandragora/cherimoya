@@ -30,7 +30,7 @@ Three operations work on the byte directly. Shallow equality compares the bytes,
 
 ## The Runtime's Conversions
 
-The runtime gains four functions, two per encoding, under plain C names like `cheri_main` and `cheri_trap`:
+The runtime gains four functions, two per encoding, under plain C names like `cheri_start` and `cheri_trap`:
 
 - `cheri_e4m3_widen` and `cheri_e5m2_widen` take a byte to the `f32` it stands for, which always holds it exactly. They split the byte into its fields, handle the bytes that aren't numbers, and build the value with `ldexpf`, where a zero exponent field is subnormal: no implicit leading one, and the smallest normal exponent.
 - `cheri_e4m3_narrow` and `cheri_e5m2_narrow` take a double to the nearest byte, ties to even. They find the value's exponent, never below the smallest normal one, scale the value so one unit is the last mantissa bit, and round that to an integer with `nearbyint`, which rounds to nearest even. Rounding up can carry into the next exponent, a significand without its implicit one is subnormal, and anything past the largest value overflows.

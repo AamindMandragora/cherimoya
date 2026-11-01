@@ -1,0 +1,12 @@
+# flags: -gline-tables-only -O0
+# dwarf: DW_AT_name	("twice")
+# gdb: break twice
+# gdb: run
+# gdb: backtrace
+# gdb: info locals
+# expect: twice () at
+# expect: No locals.
+# expect: in start () at
+# checks that a line table alone is enough for breakpoints by name and a backtrace with lines, though it has no variables
+let (n :: int) -> twice -> (r :: int) { n * 2 -| }
+let () -> start -> (code :: int) { twice(21) - 42 -| }

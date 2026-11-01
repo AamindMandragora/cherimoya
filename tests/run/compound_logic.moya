@@ -3,7 +3,7 @@
 # each divides by n, so it traps when it's called with 0
 let (n :: int) -> bad -> (b :: bool) { 1 / n = 1 -| }
 let (n :: int) -> badf -> (x :: boolf) { boolf(f64(1 / n)) -| }
-let () -> main -> (code :: int) {
+let () -> start -> (code :: int) {
     let ok :: mut <- false;
     ok &&<- bad(0);
     ok ||<- true;
@@ -21,7 +21,7 @@ let () -> main -> (code :: int) {
     let flip :: mut boolf <- 0.8;
     flip ^^<- 0.4;
     match (!ok && i8u(best) = 153 && i8u(trust) = 204 && i8u(none) = 0 && i8u(all) = 255 && i8u(flip) = 153) {
-        true -> { 12 -| main }
-        false -> { 1 -| main }
+        true -> { 12 -| start }
+        false -> { 1 -| start }
     }
 }
