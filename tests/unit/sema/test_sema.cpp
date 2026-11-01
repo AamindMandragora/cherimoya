@@ -555,3 +555,48 @@ TEST_CASE("Sema: boolf conversions", "[sema]") {
     CHECK(semaErrors("let n :: i8 <- 2; let x <- boolf(n);") == 1);
     CHECK(semaErrors("let x <- boolf('a');") == 1);
 }
+
+// checks input as a whole program, then applies one fix of the first diagnostic that has any, giving the fixed text, or "" when nothing has a fix
+static std::string fixed(const std::string& input, size_t which = 0, bool isEntry = false) {
+    SourceManager sm;
+    sm.loadString(input);
+    DiagnosticEngine diag(sm, nullptr);
+    auto tokens = Lexer(diag).lex();
+    auto program = Parser(tokens, diag).parseProgram();
+    Sema sema(diag);
+    sema.check(program, isEntry);
+    for (auto& diagnostic : diag.all()) {
+        if (diagnostic.fixes.size() > which) return applyEdits(input, diagnostic.fixes[which].edits);
+    }
+    return "";
+}
+
+// checks that each fix rewrites the source into what its diagnostic asks for
+TEST_CASE("Sema: fixes", "[sema]") {
+    // the lexer's spacing and the parser's shapes
+    CHECK(fixed("let x <--1;") == "let x <- -1;");
+    CHECK(fixed("let e <- ();") == "let e <- [];");
+    CHECK(fixed("let t <- (1, 2);") == "let t <- [1, 2];");
+    CHECK(fixed("let x :: mut int;") == "let x :: mut int <- _;");
+    CHECK(fixed("let r <- [lo <- 1, ..., 5];") == "let r <- [1, ..., 5];");
+    // both ways to parenthesize a mix that needs it
+    CHECK(fixed("let a <- 1; let b <- 2; let c <- 3; let x <- a = b != c;") == "let a <- 1; let b <- 2; let c <- 3; let x <- (a = b) != c;");
+    CHECK(fixed("let a <- 1; let b <- 2; let c <- 3; let x <- a = b != c;", 1) == "let a <- 1; let b <- 2; let c <- 3; let x <- a = (b != c);");
+    // sema's discards, mutability, catch-alls, and cutoffs
+    CHECK(fixed("let () -> f -> (r :: int) { 1 -| }\nlet () -> g -> () { f(); }") == "let () -> f -> (r :: int) { 1 -| }\nlet () -> g -> () { _ <- f(); }");
+    CHECK(fixed("let () -> g -> () { let x <- 1; x <- 2; }") == "let () -> g -> () { let x :: mut <- 1; x <- 2; }");
+    CHECK(fixed("let () -> g -> () { let x :: int <- 1; x <- 2; }") == "let () -> g -> () { let x :: mut int <- 1; x <- 2; }");
+    CHECK(fixed("let (n :: int) -> g -> () { n <- 2; }") == "let (n :: mut int) -> g -> () { n <- 2; }");
+    CHECK(fixed("let n <- 3; match (n) { 0 -> { } }") == "let n <- 3; match (n) { 0 -> { } _ -> { } }");
+    CHECK(fixed("let n <- 3;\nmatch (n) {\n    0 -> { }\n}\n") == "let n <- 3;\nmatch (n) {\n    0 -> { }\n    _ -> { }\n}\n");
+    CHECK(fixed("let a :: boolf <- 0.3; match { (a) -> { } }") == "let a :: boolf <- 0.3; match { (a > 0.5) -> { } }");
+    CHECK(fixed("let a :: boolf <- 0.3; match { (a && 0.9) -> { } }") == "let a :: boolf <- 0.3; match { ((a && 0.9) > 0.5) -> { } }");
+    CHECK(fixed("let a :: boolf <- 0.3; let b <- bool(a);") == "let a :: boolf <- 0.3; let b <- a > 0.5;");
+    // code that never runs comes out whole lines at a time, leaving the functions, which are hoisted
+    CHECK(fixed("let () -> f -> (r :: int) {\n    1 -|\n    let x <- 2;\n    let y <- 3;\n}\n") == "let () -> f -> (r :: int) {\n    1 -|\n}\n");
+    CHECK(fixed("let n <- 3;\nmatch (n) {\n    _ -> { }\n    0 -> { }\n    1 -> { }\n}\n") == "let n <- 3;\nmatch (n) {\n    _ -> { }\n}\n");
+    // a program with no main gets one at the end
+    CHECK(fixed("let x <- 1;\n", 0, true) == "let x <- 1;\n\nlet () -> main -> (code :: int) { 0 -| }\n");
+    // a diagnostic with no single mechanical fix has none
+    CHECK(fixed("let x :: i8 <- 300;").empty());
+}

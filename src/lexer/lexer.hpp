@@ -203,7 +203,7 @@ class Lexer {
             if (!needsSpacing(*a.op) && !needsSpacing(*b.op)) continue;
             std::string first(a.text), second(b.text);
             engine.printError("cherimoya requires whitespace between the operators '" + first + "' and '" + second
-                + "', please write '" + first + " " + second + "'", {a.loc, b.loc + b.text.size()});
+                + "', please write '" + first + " " + second + "'", {a.loc, b.loc + b.text.size()}, {}, {{"Write '" + first + " " + second + "'", {insertion(b.loc, " ")}}});
         }
     }
 public:
