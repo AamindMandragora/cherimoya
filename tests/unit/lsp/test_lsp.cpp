@@ -171,6 +171,30 @@ TEST_CASE("LSP: documentation comments", "[lsp]") {
     CHECK(parameters[1].getAsObject()->get("documentation") == nullptr);
 }
 
+// checks that a diagnostic's fixes come back as quick fixes on the range it touches, where a diagnostic's only fix is preferred and one with two choices has neither preferred
+TEST_CASE("LSP: quick fixes", "[lsp]") {
+    std::string text = "let () -> g -> () { let x <- 1; x <- 2; }\nlet a <- 1; let b <- 2; let c <- 3; let y <- a = b != c;";
+    Document document("file:///t.moya", text);
+    auto at = [&](const std::string& what) {
+        size_t offset = offsetOf(text, what);
+        return codeActions(document, Span{offset, offset});
+    };
+    auto mut = at("x <- 2");
+    REQUIRE(mut.size() == 1);
+    auto& action = *mut[0].getAsObject();
+    CHECK(stringOf(mut[0], "title") == "Make 'x' mutable");
+    CHECK(stringOf(mut[0], "kind") == "quickfix");
+    CHECK(action.getBoolean("isPreferred") == true);
+    auto& edits = *action.getObject("edit")->getObject("changes")->getArray("file:///t.moya");
+    REQUIRE(edits.size() == 1);
+    CHECK(stringOf(edits[0], "newText") == " :: mut");
+    CHECK(edits[0].getAsObject()->getObject("range")->getObject("start")->getInteger("character") == 25);
+    auto mixed = at("!= c");
+    REQUIRE(mixed.size() == 2);
+    CHECK(mixed[0].getAsObject()->getBoolean("isPreferred") == false);
+    CHECK(at("let () ->").empty());
+}
+
 // checks that rename edits every use, and refuses a non-name, a clash in one scope, and a rename that would change what a use means
 TEST_CASE("LSP: rename", "[lsp]") {
     std::string text = "let (n :: int) -> f -> (r :: int) { let x <- n; let y <- 2; { let z <- x; } x + y -| }";

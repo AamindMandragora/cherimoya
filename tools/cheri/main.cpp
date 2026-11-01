@@ -1,4 +1,5 @@
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string_view>
@@ -97,6 +98,8 @@ struct Options {
     std::string linker = platform::linker;
     bool isStatic = false;
     std::vector<std::string> linkArgs;
+    // whether check rewrites the file with its fixes first
+    bool isFixing = false;
 };
 
 // prints every command and option
@@ -106,6 +109,7 @@ static void usage(std::ostream& out) {
            "commands:\n"
            "  build                 check the program and build it, an executable by default\n"
            "  check                 check the program without building it\n"
+           "  check --fix           apply every fix that's the only one for its diagnostic, then check what's left\n"
            "  run                   build the program, run it, and exit with its exit code\n"
            "  lsp                   run the language server, which an editor starts and talks to over stdin and stdout\n"
            "  help                  print this message\n"
@@ -195,6 +199,8 @@ static bool parseOptions(int argc, char** argv, Options& options) {
             std::string link;
             if (!value(link)) return false;
             options.linkArgs.push_back(link);
+        } else if (arg == "--fix") {
+            options.isFixing = true;
         } else if (arg.size() > 1 && arg[0] == '-') {
             fail("unknown option '" + std::string(arg) + "'");
             return false;
@@ -209,12 +215,49 @@ static bool parseOptions(int argc, char** argv, Options& options) {
         fail("'" + options.command + "' needs a file");
         return false;
     }
+    if (options.isFixing && options.command != "check") {
+        fail("'--fix' only goes with 'check', since it rewrites the file instead of building it");
+        return false;
+    }
     // run builds a temporary executable and removes it once it's run, so there's nothing for -o or --emit to name
     if (options.command == "run" && (!options.output.empty() || options.emit != Emit::Exe)) {
         fail("'run' builds and runs a temporary executable, so it takes no '-o' or '--emit'");
         return false;
     }
     return true;
+}
+
+// rewrites a file with every preferred fix, the only fix its diagnostic has, then checks it again, since one fix can uncover another, until nothing's left to fix, where a fix whose edits touch one already chosen waits for the next round, and says how many it applied
+static void fixFile(const std::string& path) {
+    size_t applied = 0;
+    for (int round = 0; round < 10; round++) {
+        SourceManager manager;
+        manager.loadFile(path);
+        DiagnosticEngine engine(manager, nullptr);
+        Lexer lexer(engine);
+        auto tokens = lexer.lex();
+        Parser parser(tokens, engine);
+        auto program = parser.parseProgram();
+        Sema sema(engine);
+        sema.check(program, true);
+        std::vector<Edit> edits;
+        size_t fixed = 0;
+        for (auto& diagnostic : engine.all()) {
+            if (diagnostic.fixes.size() != 1) continue;
+            auto& fix = diagnostic.fixes[0];
+            bool touches = false;
+            for (auto& edit : fix.edits) {
+                for (auto& chosen : edits) touches = touches || (edit.span.start <= chosen.span.end && chosen.span.start <= edit.span.end);
+            }
+            if (touches) continue;
+            edits.insert(edits.end(), fix.edits.begin(), fix.edits.end());
+            fixed++;
+        }
+        if (fixed == 0) break;
+        std::ofstream(path, std::ios::binary) << applyEdits(std::string(manager.text()), edits);
+        applied += fixed;
+    }
+    std::cerr << "cheri: applied " << applied << (applied == 1 ? " fix" : " fixes") << " to '" << path << "'" << std::endl;
 }
 
 // opens a file to write an output to, or reports why it can't and gives null
@@ -284,6 +327,7 @@ int main(int argc, char** argv) {
     Options options;
     if (!parseOptions(argc, argv, options)) return 1;
 
+    if (options.isFixing) fixFile(options.input);
     // loads the source, which every later stage points into
     SourceManager manager;
     manager.loadFile(options.input);

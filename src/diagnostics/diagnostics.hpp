@@ -18,11 +18,48 @@ struct Note {
     Span span;
 };
 
-// a diagnostic has a message, a location, any notes that go with it, and whether it's only a warning
+// an edit replaces a span's text, so an empty span inserts and empty text deletes
+struct Edit {
+    Span span;
+    std::string text;
+};
+
+// a fix is one way to resolve a diagnostic: what an editor calls it, and the edits that make it, which never overlap
+struct Fix {
+    std::string title;
+    std::vector<Edit> edits;
+};
+
+// inserts text at a location
+inline Edit insertion(SourceLoc at, std::string text) {
+    return {{at, at}, std::move(text)};
+}
+
+// removes a span, and the whole line it's on when nothing else is, so removing a statement doesn't leave an empty line behind
+inline Edit removal(std::string_view text, Span span) {
+    auto isBlank = [](char c) { return c == ' ' || c == '\t'; };
+    size_t lineStart = span.start;
+    while (lineStart > 0 && isBlank(text[lineStart - 1])) lineStart--;
+    size_t lineEnd = span.end;
+    while (lineEnd < text.size() && isBlank(text[lineEnd])) lineEnd++;
+    bool isAlone = (lineStart == 0 || text[lineStart - 1] == '\n') && (lineEnd == text.size() || text[lineEnd] == '\n');
+    if (!isAlone) return {span, ""};
+    return {{lineStart, lineEnd < text.size() ? lineEnd + 1 : lineEnd}, ""};
+}
+
+// applies edits to text, last first, so each one's offsets still mean what they did in the original
+inline std::string applyEdits(std::string text, std::vector<Edit> edits) {
+    std::sort(edits.begin(), edits.end(), [](const Edit& a, const Edit& b) { return a.span.start > b.span.start; });
+    for (auto& edit : edits) text.replace(edit.span.start, edit.span.length(), edit.text);
+    return text;
+}
+
+// a diagnostic has a message, a location, any notes that go with it, the fixes that would resolve it, and whether it's only a warning
 struct Diagnostic {
     std::string message;
     Span span;
     std::vector<Note> notes;
+    std::vector<Fix> fixes;
     bool isWarning;
 };
 
@@ -33,8 +70,8 @@ class DiagnosticEngine {
     std::ostream* output;
 
     // records a diagnostic, then prints it formatted, if there's anywhere to print it
-    void report(std::string_view message, Span span, std::vector<Note> notes, bool isWarning) {
-        diagnostics.push_back({std::string(message), span, std::move(notes), isWarning});
+    void report(std::string_view message, Span span, std::vector<Note> notes, std::vector<Fix> fixes, bool isWarning) {
+        diagnostics.push_back({std::string(message), span, std::move(notes), std::move(fixes), isWarning});
         if (output) *output << getErrorN(diagnostics.size() - 1) << std::endl;
     }
 public:
@@ -81,20 +118,20 @@ public:
     // formats the nth diagnostic followed by each of its notes
     std::string getErrorN(size_t n) {
         if (n >= diagnostics.size()) return "";
-        auto& [message, span, notes, isWarning] = diagnostics[n];
-        std::string out = render(isWarning ? "warning" : "error", message, span);
-        for (auto& note : notes) out += render("note", note.message, note.span);
+        auto& diagnostic = diagnostics[n];
+        std::string out = render(diagnostic.isWarning ? "warning" : "error", diagnostic.message, diagnostic.span);
+        for (auto& note : diagnostic.notes) out += render("note", note.message, note.span);
         return out;
     }
 
-    // records an error with any notes that explain it, then prints it
-    void printError(std::string_view message, Span span, std::vector<Note> notes = {}) {
-        report(message, span, std::move(notes), false);
+    // records an error with any notes that explain it and any fixes that resolve it, then prints it
+    void printError(std::string_view message, Span span, std::vector<Note> notes = {}, std::vector<Fix> fixes = {}) {
+        report(message, span, std::move(notes), std::move(fixes), false);
     }
 
     // records a warning, which is reported like an error but doesn't stop compilation
-    void printWarning(std::string_view message, Span span, std::vector<Note> notes = {}) {
-        report(message, span, std::move(notes), true);
+    void printWarning(std::string_view message, Span span, std::vector<Note> notes = {}, std::vector<Fix> fixes = {}) {
+        report(message, span, std::move(notes), std::move(fixes), true);
     }
 
     // every diagnostic reported so far, in order

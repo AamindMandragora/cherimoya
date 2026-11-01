@@ -139,15 +139,38 @@ inline Value docValue(const Document& document, const Symbol& symbol) {
     return Object{{"kind", "markdown"}, {"value", doc}};
 }
 
-// every diagnostic as the editor's, where a warning is severity 2, an error is 1, and each note is related information pointing at its own span
+// one diagnostic as the editor's, where a warning is severity 2, an error is 1, and each note is related information pointing at its own span
+inline Value diagnosticOf(const Document& document, const Diagnostic& diagnostic) {
+    Array related;
+    for (auto& note : diagnostic.notes) {
+        related.push_back(Object{{"location", locationOf(document, note.span)}, {"message", note.message}});
+    }
+    return Object{{"range", rangeOf(document, diagnostic.span)}, {"severity", diagnostic.isWarning ? 2 : 1}, {"source", "cheri"}, {"message", diagnostic.message}, {"relatedInformation", std::move(related)}};
+}
+
+// every diagnostic in a document as the editor's
 inline Array diagnostics(const Document& document) {
     Array result;
+    for (auto& diagnostic : document.engine.all()) result.push_back(diagnosticOf(document, diagnostic));
+    return result;
+}
+
+// the quick fixes for every diagnostic that touches a range, each one an edit to the document, where a diagnostic's only fix is preferred, so the editor can apply it on its own
+inline Array codeActions(const Document& document, Span range) {
+    Array result;
     for (auto& diagnostic : document.engine.all()) {
-        Array related;
-        for (auto& note : diagnostic.notes) {
-            related.push_back(Object{{"location", locationOf(document, note.span)}, {"message", note.message}});
+        if (diagnostic.span.end < range.start || diagnostic.span.start > range.end) continue;
+        for (auto& fix : diagnostic.fixes) {
+            Array edits;
+            for (auto& edit : fix.edits) edits.push_back(Object{{"range", rangeOf(document, edit.span)}, {"newText", edit.text}});
+            result.push_back(Object{
+                {"title", fix.title},
+                {"kind", "quickfix"},
+                {"isPreferred", diagnostic.fixes.size() == 1},
+                {"diagnostics", Array{diagnosticOf(document, diagnostic)}},
+                {"edit", Object{{"changes", Object{{document.uri, std::move(edits)}}}}},
+            });
         }
-        result.push_back(Object{{"range", rangeOf(document, diagnostic.span)}, {"severity", diagnostic.isWarning ? 2 : 1}, {"source", "cheri"}, {"message", diagnostic.message}, {"relatedInformation", std::move(related)}});
     }
     return result;
 }

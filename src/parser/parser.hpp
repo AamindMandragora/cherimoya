@@ -121,12 +121,34 @@ class Parser {
         return bindingPower(tok.op->level);
     }
 
-    // two operators on the same level need parentheses when their associativities differ or either one is non-associative
-    void checkMixing(const OpInfo* prev, const Token& op) {
-        if (prev == nullptr || prev->level != op.op->level) return;
-        if (prev->assoc == op.op->assoc && prev->assoc != Assoc::None) return;
-        std::string a = prev->spelling, b(op.text);
-        engine.printError("cherimoya requires parentheses to mix '" + a + "' and '" + b + "', please write '(x " + a + " y) " + b + " z' or 'x " + a + " (y " + b + " z)'", tokSpan(op));
+    // removes the name from an element that can't have one: the name, its <-, and the space after them
+    template <typename Elem>
+    Fix unnaming(const Elem& e) {
+        std::string_view text = engine.getManager().text();
+        size_t end = text.find("<-", e.name->loc + e.name->text.size()) + 2;
+        while (end < text.size() && text[end] == ' ') end++;
+        return {"Remove '" + std::string(e.name->text) + " <-'", {{{e.name->loc, end}, ""}}};
+    }
+
+    // checks whether two operators on the same level need parentheses, which they do when their associativities differ or either one is non-associative
+    bool needsParens(const OpInfo* prev, const Token& op) {
+        if (prev == nullptr || prev->level != op.op->level) return false;
+        return prev->assoc != op.op->assoc || prev->assoc == Assoc::None;
+    }
+
+    // where the last operand of an operator expression starts, the y in x a y, or nothing for anything else
+    std::optional<SourceLoc> lastOperandStart(const Expr& e) {
+        if (e.kind == ExprKind::Binary) return static_cast<const BinaryExpr&>(e).rhs->span.start;
+        if (e.kind == ExprKind::ExtraBinary) return static_cast<const ExtraBinaryExpr&>(e).rhs->span.start;
+        if (e.kind == ExprKind::Pipe) return static_cast<const PipeExpr&>(e).rhs->span.start;
+        return std::nullopt;
+    }
+
+    // the two ways to parenthesize x a y b z once z is parsed: around everything before b, or around y b z, where before is everything before b
+    std::vector<Fix> groupings(const std::string& a, const std::string& b, Span before, std::optional<SourceLoc> lastOperand, SourceLoc end) {
+        std::vector<Fix> fixes{{"Write '(x " + a + " y) " + b + " z'", {insertion(before.start, "("), insertion(before.end, ")")}}};
+        if (lastOperand) fixes.push_back({"Write 'x " + a + " (y " + b + " z)'", {insertion(*lastOperand, "("), insertion(end, ")")}});
+        return fixes;
     }
 
     // how a token changes the bracket depth: an opening bracket goes one deeper and a closing one comes back out
@@ -193,9 +215,9 @@ class Parser {
         auto after = at(close + 1).kind;
         bool closed = tokens[close].kind == TokenKind::RParen;
         // skips the whole parenthesized list after reporting an error about it
-        auto skip = [&](std::string_view error) -> std::unique_ptr<Expr> {
+        auto skip = [&](std::string_view error, std::vector<Fix> fixes = {}) -> std::unique_ptr<Expr> {
             auto span = Span{open.loc, tokSpan(tokens[close]).end};
-            engine.printError(error, span);
+            engine.printError(error, span, {}, std::move(fixes));
             cursor = closed ? close + 1 : close;
             return std::make_unique<ErrorExpr>(span);
         };
@@ -203,8 +225,10 @@ class Parser {
         if (closed && after == TokenKind::RArrow && !arrowStops) {
             return parseClosure(open.loc, {});
         }
+        // the parentheses of an empty pack or a tuple become a pack's brackets
+        auto brackets = [&](std::string title) { return std::vector<Fix>{{std::move(title), {{tokSpan(open), "["}, {tokSpan(tokens[close]), "]"}}}}; };
         if (closed && close == openIdx + 1) {
-            return skip("cherimoya uses '[]' for an empty pack instead of '()' as follows: let empty <- [];");
+            return skip("cherimoya uses '[]' for an empty pack instead of '()' as follows: let empty <- [];", brackets("Write '[]'"));
         }
         if (closed && close == openIdx + 2 && tokens[openIdx + 1].op != nullptr) {
             std::string op(tokens[openIdx + 1].text);
@@ -212,7 +236,7 @@ class Parser {
         }
         if (hasTopLevelComma(openIdx, close)) {
             if (closed && after == TokenKind::LBracket) return parseFold(open, close);
-            return skip("cherimoya uses packs for tuples instead of parentheses as follows: [a, b]");
+            return skip("cherimoya uses packs for tuples instead of parentheses as follows: [a, b]", closed ? brackets("Write it as a pack, '[...]'") : std::vector<Fix>{});
         }
         // a grouping, or an annotation if :: follows, whose span takes in its parentheses
         auto inner = parseNested();
@@ -365,7 +389,7 @@ class Parser {
             std::vector<RangeElem> range;
             for (size_t i = 0; i < elems.size(); i++) {
                 auto& e = elems[i];
-                if (e.name) engine.printError("cherimoya requires range elements to be unnamed, please remove '" + std::string(e.name->text) + " <-'", e.span);
+                if (e.name) engine.printError("cherimoya requires range elements to be unnamed, please remove '" + std::string(e.name->text) + " <-'", e.span, {}, {unnaming(e)});
                 if (e.marker && i != 0 && i != elems.size() - 1) {
                     engine.printError("cherimoya requires exclusivity markers to be on a range's endpoints, please move it to the first or last value", e.span);
                 }
@@ -606,7 +630,9 @@ class Parser {
             advance();
             init = parseNested();
         } else {
-            engine.printError("cherimoya requires a binding to have an initializer, please write '<- _' to leave it uninitialized", tokSpan(peek()));
+            std::vector<Fix> fixes;
+            if (peek().kind == TokenKind::Semi) fixes.push_back({"Leave it uninitialized with '<- _'", {insertion(peek().loc, " <- _")}});
+            engine.printError("cherimoya requires a binding to have an initializer, please write '<- _' to leave it uninitialized", tokSpan(peek()), {}, std::move(fixes));
             init = std::make_unique<ErrorExpr>(tokSpan(peek()));
         }
         expectSemi(init.get());
@@ -1238,7 +1264,7 @@ public:
                     if (left->kind == ExprKind::Pack && arrow) {
                         std::vector<std::unique_ptr<Expr>> captures;
                         for (auto& e : static_cast<PackExpr&>(*left).elems) {
-                            if (e.name) engine.printError("cherimoya requires captures to be unnamed, please remove '" + std::string(e.name->text) + " <-'", tokSpan(*e.name));
+                            if (e.name) engine.printError("cherimoya requires captures to be unnamed, please remove '" + std::string(e.name->text) + " <-'", tokSpan(*e.name), {}, {unnaming(e)});
                             captures.push_back(std::move(e.value));
                         }
                         left = parseClosure(start, std::move(captures));
@@ -1255,7 +1281,7 @@ public:
                     std::vector<std::unique_ptr<Expr>> args;
                     if (contents->kind == ExprKind::Pack) {
                         for (auto& e : static_cast<PackExpr&>(*contents).elems) {
-                            if (e.name) engine.printError("cherimoya requires index arguments to be unnamed, please remove '" + std::string(e.name->text) + " <-'", tokSpan(*e.name));
+                            if (e.name) engine.printError("cherimoya requires index arguments to be unnamed, please remove '" + std::string(e.name->text) + " <-'", tokSpan(*e.name), {}, {unnaming(e)});
                             args.push_back(std::move(e.value));
                         }
                     } else {
@@ -1287,18 +1313,30 @@ public:
 
                 // a binary operator, reading its level and associativity from the table
                 default: {
-                    checkMixing(prev, op);
+                    // a mix that needs parentheses is reported once the right side is parsed, so its fixes know where that side ends
+                    const OpInfo* mixed = needsParens(prev, op) ? prev : nullptr;
+                    Span before = left->span;
+                    auto lastOperand = lastOperandStart(*left);
+                    auto reportMixed = [&]() {
+                        if (!mixed) return;
+                        std::string a = mixed->spelling, b(op.text);
+                        engine.printError("cherimoya requires parentheses to mix '" + a + "' and '" + b + "', please write '(x " + a + " y) " + b + " z' or 'x " + a + " (y " + b + " z)'",
+                            tokSpan(op), {}, groupings(a, b, before, lastOperand, prevEnd()));
+                    };
                     prev = op.op;
                     int nextBP = op.op->assoc == Assoc::Right ? lbp - 1 : lbp;
 
                     // pipes, which can't be mixed at the same depth
                     if (op.op->category == OpCategory::Pipe) {
-                        if (pipe != nullptr && pipe->kind != op.kind) {
-                            engine.printError("cherimoya requires parentheses to mix '|>' and '<|', please write '(x |> f) <| y' or 'x |> (f <| y)'", tokSpan(op));
-                        }
+                        const OpInfo* other = pipe != nullptr && pipe->kind != op.kind ? pipe : nullptr;
                         pipe = op.op;
                         auto rhs = parseExpr(nextBP, op.op);
                         left = std::make_unique<PipeExpr>(op, std::move(left), std::move(rhs), Span{start, prevEnd()});
+                        if (other) {
+                            engine.printError("cherimoya requires parentheses to mix '|>' and '<|', please write '(x |> f) <| y' or 'x |> (f <| y)'",
+                                tokSpan(op), {}, groupings(other->spelling, std::string(op.text), before, lastOperand, prevEnd()));
+                        }
+                        reportMixed();
                         break;
                     }
 
@@ -1313,6 +1351,7 @@ public:
                             operands.push_back(parseExpr(nextBP, op.op));
                         }
                         left = std::make_unique<ChainExpr>(std::move(operands), std::move(ops), Span{start, prevEnd()});
+                        reportMixed();
                         break;
                     }
 
@@ -1323,6 +1362,7 @@ public:
                     } else {
                         left = std::make_unique<BinaryExpr>(op, std::move(left), std::move(rhs), span);
                     }
+                    reportMixed();
                     break;
                 }
             }

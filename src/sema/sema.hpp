@@ -147,13 +147,55 @@ class Sema {
         });
     }
 
+    // the source text of a span, which a fix quotes or rewrites
+    std::string textOf(Span span) {
+        return std::string(engine.getManager().text().substr(span.start, span.length()));
+    }
+
+    // turns a boolf into a bool with the usual cutoff, where anything but a name, a call, or a literal goes in parentheses, since > binds tighter than && and ||
+    Fix cutoff(const Expr& e, Span replaced) {
+        bool isAtom = e.kind == ExprKind::Identifier || e.kind == ExprKind::Call || isLiteral(e);
+        std::string value = isAtom ? textOf(e.span) : "(" + textOf(e.span) + ")";
+        return {"Compare it with a cutoff, '> 0.5'", {{replaced, value + " > 0.5"}}};
+    }
+
+    // makes a binding or parameter mutable where it's declared: mut goes in front of its type, or :: mut after its name when it has none
+    std::vector<Fix> mutability(const Symbol& symbol) {
+        std::string_view text = engine.getManager().text();
+        size_t at = symbol.span.end;
+        while (at < text.size() && text[at] == ' ') at++;
+        std::string title = "Make '" + std::string(symbol.name) + "' mutable";
+        if (text.compare(at, 2, "::") == 0) {
+            at += 2;
+            while (at < text.size() && text[at] == ' ') at++;
+            return {{title, {insertion(at, "mut ")}}};
+        }
+        if (text.compare(at, 2, "<-") == 0) return {{title, {insertion(symbol.span.end, " :: mut")}}};
+        return {};
+    }
+
+    // adds a catch-all arm before a match's closing brace: on a line of its own, one level in from the brace, when the brace is alone on its line, and right before it otherwise
+    std::vector<Fix> catchAllArm(const MatchExpr& m) {
+        std::string_view text = engine.getManager().text();
+        size_t brace = m.span.end - 1;
+        if (m.span.length() == 0 || text[brace] != '}') return {};
+        size_t lineStart = brace;
+        while (lineStart > 0 && (text[lineStart - 1] == ' ' || text[lineStart - 1] == '\t')) lineStart--;
+        std::string title = "Add a '_ -> { }' arm";
+        if (lineStart == 0 || text[lineStart - 1] == '\n') {
+            std::string indent(text.substr(lineStart, brace - lineStart));
+            return {{title, {insertion(lineStart, indent + "    _ -> { }\n")}}};
+        }
+        return {{title, {insertion(brace, "_ -> { } ")}}};
+    }
+
     // checks a predicate and requires it to be a bool
     void expectBool(Expr& e, std::string_view what) {
         auto type = checkExpr(e);
         if (type == context.semaBool || type == context.semaError) return;
         // a boolf is never a condition, since a match or a loop has to go one way, so it gets its own fix, the cutoff
         if (type == context.semaBoolf) {
-            engine.printError("cherimoya requires " + std::string(what) + " to be a bool, please compare the boolf with a cutoff, like 'x > 0.5'", e.span);
+            engine.printError("cherimoya requires " + std::string(what) + " to be a bool, please compare the boolf with a cutoff, like 'x > 0.5'", e.span, {}, {cutoff(e, e.span)});
             return;
         }
         engine.printError("cherimoya requires " + std::string(what) + " to be a bool, please compare it to something", e.span);
@@ -302,10 +344,16 @@ class Sema {
         hoist(stmts);
         bool completes = true;
         bool warned = false;
-        for (auto& s : stmts) {
+        for (size_t i = 0; i < stmts.size(); i++) {
+            auto& s = stmts[i];
             if (fnOf(s.get()) != nullptr) continue;
             if (!completes && !warned) {
-                engine.printWarning("cherimoya never runs this statement, since every path before it yields", s->span);
+                // the fix removes every statement from here on but the functions, which are hoisted, so something before the yield can still call them
+                Fix fix{"Remove the statements that never run", {}};
+                for (size_t j = i; j < stmts.size(); j++) {
+                    if (fnOf(stmts[j].get()) == nullptr) fix.edits.push_back(removal(engine.getManager().text(), stmts[j]->span));
+                }
+                engine.printWarning("cherimoya never runs this statement, since every path before it yields", s->span, {}, {fix});
                 warned = true;
             }
             if (checkStmt(*s)) completes = false;
@@ -450,11 +498,15 @@ class Sema {
         bool seenFalse = false;
         const MatchArm* catchAll = nullptr;
         bool warned = false;
-        for (auto& arm : m.arms) {
+        for (size_t i = 0; i < m.arms.size(); i++) {
+            auto& arm = m.arms[i];
             if (covered && !warned) {
                 std::vector<Note> notes;
                 if (catchAll) notes.push_back({"this arm matches every value", catchAll->pattern->span});
-                engine.printWarning("cherimoya never reaches this arm, since the arms before it match every value", arm.pattern->span, notes);
+                // every arm from here on is just as unreachable, so the fix removes them all
+                Fix fix{"Remove the arms that never run", {}};
+                for (size_t j = i; j < m.arms.size(); j++) fix.edits.push_back(removal(engine.getManager().text(), m.arms[j].span));
+                engine.printWarning("cherimoya never reaches this arm, since the arms before it match every value", arm.pattern->span, notes, {fix});
                 warned = true;
             }
             SemaType* type = nullptr;
@@ -476,7 +528,7 @@ class Sema {
         bool yieldsValue = target.yielded != nullptr && target.yielded != context.semaVoid && !isPoisoned(target.yielded);
         if (isNumeric(subject) || isCharacter(subject) || subject == context.semaBoolf || yieldsValue) {
             std::string what = subject ? "a match on '" + subject->toString() + "'" : "a match that yields a value";
-            engine.printError("cherimoya requires " + what + " to cover every value, please add a '_ -> { ... }' arm", Span{m.span.start, m.span.start + 5});
+            engine.printError("cherimoya requires " + what + " to cover every value, please add a '_ -> { ... }' arm", Span{m.span.start, m.span.start + 5}, {}, catchAllArm(m));
             return context.semaError;
         }
         return finish(target, true, "this match");
@@ -536,8 +588,7 @@ class Sema {
                 auto& expr = *static_cast<ExprStmt&>(s).expr;
                 auto type = checkExpr(expr);
                 if (type == context.semaVoid || isPoisoned(type)) return type == context.semaNever;
-                auto text = engine.getManager().text().substr(expr.span.start, expr.span.length());
-                engine.printError("cherimoya requires a value to be used or discarded, please write '_ <- " + std::string(text) + ";'", expr.span);
+                engine.printError("cherimoya requires a value to be used or discarded, please write '_ <- " + textOf(expr.span) + ";'", expr.span, {}, {{"Discard it with '_ <- '", {insertion(expr.span.start, "_ <- ")}}});
                 return false;
             }
             case StmtKind::Yield:
@@ -614,7 +665,7 @@ class Sema {
             return context.semaError;
         }
         auto fix = symbol->kind == SymbolKind::Param && !isPoisoned(type) ? "declare it as '" + name + " :: mut " + type->toString() + "'" : "declare it with 'let " + name + " :: mut <- ...;'";
-        engine.printError("cherimoya requires '" + name + "' to be mutable to assign to it, please " + fix, place.span, {{"'" + name + "' is declared here", symbol->span}});
+        engine.printError("cherimoya requires '" + name + "' to be mutable to assign to it, please " + fix, place.span, {{"'" + name + "' is declared here", symbol->span}}, mutability(*symbol));
         return type;
     }
 
@@ -881,7 +932,7 @@ class Sema {
         if (target == context.semaBoolf) isValid = asFloat(source) || isByte(source) || source == context.semaBool || source == context.semaBoolf;
         if (source == context.semaBoolf && target != context.semaBoolf) isValid = asFloat(target) || isByte(target);
         if (source == context.semaBoolf && target == context.semaBool) {
-            engine.printError("cherimoya requires a boolf to become a bool by a cutoff, please compare it, like 'x > 0.5'", span);
+            engine.printError("cherimoya requires a boolf to become a bool by a cutoff, please compare it, like 'x > 0.5'", span, {}, {cutoff(*args[0], span)});
             return context.semaError;
         }
         if (!isValid) {
@@ -1084,7 +1135,10 @@ class Sema {
     void checkMain(Scope& global) {
         Symbol* main = global.lookup("main");
         if (main == nullptr) {
-            engine.printError("cherimoya requires a program to have a 'main' function, please add 'let () -> main -> (code :: int) { 0 -| }'", Span{0, 0});
+            std::string_view text = engine.getManager().text();
+            std::string lead = text.empty() ? "" : text.back() == '\n' ? "\n" : "\n\n";
+            engine.printError("cherimoya requires a program to have a 'main' function, please add 'let () -> main -> (code :: int) { 0 -| }'", Span{0, 0}, {},
+                {{"Add a 'main' function", {insertion(text.size(), lead + "let () -> main -> (code :: int) { 0 -| }\n")}}});
             return;
         }
         if (isPoisoned(main->type)) return;
