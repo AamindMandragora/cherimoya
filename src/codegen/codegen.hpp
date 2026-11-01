@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include "expr.hpp"
 #include "sema.hpp"
 #include "type.hpp"
@@ -49,7 +50,7 @@ class Codegen {
     // sema interns its types, so each one is lowered once and looked up by pointer after that
     std::unordered_map<SemaType*, llvm::Type*> lowered;
 
-    // turns a sema type into an LLVM type: an integer is as wide as its type, bool is i1, char is a byte, rune is 32 bits, a float is LLVM's type for its encoding, FP8 is a byte, and void and never are void
+    // turns a sema type into an LLVM type: an integer is as wide as its type, bool is i1, boolf and char are bytes, rune is 32 bits, a float is LLVM's type for its encoding, FP8 is a byte, and void and never are void
     llvm::Type* lower(SemaType* type) {
         auto found = lowered.find(type);
         if (found != lowered.end()) return found->second;
@@ -58,6 +59,7 @@ class Codegen {
                 switch (static_cast<PrimitiveSemaType*>(type)->primitive) {
                     case PrimitiveKind::Bool:
                         return lowered[type] = irbuilder.getInt1Ty();
+                    case PrimitiveKind::Boolf:
                     case PrimitiveKind::Char:
                         return lowered[type] = irbuilder.getInt8Ty();
                     case PrimitiveKind::Rune:
@@ -373,6 +375,44 @@ class Codegen {
         return converted;
     }
 
+    // the unsigned byte a boolf is compared as, where 0 stands for 0 and 255 for 1, so the steps compare in order
+    IntSemaType boolfBits{8, false, false, "boolf"};
+
+    // a boolf's product, the byte nearest a * b / 255, worked out in 16 bits, where adding 127 before dividing rounds to the nearest step, and 255 being odd means there's never a tie
+    llvm::Value* boolfProduct(llvm::Value* lhs, llvm::Value* rhs) {
+        llvm::Value* product = irbuilder.CreateMul(irbuilder.CreateZExt(lhs, irbuilder.getInt16Ty()), irbuilder.CreateZExt(rhs, irbuilder.getInt16Ty()));
+        llvm::Value* rounded = irbuilder.CreateUDiv(irbuilder.CreateAdd(product, irbuilder.getInt16(127)), irbuilder.getInt16(255));
+        return irbuilder.CreateTrunc(rounded, irbuilder.getInt8Ty());
+    }
+
+    // a boolf's xor, max(min(a, !b), min(!a, b)), how much exactly one side holds, where ! is 255 - x, which is every bit flipped
+    llvm::Value* boolfXor(llvm::Value* lhs, llvm::Value* rhs) {
+        auto min = [&](llvm::Value* a, llvm::Value* b) { return irbuilder.CreateBinaryIntrinsic(llvm::Intrinsic::umin, a, b); };
+        llvm::Value* onlyLeft = min(lhs, irbuilder.CreateNot(rhs));
+        llvm::Value* onlyRight = min(irbuilder.CreateNot(lhs), rhs);
+        return irbuilder.CreateBinaryIntrinsic(llvm::Intrinsic::umax, onlyLeft, onlyRight);
+    }
+
+    // a double, NaN-free, which a boolf becomes on its way to any float, since it holds every k / 255 closer than any narrower float can, so the value rounds only once, when it's narrowed
+    FloatSemaType semaDouble{FloatFormat::Double, true, 53, 1.79769313486231570815e308L, "f64"};
+
+    // converts to or from a boolf: its raw byte is itself, a bool is 0 or 255, and a float is the byte over 255, where a float becoming a boolf traps outside 0 to 1, NaN included, and otherwise rounds to the nearest step, halves going up
+    llvm::Value* convertBoolf(llvm::Value* value, SemaType* from, SemaType* to, Span span) {
+        if (asInt(from) || asInt(to) || from == to) return value;
+        if (!isBoolf(from) && !asFloat(from)) return irbuilder.CreateSelect(value, irbuilder.getInt8(255), irbuilder.getInt8(0));
+        if (isBoolf(from)) {
+            llvm::Value* fraction = irbuilder.CreateFDiv(irbuilder.CreateUIToFP(value, irbuilder.getDoubleTy()), llvm::ConstantFP::get(irbuilder.getDoubleTy(), 255.0));
+            return convert(fraction, &semaDouble, to, span);
+        }
+        FloatSemaType& source = *asFloat(from);
+        llvm::Value* wide = irbuilder.CreateFPCast(isFp8(source) ? widen(value, source) : value, irbuilder.getDoubleTy());
+        // the unordered comparisons are true for a NaN too, so one or covers every value that isn't from 0 to 1
+        llvm::Value* fails = irbuilder.CreateOr(irbuilder.CreateFCmpULT(wide, llvm::ConstantFP::get(wide->getType(), 0.0)), irbuilder.CreateFCmpUGT(wide, llvm::ConstantFP::get(wide->getType(), 1.0)));
+        trapIf(fails, quoted(span) + " doesn't fit in boolf", span);
+        llvm::Value* scaled = irbuilder.CreateFMul(wide, llvm::ConstantFP::get(wide->getType(), 255.0));
+        return irbuilder.CreateFPToUI(irbuilder.CreateUnaryIntrinsic(llvm::Intrinsic::round, scaled), irbuilder.getInt8Ty());
+    }
+
     // checks whether a float is a NaN, which is the one value that isn't ordered with itself
     llvm::Value* isNaN(llvm::Value* value) {
         return irbuilder.CreateFCmpUNO(value, value);
@@ -504,6 +544,7 @@ class Codegen {
 
     // emits one built-in arithmetic or bitwise operator on two values of the same type, which compound assignment shares through the base of X<-, where FP8 is computed in f32 and narrowed back, which rounds exactly as if it were computed in FP8, since f32 has at least twice FP8's precision plus two bits
     llvm::Value* arithmetic(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, SemaType* type, Span span) {
+        if (isBoolf(type)) return boolfProduct(lhs, rhs);
         if (FloatSemaType* floating = asFloat(type)) {
             if (!isFp8(*floating)) return floatArithmetic(op, lhs, rhs, *floating, span);
             return narrow(floatArithmetic(op, widen(lhs, *floating), widen(rhs, *floating), *floating, span), *floating, span);
@@ -511,7 +552,7 @@ class Codegen {
         return intArithmetic(op, lhs, rhs, *asInt(type), span);
     }
 
-    // emits one built-in comparison on two values of the same type, where FP8's = and != compare its bytes and everything else compares in f32, a character compares as its code point, and a bool, the one other type that's compared, only has equality, and its bits are its value
+    // emits one built-in comparison on two values of the same type, where FP8's = and != compare its bytes and everything else compares in f32, a character compares as its code point, a boolf as its byte, and a bool, the one other type that's compared, only has equality, and its bits are its value
     llvm::Value* compare(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, SemaType* type) {
         if (FloatSemaType* floating = asFloat(type)) {
             if (!isFp8(*floating)) return floatCompare(op, lhs, rhs, *floating);
@@ -520,6 +561,7 @@ class Codegen {
             return floatCompare(op, widen(lhs, *floating), widen(rhs, *floating), *floating);
         }
         if (asInt(type) || isCharacter(type)) return intCompare(op, lhs, rhs, codePointOf(type));
+        if (isBoolf(type)) return intCompare(op, lhs, rhs, boolfBits);
         return op == TokenKind::Eq || op == TokenKind::EqEq ? irbuilder.CreateICmpEQ(lhs, rhs) : irbuilder.CreateICmpNE(lhs, rhs);
     }
 
@@ -531,9 +573,10 @@ class Codegen {
         return checked(TokenKind::Minus, llvm::ConstantInt::get(value->getType(), 0), value, integer, span);
     }
 
-  // converts between any two numbers, or a character and an integer, by whether each side is an integer or a float, where a character converts as the integer holding its code point, FP8 is widened to f32 before it converts to anything, and anything converting to FP8 becomes a double first and is narrowed from there
+    // converts between any two numbers, a character and an integer, or a boolf and a float, a byte, or a bool, by whether each side is an integer or a float, where a character converts as the integer holding its code point, FP8 is widened to f32 before it converts to anything, and anything converting to FP8 becomes a double first and is narrowed from there
     llvm::Value* convert(llvm::Value* value, SemaType* from, SemaType* to, Span span) {
         if (isCharacter(from) || isCharacter(to)) return convertCharacter(value, from, to, span);
+        if (isBoolf(from) || isBoolf(to)) return convertBoolf(value, from, to, span);
         IntSemaType* fromInt = asInt(from);
         IntSemaType* toInt = asInt(to);
         if (fromInt && toInt) return intToInt(value, *fromInt, *toInt, span);
@@ -560,6 +603,8 @@ class Codegen {
     // emits an integer literal as a constant of its type, which sema made sure it fits in, or as a float when it stands for one, which sema made sure it's exact in
     llvm::Value* emitIntLiteral(IntLiteralExpr& literal) {
         auto [radix, digits] = literalDigits(literal.literal);
+        // a boolf literal is 0 or 1, which are its bytes 0 and 255
+        if (isBoolf(literal.type)) return irbuilder.getInt8(llvm::APInt(128, digits, radix).isZero() ? 0 : 255);
         if (FloatSemaType* floating = asFloat(literal.type)) {
             llvm::APFloat value(semantics(floating->format));
             // the value is exact, so converting it can't round
@@ -582,6 +627,16 @@ class Codegen {
             llvm::APInt mantissa(whole.size() * bitsPerDigit, whole, radix);
             text = "0x" + llvm::toString(mantissa, 16, false) + "p" + std::to_string(exponent);
         }
+        // a boolf literal is read as a double and rounds to the nearest of its steps, halves going up, the same as converting a float
+        if (isBoolf(literal.type)) {
+            llvm::APFloat value(llvm::APFloat::IEEEdouble());
+            llvm::Expected<llvm::APFloat::opStatus> status = value.convertFromString(text, llvm::APFloat::rmNearestTiesToEven);
+            if (!status) {
+                llvm::consumeError(status.takeError());
+                llvm_unreachable("sema accepted a float literal APFloat can't read");
+            }
+            return irbuilder.getInt8(static_cast<uint8_t>(std::lround(value.convertToDouble() * 255.0)));
+        }
         FloatSemaType& type = *asFloat(literal.type);
         llvm::APFloat value(semantics(type.format));
         // sema made sure the text is a valid literal in range, so APFloat failing to read it is a codegen bug
@@ -593,29 +648,32 @@ class Codegen {
         return floatConstant(value, type);
     }
 
-    // a && b only evaluates b when a is true, and a || b only when a is false, so the right side gets its own block and a phi picks the answer
-    llvm::Value* emitShortCircuit(BinaryExpr& binary) {
-        bool isAnd = binary.op.kind == TokenKind::AmpAmp;
+    // a && b only evaluates b when a doesn't already decide the answer, and neither does a || b, so the right side gets its own block and a phi picks the answer: a bool decides at false for && and true for ||, and a boolf at 0 for && and 1 for ||, the only values whose minimum or maximum doesn't depend on b, and either way the answer that's decided is a itself, where a is already emitted, so a compound assignment can pass in the place's value
+    llvm::Value* shortCircuit(bool isAnd, llvm::Value* lhs, SemaType* type, Expr& rhsExpr) {
+        bool isFuzzy = isBoolf(type);
         llvm::Function* f = irbuilder.GetInsertBlock()->getParent();
         llvm::BasicBlock* rhsBlock = llvm::BasicBlock::Create(context, isAnd ? "and.rhs" : "or.rhs", f);
         llvm::BasicBlock* end = llvm::BasicBlock::Create(context, isAnd ? "and.end" : "or.end", f);
-        llvm::Value* lhs = emitExpr(*binary.lhs);
         // the block the left side finished in, which isn't always where it started
         llvm::BasicBlock* lhsEnd = irbuilder.GetInsertBlock();
-        if (isAnd) {
-            irbuilder.CreateCondBr(lhs, rhsBlock, end);
-        } else {
-            irbuilder.CreateCondBr(lhs, end, rhsBlock);
-        }
+        llvm::Value* isDecided = isFuzzy ? irbuilder.CreateICmpEQ(lhs, irbuilder.getInt8(isAnd ? 0 : 255)) : isAnd ? irbuilder.CreateNot(lhs) : lhs;
+        irbuilder.CreateCondBr(isDecided, end, rhsBlock);
         irbuilder.SetInsertPoint(rhsBlock);
-        llvm::Value* rhs = emitExpr(*binary.rhs);
+        llvm::Value* rhs = emitExpr(rhsExpr);
+        // a boolf's && is the minimum and its || the maximum, and a bool's answer is just b
+        if (isFuzzy) rhs = irbuilder.CreateBinaryIntrinsic(isAnd ? llvm::Intrinsic::umin : llvm::Intrinsic::umax, lhs, rhs);
         llvm::BasicBlock* rhsEnd = irbuilder.GetInsertBlock();
         irbuilder.CreateBr(end);
         irbuilder.SetInsertPoint(end);
-        llvm::PHINode* phi = irbuilder.CreatePHI(irbuilder.getInt1Ty(), 2);
-        phi->addIncoming(irbuilder.getInt1(!isAnd), lhsEnd);
+        llvm::PHINode* phi = irbuilder.CreatePHI(lhs->getType(), 2);
+        phi->addIncoming(lhs, lhsEnd);
         phi->addIncoming(rhs, rhsEnd);
         return phi;
+    }
+
+    // a ^^ b, which always evaluates both sides: a bool's is xor, and a boolf's is its fuzzy xor
+    llvm::Value* exclusiveOr(llvm::Value* lhs, llvm::Value* rhs, SemaType* type) {
+        return isBoolf(type) ? boolfXor(lhs, rhs) : irbuilder.CreateXor(lhs, rhs);
     }
 
     // emits a call of one value, which is what both pipes are, where a type in the function's place converts the value instead: x |> i8 is i8(x)
@@ -638,14 +696,16 @@ class Codegen {
                 return emitIntLiteral(static_cast<IntLiteralExpr&>(e));
             case ExprKind::FloatLiteral:
                 return emitFloatLiteral(static_cast<FloatLiteralExpr&>(e));
+            // true and false are a bool's 1 and 0, or a boolf's 255 and 0
             case ExprKind::BoolLiteral:
+                if (isBoolf(e.type)) return irbuilder.getInt8(static_cast<BoolLiteralExpr&>(e).literal ? 255 : 0);
                 return irbuilder.getInt1(static_cast<BoolLiteralExpr&>(e).literal);
             case ExprKind::CharLiteral:
                 return llvm::ConstantInt::get(lower(e.type), charLiteralValue(static_cast<CharLiteralExpr&>(e).literal));
             // an annotation only told sema the value's type, so it's the value itself
             case ExprKind::Ann:
                 return emitExpr(*static_cast<AnnExpr&>(e).expr);
-            // prefix operators, where ! and ~ are both a bitwise not, which on an i1 is logical not
+            // prefix operators, where ! and ~ are both a bitwise not, which on an i1 is logical not, and on a boolf's byte is 255 - x
             case ExprKind::Unary: {
                 auto& unary = static_cast<UnaryExpr&>(e);
                 llvm::Value* operand = emitExpr(*unary.operand);
@@ -664,7 +724,9 @@ class Codegen {
             // binary operators, where both sides have the same type, so the left one decides which instructions to use
             case ExprKind::Binary: {
                 auto& binary = static_cast<BinaryExpr&>(e);
-                if (binary.op.kind == TokenKind::AmpAmp || binary.op.kind == TokenKind::BarBar) return emitShortCircuit(binary);
+                if (binary.op.kind == TokenKind::AmpAmp || binary.op.kind == TokenKind::BarBar) {
+                    return shortCircuit(binary.op.kind == TokenKind::AmpAmp, emitExpr(*binary.lhs), binary.lhs->type, *binary.rhs);
+                }
                 llvm::Value* lhs = emitExpr(*binary.lhs);
                 llvm::Value* rhs = emitExpr(*binary.rhs);
                 switch (binary.op.kind) {
@@ -680,7 +742,7 @@ class Codegen {
                     case TokenKind::Shr:
                         return arithmetic(binary.op.kind, lhs, rhs, binary.lhs->type, e.span);
                     case TokenKind::CaretCaret:
-                        return irbuilder.CreateXor(lhs, rhs);
+                        return exclusiveOr(lhs, rhs, binary.lhs->type);
                     case TokenKind::Lt:
                     case TokenKind::Le:
                     case TokenKind::Gt:
@@ -863,15 +925,25 @@ class Codegen {
                 break;
             }
             // _ <- value discards, place <- value stores, and place op<- value is place <- place op value
+            // place op<- value is place <- place op value, where &&<- and ||<- short-circuit like && and ||, so their value is only evaluated once the place's value doesn't decide the answer
             case StmtKind::Assign: {
                 auto& assign = static_cast<AssignStmt&>(s);
+                TokenKind op = assign.op ? assign.op->op->base->kind : TokenKind::Error;
+                if (op == TokenKind::AmpAmp || op == TokenKind::BarBar) {
+                    Symbol* place = static_cast<IdentifierExpr&>(*assign.place).decl;
+                    llvm::Value* address = addressOf(place);
+                    llvm::Value* current = irbuilder.CreateLoad(lower(place->type), address);
+                    irbuilder.CreateStore(shortCircuit(op == TokenKind::AmpAmp, current, place->type, *assign.value), address);
+                    break;
+                }
                 llvm::Value* value = emitExpr(*assign.value);
                 if (assign.place->kind == ExprKind::Wildcard) break;
                 Symbol* place = static_cast<IdentifierExpr&>(*assign.place).decl;
                 llvm::Value* address = addressOf(place);
                 if (assign.op) {
                     llvm::Value* current = irbuilder.CreateLoad(lower(place->type), address);
-                    value = arithmetic(assign.op->op->base->kind, current, value, assign.place->type, Span{assign.place->span.start, assign.value->span.end});
+                    value = op == TokenKind::CaretCaret ? exclusiveOr(current, value, place->type)
+                        : arithmetic(op, current, value, assign.place->type, Span{assign.place->span.start, assign.value->span.end});
                 }
                 irbuilder.CreateStore(value, address);
                 break;

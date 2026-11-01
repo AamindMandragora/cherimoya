@@ -163,7 +163,7 @@ inline std::string typeHelp(std::string_view type) {
     if (type == "bool") return "`true` or `false`.";
     if (type == "char") return "One ASCII character, 0 to 7F, held in a byte.";
     if (type == "rune") return "One Unicode scalar value, 0 to 10FFFF but not the surrogates D800 to DFFF, held in 4 bytes.";
-    if (type == "boolf") return "Reserved for a fuzzy boolean, which has no meaning yet.";
+    if (type == "boolf") return "A fuzzy boolean, a truth value from 0 to 1 in 256 steps, held in a byte, where `&&` is the minimum, `||` the maximum, and `*` the product.";
     if (type[0] == 'i') {
         // the width is the digits after the i, and the suffix is u for unsigned and w for wrapping
         size_t digits = 1;

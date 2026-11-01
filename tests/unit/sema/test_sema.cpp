@@ -499,3 +499,59 @@ TEST_CASE("Sema: annotations", "[sema]") {
     CHECK(semaErrors("let x :: i8 <- (5 :: i16);") == 1);
     CHECK(semaErrors("let c <- ('\\u{E9}' :: char);") == 1);
 }
+
+// checks that literals from 0 to 1 and true and false become boolfs where one is expected, and nothing outside that range does
+TEST_CASE("Sema: boolf literals", "[sema]") {
+    CHECK(symbolType("let x :: boolf <- 0.7;", "x") == "boolf");
+    CHECK(symbolType("let x :: boolf <- 0;", "x") == "boolf");
+    CHECK(symbolType("let x :: boolf <- 1;", "x") == "boolf");
+    CHECK(symbolType("let x :: boolf <- 1.0;", "x") == "boolf");
+    CHECK(symbolType("let x :: boolf <- true;", "x") == "boolf");
+    CHECK(symbolType("let x <- (0.25 :: boolf);", "x") == "boolf");
+    CHECK(symbolType("let x <- true;", "x") == "bool");
+    CHECK(semaErrors("let x :: boolf <- 2;") == 1);
+    CHECK(semaErrors("let x :: boolf <- 1.5;") == 1);
+    CHECK(semaErrors("let x :: boolf <- -0.5;") == 1);
+    CHECK(semaErrors("let x :: boolf <- -1;") == 1);
+}
+
+// checks that && || ^^ ! and * work on boolfs, that comparisons turn one into a bool, and that a boolf is never a condition
+TEST_CASE("Sema: boolf operators", "[sema]") {
+    CHECK(symbolType("let a :: boolf <- 0.3; let b :: boolf <- 0.6; let x <- a && b;", "x") == "boolf");
+    CHECK(symbolType("let a :: boolf <- 0.3; let x <- 0.5 || a;", "x") == "boolf");
+    CHECK(symbolType("let a :: boolf <- 0.3; let x <- a ^^ true;", "x") == "boolf");
+    CHECK(symbolType("let a :: boolf <- 0.3; let x <- !a;", "x") == "boolf");
+    CHECK(symbolType("let a :: boolf <- 0.3; let x <- a * 0.5;", "x") == "boolf");
+    CHECK(symbolType("let x :: boolf <- 0.2 && 0.9;", "x") == "boolf");
+    CHECK(symbolType("let a :: boolf <- 0.3; let x <- a > 0.5;", "x") == "bool");
+    CHECK(symbolType("let a :: boolf <- 0.3; let x <- 0 < a <= 1;", "x") == "bool");
+    CHECK(semaErrors("let a :: mut boolf <- 0.3; a *<- 0.5; a &&<- 0.2; a ||<- true; a ^^<- 0.9; let x <- a;") == 0);
+    CHECK(semaErrors("let b :: mut <- true; b &&<- 1 < 2; b ||<- false; b ^^<- true;") == 0);
+    CHECK(semaErrors("let b :: mut <- true; b &&<- 0.5;") == 1);
+    CHECK(semaErrors("let n :: mut <- 3; n &&<- 1;") == 1);
+    CHECK(semaErrors("let a :: boolf <- 0.3; let x <- a + 0.5;") == 1);
+    CHECK(semaErrors("let a :: boolf <- 0.3; let x <- -a;") == 1);
+    CHECK(semaErrors("let a :: boolf <- 0.3; let x <- a && true && (1 < 2);") == 1);
+    CHECK(semaErrors("let a :: boolf <- 0.3; let x <- a * 2.5;") == 1);
+    CHECK(semaErrors("let a :: boolf <- 0.3; match { (a) -> { } }") == 1);
+    CHECK(semaErrors("let a :: boolf <- 0.3; repeat (a) { }") == 1);
+    CHECK(semaErrors("let a :: boolf <- 0.3; match { (a > 0.5) -> { } }") == 0);
+    CHECK(semaErrors("let a :: boolf <- 0.3; let n <- match (a) { 0.5 -> { 1 -| } true -> { 2 -| } _ -> { 3 -| } };") == 0);
+    CHECK(semaErrors("let a :: boolf <- 0.3; match (a) { 0 -> { } 1 -> { } }") == 1);
+}
+
+// checks that a boolf converts to and from floats and its raw byte, that a bool becomes one, and that it only becomes a bool by a cutoff
+TEST_CASE("Sema: boolf conversions", "[sema]") {
+    CHECK(symbolType("let t :: f32 <- 0.4; let x <- boolf(t);", "x") == "boolf");
+    CHECK(symbolType("let a :: boolf <- 0.4; let x <- f64(a);", "x") == "float");
+    CHECK(symbolType("let b :: i8u <- 200; let x <- boolf(b);", "x") == "boolf");
+    CHECK(symbolType("let b :: i8uw <- 200; let x <- boolf(b);", "x") == "boolf");
+    CHECK(symbolType("let a :: boolf <- 0.4; let x <- i8uw(a);", "x") == "i8uw");
+    CHECK(symbolType("let x <- boolf(1 < 2);", "x") == "boolf");
+    CHECK(symbolType("let a :: boolf <- 0.4; let x <- boolf(a);", "x") == "boolf");
+    CHECK(semaErrors("let a :: boolf <- 0.4; let x <- bool(a);") == 1);
+    CHECK(semaErrors("let a :: boolf <- 0.4; let x <- int(a);") == 1);
+    CHECK(semaErrors("let n :: i16u <- 2; let x <- boolf(n);") == 1);
+    CHECK(semaErrors("let n :: i8 <- 2; let x <- boolf(n);") == 1);
+    CHECK(semaErrors("let x <- boolf('a');") == 1);
+}

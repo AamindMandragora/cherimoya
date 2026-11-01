@@ -103,6 +103,7 @@ class Sema {
                     if (IntSemaType* integer = context.intType(name)) return integer;
                     if (FloatSemaType* floating = context.floatType(name)) return floating;
                     if (name == "bool") return context.semaBool;
+                    if (name == "boolf") return context.semaBoolf;
                     if (name == "char") return context.semaChar;
                     if (name == "rune") return context.semaRune;
                 }
@@ -150,6 +151,11 @@ class Sema {
     void expectBool(Expr& e, std::string_view what) {
         auto type = checkExpr(e);
         if (type == context.semaBool || type == context.semaError) return;
+        // a boolf is never a condition, since a match or a loop has to go one way, so it gets its own fix, the cutoff
+        if (type == context.semaBoolf) {
+            engine.printError("cherimoya requires " + std::string(what) + " to be a bool, please compare the boolf with a cutoff, like 'x > 0.5'", e.span);
+            return;
+        }
         engine.printError("cherimoya requires " + std::string(what) + " to be a bool, please compare it to something", e.span);
     }
 
@@ -468,7 +474,7 @@ class Sema {
         targets.pop_back();
         if (covered || (subject && isPoisoned(subject))) return finish(target, false, "this match");
         bool yieldsValue = target.yielded != nullptr && target.yielded != context.semaVoid && !isPoisoned(target.yielded);
-        if (isNumeric(subject) || isCharacter(subject) || yieldsValue) {
+        if (isNumeric(subject) || isCharacter(subject) || subject == context.semaBoolf || yieldsValue) {
             std::string what = subject ? "a match on '" + subject->toString() + "'" : "a match that yields a value";
             engine.printError("cherimoya requires " + what + " to cover every value, please add a '_ -> { ... }' arm", Span{m.span.start, m.span.start + 5});
             return context.semaError;
@@ -540,7 +546,7 @@ class Sema {
             case StmtKind::Wit: {
                 auto& wit = static_cast<WitStmt&>(s);
                 if (wit.bound) {
-                    unsupported("interfaces", wit.span);
+                    unsupported("protocols", wit.span);
                     break;
                 }
                 expectBool(*wit.predicate, "a 'wit' obligation");
@@ -622,6 +628,12 @@ class Sema {
         return asInt(type) || asFloat(type);
     }
 
+    // checks whether a type is an unsigned byte, i8u or i8uw, which holds a boolf's raw bits
+    bool isByte(SemaType* type) {
+        IntSemaType* integer = asInt(type);
+        return integer && integer->bits == 8 && !integer->isSigned;
+    }
+
     // the value of one digit in any base up to 16
     unsigned digitValue(char c) {
         char lower = c | 0x20;
@@ -683,6 +695,16 @@ class Sema {
     SemaType* intLiteral(IntLiteralExpr& literal, SemaType* expected, bool negated, Span span) {
         auto value = intLiteralValue(literal.literal);
         std::string text = (negated ? "-" : "") + std::string(literal.literal);
+        // a boolf literal is a truth value, so the only whole numbers it takes are 0 and 1
+        if (expected == context.semaBoolf) {
+            if (!value || *value > 1 || (negated && *value != 0)) {
+                engine.printError("cherimoya requires " + text + " to be from 0 to 1 to be a 'boolf', please use a value in that range", span);
+                literal.type = context.semaError;
+                return context.semaError;
+            }
+            literal.type = context.semaBoolf;
+            return context.semaBoolf;
+        }
         // a whole number can stand for a float when the float holds it exactly, so x * 2 works on a float x
         if (FloatSemaType* floating = asFloat(expected)) {
             if (!value || !isExactIn(*value, *floating)) {
@@ -705,6 +727,18 @@ class Sema {
 
     // types a float literal, adapting to the expected type when that's a float and defaulting to float otherwise, and checks that it's at most the type's largest value, so a literal never quietly rounds to the largest value or to infinity
     SemaType* floatLiteral(FloatLiteralExpr& literal, SemaType* expected, bool negated, Span span) {
+        // a boolf literal is a truth value from 0 to 1, which rounds to the nearest of its 256 steps
+        if (expected == context.semaBoolf) {
+            long double value = floatLiteralValue(literal.literal);
+            if (value > 1 || (negated && value != 0)) {
+                std::string text = (negated ? "-" : "") + std::string(literal.literal);
+                engine.printError("cherimoya requires " + text + " to be from 0 to 1 to be a 'boolf', please use a value in that range", span);
+                literal.type = context.semaError;
+                return context.semaError;
+            }
+            literal.type = context.semaBoolf;
+            return context.semaBoolf;
+        }
         FloatSemaType* floating = asFloat(expected) ? asFloat(expected) : context.semaFloat;
         if (floatLiteralValue(literal.literal) > floating->max) {
             std::string text = (negated ? "-" : "") + std::string(literal.literal);
@@ -734,9 +768,9 @@ class Sema {
         return inner->kind == ExprKind::IntLiteral || inner->kind == ExprKind::FloatLiteral ? inner : nullptr;
     }
 
-    // checks whether an expression is a number literal, possibly negated, or a char literal, which takes its type from around it instead of deciding one
+    // checks whether an expression is a number literal, possibly negated, a char literal, or a bool literal, which takes its type from around it instead of deciding one
     bool isLiteral(const Expr& e) {
-        return literalOf(e) != nullptr || e.kind == ExprKind::CharLiteral;
+        return literalOf(e) != nullptr || e.kind == ExprKind::CharLiteral || e.kind == ExprKind::BoolLiteral;
     }
 
     // checks whether an expression is a float literal, possibly negated, which decides the type of the whole numbers around it, since they can be exact in a float and never the other way round
@@ -764,9 +798,9 @@ class Sema {
             return operand;
         }
         if (op.spelling == "-" && isNumeric(operand)) return operand;
-        if (op.spelling == "!" && operand == context.semaBool) return operand;
+        if (op.spelling == "!" && (operand == context.semaBool || operand == context.semaBoolf)) return operand;
         if (op.spelling == "~" && integer) return operand;
-        auto wanted = op.spelling == "-" ? "an int or a float" : op.spelling == "!" ? "a bool" : "an int";
+        auto wanted = op.spelling == "-" ? "an int or a float" : op.spelling == "!" ? "a bool or a boolf" : "an int";
         badOperand(wanted, "after", op, operand, span);
         return context.semaError;
     }
@@ -779,13 +813,16 @@ class Sema {
         auto takes = [&](SemaType* side) {
             switch (op.category) {
                 case OpCategory::Arithmetic:
-                    return isNumeric(side);
+                    // a boolf only takes *, the product, since + and - can leave 0 to 1
+                    return isNumeric(side) || (op.spelling == "*" && side == context.semaBoolf);
                 case OpCategory::Comparison:
-                    return isNumeric(side) || isCharacter(side);
+                    // a comparison is how a cutoff turns a boolf into a bool
+                    return isNumeric(side) || isCharacter(side) || side == context.semaBoolf;
                 case OpCategory::Bitwise:
                     return asInt(side) != nullptr;
                 case OpCategory::Logical:
-                    return side == context.semaBool;
+                    // both sides having the same type is checked below, so a bool never mixes with a boolf
+                    return side == context.semaBool || side == context.semaBoolf;
                 default:
                     return side != context.semaVoid && side->kind != SemaTypeKind::Function;
             }
@@ -793,16 +830,16 @@ class Sema {
         std::string_view wanted;
         switch (op.category) {
             case OpCategory::Arithmetic:
-                wanted = "an int or a float";
+                wanted = op.spelling == "*" ? "an int, a float, or a boolf" : "an int or a float";
                 break;
             case OpCategory::Comparison:
-                wanted = "an int, a float, or a character";
+                wanted = "an int, a float, a character, or a boolf";
                 break;
             case OpCategory::Bitwise:
                 wanted = "an int";
                 break;
             case OpCategory::Logical:
-                wanted = "a bool";
+                wanted = "a bool or a boolf";
                 break;
             case OpCategory::Equality:
                 wanted = "a value";
@@ -810,6 +847,7 @@ class Sema {
             default:
                 return context.semaError;
         }
+        // comparisons always give a bool, and logic gives whichever of bool and boolf its operands are
         bool givesBool = op.category == OpCategory::Comparison || op.category == OpCategory::Equality;
         SemaType* result = givesBool ? context.semaBool : lhs;
         if (!takes(lhs) || !takes(rhs)) {
@@ -825,7 +863,7 @@ class Sema {
         return result;
     }
 
-    // checks a conversion, a type called on one value: i32(x) converts any number or character to i32, f32(x) any number to f32, and rune(x) any integer or character to rune, where codegen checks the ones that can lose the value
+    // checks a conversion, a type called on one value: i32(x) converts any number or character to i32, f32(x) any number or boolf to f32, rune(x) any integer or character to rune, and boolf(x) a float, a byte, or a bool to boolf, where codegen checks the ones that can lose the value
     SemaType* checkConversion(TypeExprExpr& callee, const std::vector<Expr*>& args, Span span) {
         auto target = resolveType(*callee.typeExpr);
         callee.type = target;
@@ -839,8 +877,15 @@ class Sema {
         if (isPoisoned(source)) return context.semaError;
         // numbers convert to each other, and characters convert to each other and to and from integers, but never to or from floats
         bool isValid = (isNumeric(target) && isNumeric(source)) || (isCharacter(target) && (isCharacter(source) || asInt(source))) || (asInt(target) && isCharacter(source));
+        // a boolf converts to and from floats and its raw byte, and a bool becomes one, but a boolf only becomes a bool by a cutoff
+        if (target == context.semaBoolf) isValid = asFloat(source) || isByte(source) || source == context.semaBool || source == context.semaBoolf;
+        if (source == context.semaBoolf && target != context.semaBoolf) isValid = asFloat(target) || isByte(target);
+        if (source == context.semaBoolf && target == context.semaBool) {
+            engine.printError("cherimoya requires a boolf to become a bool by a cutoff, please compare it, like 'x > 0.5'", span);
+            return context.semaError;
+        }
         if (!isValid) {
-            engine.printError("cherimoya requires a conversion to be between numbers, or between characters and integers, please convert '" + source->toString() + "' to '" + target->toString() + "' some other way", span);
+            engine.printError("cherimoya requires a conversion to be between numbers, between characters and integers, or between a boolf and a float or a byte, please convert '" + source->toString() + "' to '" + target->toString() + "' some other way", span);
             return context.semaError;
         }
         return callee.type;
@@ -942,8 +987,9 @@ class Sema {
                 return intLiteral(static_cast<IntLiteralExpr&>(e), expected, false, e.span);
             case ExprKind::FloatLiteral:
                 return floatLiteral(static_cast<FloatLiteralExpr&>(e), expected, false, e.span);
+            // true and false are 1 and 0 where a boolf is expected
             case ExprKind::BoolLiteral:
-                return context.semaBool;
+                return expected == context.semaBoolf ? context.semaBoolf : context.semaBool;
             case ExprKind::CharLiteral:
                 return charLiteral(static_cast<CharLiteralExpr&>(e), expected);
             case ExprKind::Ann:
@@ -963,11 +1009,11 @@ class Sema {
                 }
                 return unaryType(*unary.op.op, checkExpr(*unary.operand, expected), unary.operand->span);
             }
-            // arithmetic and bitwise operators give their operands' type, so what the context wants flows into them, while comparisons and logic give a bool
+            // arithmetic, bitwise, and logical operators give their operands' type, so what the context wants flows into them, which is how 0.5 && x makes the 0.5 a boolf, while comparisons give a bool
             case ExprKind::Binary: {
                 auto& binary = static_cast<BinaryExpr&>(e);
                 auto category = binary.op.op->category;
-                bool passes = category == OpCategory::Arithmetic || category == OpCategory::Bitwise;
+                bool passes = category == OpCategory::Arithmetic || category == OpCategory::Bitwise || category == OpCategory::Logical;
                 auto [lhs, rhs] = checkOperands(*binary.lhs, *binary.rhs, passes ? expected : nullptr);
                 return binaryType(*binary.op.op, lhs, binary.lhs->span, rhs, binary.rhs->span);
             }

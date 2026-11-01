@@ -72,9 +72,9 @@ inline const std::deque<OpInfo>& operatorTable() {
         add("<<",  K::Shl,         C::Bitwise,    true,  6,  0, A::Left,  true);
         add(">>",  K::Shr,         C::Bitwise,    true,  6,  0, A::Left,  true);
         // logical
-        add("&&",  K::AmpAmp,      C::Logical,    false, 12, 0, A::Left,  false);
-        add("||",  K::BarBar,      C::Logical,    false, 14, 0, A::Left,  false);
-        add("^^",  K::CaretCaret,  C::Logical,    false, 13, 0, A::Left,  false);
+        add("&&",  K::AmpAmp,      C::Logical,    false, 12, 0, A::Left,  true);
+        add("||",  K::BarBar,      C::Logical,    false, 14, 0, A::Left,  true);
+        add("^^",  K::CaretCaret,  C::Logical,    false, 13, 0, A::Left,  true);
         add("!",   K::Bang,        C::Logical,    true,  0,  3, A::None,  false);
         // comparison
         add("<",   K::Lt,          C::Comparison, false, 10, 0, A::Chain, false);
@@ -125,7 +125,7 @@ inline const std::deque<OpInfo>& operatorTable() {
                 add(s, K::ExtraOp, C::Extra, true, in->level, 0, a, comp);
             }
         }
-        // the compounds: every overloadable binary operator from T and T to T gets X<-
+        // the compounds: every overloadable binary operator from T and T to T gets X<-, and so do the logical ones, which can't be overloaded, since an overload would evaluate both sides, but still give back their operands' type
         for (auto op : compoundable) {
             t.push_back({op->spelling + "<-", K::CompoundAssign, C::Compound, false, 0, 0, A::None, op});
         }

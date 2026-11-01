@@ -301,10 +301,10 @@ TEST_CASE("Lexer: every generated compound token lexes as one token", "[lexer]")
     }
     CHECK(compounds > 0);
     for (const char* s : {"+<-", "-<-", "*<-", "/<-", "%<-", "&<-", "|<-", "^<-", "<<<-", ">><-",
-                          "**<-", "<+><-", "|*|<-", "--<-", "&&&<-", "<<<<-"}) {
+                          "**<-", "<+><-", "|*|<-", "--<-", "&&&<-", "<<<<-", "&&<-", "||<-", "^^<-"}) {
         CHECK(lookupOperator(s) != nullptr);
     }
-    for (const char* s : {"==<-", "=<-", "<=><-", "<<-", "&&<-", "!<-", "~<-", ">>=<-", "<<><-"}) {
+    for (const char* s : {"==<-", "=<-", "<=><-", "<<-", "!<-", "~<-", ">>=<-", "<<><-"}) {
         CHECK(lookupOperator(s) == nullptr);
     }
 }

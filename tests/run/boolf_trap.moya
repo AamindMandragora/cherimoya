@@ -1,0 +1,8 @@
+# exit: 134
+# trap: trap at line 4: 'boolf(t)' doesn't fit in boolf
+# checks that converting a float outside 0 to 1 into a boolf traps
+let (t :: float) -> toBoolf -> (x :: boolf) { boolf(t) -| }
+let () -> main -> (code :: int) {
+    let x <- toBoolf(1.5);
+    0 -|
+}
