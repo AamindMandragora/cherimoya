@@ -116,6 +116,18 @@ inline uint32_t charLiteralValue(std::string_view literal) {
     return decodeCharacter(literal.substr(1, literal.size() - 2)).value;
 }
 
+// the text a string literal stands for, in UTF-8, with its quotes taken off and its escapes read, where the lexer already made sure every escape is valid
+inline std::string stringLiteralValue(std::string_view literal) {
+    std::string_view contents = literal.substr(1, literal.size() - 2);
+    std::string value;
+    while (!contents.empty()) {
+        Decoded character = decodeCharacter(contents);
+        value += encodeUtf8(character.value);
+        contents.remove_prefix(character.length);
+    }
+    return value;
+}
+
 // identifiers hold their name as well, and sema fills in the symbol it resolves to
 class IdentifierExpr : public Expr {
 public:

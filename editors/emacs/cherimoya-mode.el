@@ -7,11 +7,12 @@
 
 ;;; Commentary:
 
-;; edits .moya files and starts cheri's language server for them, with eglot, built into emacs, or lsp-mode, if
-;; it's installed, which gives emacs the server's diagnostics, hovers, definitions, references, renames, outline,
-;; completion, signature help, quick fixes, and inlay hints, which lsp-mode shows with lsp-inlay-hint-enable. the
-;; server colors the code too, through semantic tokens, which eglot reads from emacs 31 and lsp-mode with
-;; lsp-semantic-tokens-enable, so the mode itself only knows comments, strings, brackets, and indentation
+;; edits .moya files, and .toya files of tests, and starts cheri's language server for them, with eglot, built
+;; into emacs, or lsp-mode, if it's installed, which gives emacs the server's diagnostics, hovers, definitions,
+;; references, renames, outline, completion, signature help, quick fixes, and inlay hints, which lsp-mode shows
+;; with lsp-inlay-hint-enable, and under lsp-mode, a Run test lens above every test. the server colors the code
+;; too, through semantic tokens, which eglot reads from emacs 31 and lsp-mode with lsp-semantic-tokens-enable, so
+;; the mode itself only knows comments, strings, brackets, and indentation
 
 ;;; Code:
 
@@ -63,7 +64,7 @@ A line that starts by closing a brace is one level out."
               electric-indent-chars (cons ?} electric-indent-chars)))
 
 ;;;###autoload
-(add-to-list 'auto-mode-alist '("\\.moya\\'" . cherimoya-mode))
+(add-to-list 'auto-mode-alist '("\\.[mt]oya\\'" . cherimoya-mode))
 
 (defvar eglot-server-programs)
 (with-eval-after-load 'eglot
@@ -73,13 +74,27 @@ A line that starts by closing a brace is one level out."
 (declare-function make-lsp-client "lsp-mode")
 (declare-function lsp-stdio-connection "lsp-mode")
 (declare-function lsp-activate-on "lsp-mode")
+(declare-function lsp--uri-to-path "lsp-mode")
 (defvar lsp-language-id-configuration)
+
+(defun cherimoya-run-test (action)
+  "Run the test a Run test lens names with `compile'.
+ACTION carries the test's document and name."
+  (let ((arguments (gethash "arguments" action)))
+    (compile (mapconcat #'shell-quote-argument
+                        (list cherimoya-compiler-path "test" (lsp--uri-to-path (aref arguments 0)) (aref arguments 1) "--exact")
+                        " "))))
+
 (with-eval-after-load 'lsp-mode
   (add-to-list 'lsp-language-id-configuration '(cherimoya-mode . "cherimoya"))
-  (lsp-register-client
-   (make-lsp-client :new-connection (lsp-stdio-connection (lambda () (cherimoya-server-command)))
-                    :activation-fn (lsp-activate-on "cherimoya")
-                    :server-id 'cheri)))
+  ;; the server's Run test lenses name a command lsp-mode runs here, since running a test is the editor's job
+  (let ((handlers (make-hash-table :test #'equal)))
+    (puthash "cherimoya.runTest" #'cherimoya-run-test handlers)
+    (lsp-register-client
+     (make-lsp-client :new-connection (lsp-stdio-connection (lambda () (cherimoya-server-command)))
+                      :activation-fn (lsp-activate-on "cherimoya")
+                      :action-handlers handlers
+                      :server-id 'cheri))))
 
 (provide 'cherimoya-mode)
 ;;; cherimoya-mode.el ends here

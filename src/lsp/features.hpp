@@ -592,3 +592,13 @@ inline Array inlayHints(const Document& document, Span range) {
     }
     return result;
 }
+
+// a Run test lens above every test, on its name, whose command the editor runs as cherimoya.runTest with the document and the test's name, which runs just that test
+inline Array codeLenses(const Document& document) {
+    Array result;
+    for (auto& test : document.sema.allTests()) {
+        Object command{{"title", "Run test"}, {"command", "cherimoya.runTest"}, {"arguments", Array{document.uri, test.name}}};
+        result.push_back(Object{{"range", rangeOf(document, Span{test.fn->name.loc, test.fn->name.loc + test.fn->name.text.size()})}, {"command", std::move(command)}});
+    }
+    return result;
+}

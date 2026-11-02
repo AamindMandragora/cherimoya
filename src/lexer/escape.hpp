@@ -84,3 +84,17 @@ inline Decoded decodeCharacter(std::string_view text) {
         }
     }
 }
+
+// a code point as the UTF-8 bytes that hold it, one to four of them, where every byte after the first holds 6 more bits behind 10
+inline std::string encodeUtf8(uint32_t value) {
+    if (value < 0x80) return std::string(1, static_cast<char>(value));
+    std::string bytes;
+    size_t length = value < 0x800 ? 2 : value < 0x10000 ? 3 : 4;
+    for (size_t i = length - 1; i > 0; i--) {
+        bytes.insert(bytes.begin(), static_cast<char>(0x80 | (value & 0x3F)));
+        value >>= 6;
+    }
+    const unsigned char leads[] = {0, 0, 0xC0, 0xE0, 0xF0};
+    bytes.insert(bytes.begin(), static_cast<char>(leads[length] | value));
+    return bytes;
+}

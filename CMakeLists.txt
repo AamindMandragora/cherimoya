@@ -33,13 +33,18 @@ target_include_directories(cheri INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/lsp
 )
 
-# the runtime every program links with, whose path is baked into cheri so builds work from any directory
+# the runtime every program and test binary links with, and the C entry point of each, a program's or a test binary's, whose paths are baked into cheri so builds work from any directory
 add_library(cheri_rt STATIC runtime/runtime.c runtime/fp8.c)
+add_library(cheri_rt_start STATIC runtime/start.c)
+add_library(cheri_rt_test STATIC runtime/test.c)
 add_executable(cheri_bin tools/cheri/main.cpp)
 set_target_properties(cheri_bin PROPERTIES OUTPUT_NAME cheri)
 target_link_libraries(cheri_bin PRIVATE cheri cheri_llvm)
-target_compile_definitions(cheri_bin PRIVATE CHERI_RUNTIME="$<TARGET_FILE:cheri_rt>")
-add_dependencies(cheri_bin cheri_rt)
+target_compile_definitions(cheri_bin PRIVATE
+  CHERI_RUNTIME="$<TARGET_FILE:cheri_rt>"
+  CHERI_START="$<TARGET_FILE:cheri_rt_start>"
+  CHERI_TEST="$<TARGET_FILE:cheri_rt_test>")
+add_dependencies(cheri_bin cheri_rt cheri_rt_start cheri_rt_test)
 
 option(CHERI_BUILD_TESTS "build the unit tests and the program tests" ON)
 if(CHERI_BUILD_TESTS)
@@ -78,6 +83,11 @@ if(CHERI_BUILD_TESTS)
     $<TARGET_FILE:cheri_bin> ${test}
     ${CMAKE_CURRENT_BINARY_DIR}/run)
   endforeach()
+
+  # cheri test runs every .toya file under tests/test, which hold every outcome a test can have, and has to print exactly what tests/test/expected.out holds
+  add_test(NAME "Test: cheri test"
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_test.sh $<TARGET_FILE:cheri_bin> tests/test tests/test/expected.out
+           WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
   # every program in tests/debug is built with debug info, which llvm-dwarfdump checks, and debugged in gdb when it's installed
   find_program(LLVM_DWARFDUMP llvm-dwarfdump HINTS ${LLVM_TOOLS_BINARY_DIR} REQUIRED)

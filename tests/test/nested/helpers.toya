@@ -1,0 +1,7 @@
+# checks that a directory's .toya files are found in the directories under it too, and that helpers, functions without @test, aren't run as tests
+let (n :: int) -> fails -> () { assert (n = 0); }
+
+@test
+let () -> helpers_stay_helpers -> () {
+    fails(0);
+}

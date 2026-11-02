@@ -60,9 +60,10 @@ Cherimoya is early. What works today:
 - **Fuzzy booleans**: `boolf`, a truth value from 0 to 1 held in a byte, where `&&` is the minimum, `||` the maximum, `*` the product, and `!x` is 1 - x, with conversions to and from floats, its raw byte, and `bool`, and a cutoff like `x > 0.5` to turn one back into a `bool`.
 - **The numeric model**: every integer from 8 to 128 bits, signed or unsigned, trapping or wrapping, and every float from `f16` to `f128`, including bfloat16, NaN-free or NaN-carrying, and both FP8 encodings, stored as bytes and computed in f32. Literals take the type their context wants, and conversions go between any two numbers.
 - **Code generation through LLVM** for all of that, with optimization, native object files, cross-compilation, and linking with a small runtime. Overflow, division by zero, out-of-range shifts, a NaN made in or converted into a NaN-free float, an `f8` that overflows, a conversion into a trapping integer, a character, or a boolf that doesn't hold the value, and a failed `assert` trap with their line.
+- **Tests** in `.toya` files, run by `cheri test`, each in a process of its own, with tests that expect a trap and timeouts.
 - **Debug info** with `-g`: DWARF, or CodeView on Windows, for gdb and lldb, with source names, every variable and its type, and printers that gdb loads from the binary for the values C's rules would print wrong, like FP8 and `rune`.
 
-- **A language server**, `cheri lsp`, with a VS Code extension: diagnostics as you type, highlighting by meaning, hover with the documentation your comments give a name, go to definition, references, rename, an outline, completion ranked by the type a position expects, signature help, quick fixes for the mistakes that have one, which `cheri check --fix` applies from the command line too, and inlay hints: the types cherimoya inferred, the input each argument goes to, the defaults a call leaves out, the type of each step of a pipe spread over lines, and the name of a long function at its closing brace.
+- **A language server**, `cheri lsp`, with a VS Code extension: diagnostics as you type, highlighting by meaning, hover with the documentation your comments give a name, go to definition, references, rename, an outline, completion ranked by the type a position expects, signature help, quick fixes for the mistakes that have one, which `cheri check --fix` applies from the command line too, and inlay hints: the types cherimoya inferred, the input each argument goes to, the defaults a call leaves out, the type of each step of a pipe spread over lines, and the name of a long function at its closing brace, along with a Run test lens above every test in a `.toya` file.
 
 Not yet: strings, packs, ranges, comprehensions, and folds, for-each loops, handles and arrays, records, sums, protocols, generics, closures and functions as values, operator overloading and the extra operators, modules, ownership checking, and verification with Z3.
 
@@ -90,6 +91,7 @@ The compiler ends up at `build/cheri`.
 cheri build prog.moya            # an executable named prog
 cheri run prog.moya              # build, run, and exit with the program's exit code
 cheri check prog.moya            # check without building
+cheri test tests/                # run the tests in every .toya file under tests/
 cheri lsp                        # the language server, which an editor starts
 cheri help                       # every command and option
 ```
@@ -108,6 +110,36 @@ The most useful options:
 | `-L<dir>`, `-l<lib>`, `--link-arg <arg>` | passed straight to the linker |
 
 `cheri build prog.moya --emit-llvm -O0` prints the IR exactly as the compiler wrote it, before any optimization.
+
+## Writing Tests
+
+Tests go in `.toya` files, which hold functions marked `@test`, along with any helpers they share, and `cheri test` runs them: `cheri test math.toya` runs one file's, `cheri test tests/` every `.toya` file's under a directory, and `cheri test math.toya overflow` only the tests whose names hold `overflow`, or with `--exact`, the one named exactly that.
+
+```
+let (n :: int) -> square -> (r :: int) { n * n -| }
+
+@test
+let () -> squares -> () {
+    assert (square(-3) = 9);
+}
+
+@test(traps <- "overflowed int", timeout <- 5)
+let () -> overflows -> () {
+    _ <- square(4294967296);
+}
+```
+
+A test passes when it finishes, and fails when it traps, which a failed `assert` does. A test given `traps` passes only by trapping with that text in the trap's message, and one given `timeout` fails once it runs longer than that many seconds. Each test runs in a process of its own, as many at once as there are cores, so a trap or a crash only fails its own test, and `cheri test` exits with 1 when anything failed:
+
+```
+math.toya
+  ok       squares
+  ok       overflows (trapped as expected)
+
+2 passed, 0 failed
+```
+
+A `.toya` file stands alone until modules can import, so it holds the code it tests, and it has no `start`, since `cheri test` runs its tests instead. Tests build like `cheri build`, at `-O3` unless an `-O` says otherwise, and with `-g`, a failing test can be run under a debugger.
 
 ## Debugging
 
@@ -131,7 +163,7 @@ add-auto-load-safe-path ~/projects
 
 ## Editor Support
 
-`editors/vscode/` is a VS Code extension that runs `cheri lsp` for every `.moya` file and gives them a cherimoya icon. To build and install it:
+`editors/vscode/` is a VS Code extension that runs `cheri lsp` for every `.moya` and `.toya` file, gives them a cherimoya icon, with a check on a `.toya`, and puts a Run test lens above every test. To build and install it:
 
 ```
 cd editors/vscode
@@ -142,7 +174,7 @@ code --install-extension cherimoya.vsix
 
 Then set `cherimoya.compilerPath` to your `build/cheri`, unless `cheri` is on your path, and restart VS Code.
 
-`editors/emacs/cherimoya-mode.el` is an Emacs mode for `.moya` files that starts `cheri lsp` with eglot, which is built into Emacs, or with lsp-mode, if it's installed. Eglot colors the code from Emacs 31 on, and lsp-mode does once `lsp-semantic-tokens-enable` is set. To use it:
+`editors/emacs/cherimoya-mode.el` is an Emacs mode for `.moya` and `.toya` files that starts `cheri lsp` with eglot, which is built into Emacs, or with lsp-mode, if it's installed. Eglot colors the code from Emacs 31 on, and lsp-mode does once `lsp-semantic-tokens-enable` is set, and lsp-mode shows the Run test lenses, which run the test with `compile`. To use it:
 
 ```elisp
 (add-to-list 'load-path "/path/to/cherimoya/editors/emacs")
@@ -163,12 +195,13 @@ Any other editor that speaks the Language Server Protocol can start `cheri lsp` 
 | `src/sema` | name resolution and type checking |
 | `src/codegen` | lowering to LLVM IR |
 | `src/lsp` | the language server |
-| `runtime/` | the C runtime every program links with |
+| `runtime/` | the C runtime every program links with, and the entry points of a program and of a file of tests |
 | `tools/cheri/` | the `cheri` driver |
 | `editors/vscode/` | the VS Code extension |
 | `tests/unit/` | Catch2 tests for the lexer, parser, sema, runtime, and language server |
 | `tests/run/` | whole programs, each checked by its exit code |
 | `tests/debug/` | programs built with debug info, checked with llvm-dwarfdump and gdb |
+| `tests/test/` | `.toya` files with every outcome a test can have, which `cheri test` has to report exactly as `expected.out` says |
 | `design/` | a design note for every commit |
 
 ## Tests
@@ -191,5 +224,7 @@ Debug info is tested the same way, through programs in `tests/debug/`, each buil
 # checks that a breakpoint on a function stops once its inputs are stored
 let (n :: int, lo :: int <- 0) -> clamp -> (r :: int) { ... }
 ```
+
+`cheri test` itself is tested on `tests/test/`, whose `.toya` files have every outcome a test can have, and whose run has to print exactly what `expected.out` holds.
 
 Adding a program test means adding a file.
