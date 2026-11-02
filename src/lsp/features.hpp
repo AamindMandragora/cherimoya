@@ -96,7 +96,7 @@ inline std::string defaultOf(const Document& document, const Symbol& param) {
 // shows a symbol the way it's declared: a function as let (a :: int, b :: int <- 1) -> f -> (r :: int), a binding as let x :: mut i8, and a parameter as n :: int, or b :: int <- 1 when it's an input with a default
 inline std::string render(const Document& document, const Symbol& symbol) {
     std::string name(symbol.name);
-    std::string mut = symbol.isMutable ? "mut " : "";
+    std::string mut = symbol.isMutable() ? "mut " : "";
     if (symbol.kind == SymbolKind::Param) return std::string(symbol.name) + " :: " + mut + symbol.type->toString() + defaultOf(document, symbol);
     if (symbol.kind == SymbolKind::Binding) return "let " + std::string(symbol.name) + " :: " + mut + symbol.type->toString();
     auto& fn = *symbol.function;
@@ -240,7 +240,7 @@ inline Array semanticTokens(const Document& document) {
             const Symbol& symbol = *found->second->symbol;
             uint32_t mod = 0;
             if (found->second->isDeclaration) mod |= TokenModifier::Declaration;
-            if (!symbol.isMutable && !(symbol.kind == SymbolKind::Function)) mod |= TokenModifier::Readonly;
+            if (!symbol.isMutable() && !(symbol.kind == SymbolKind::Function)) mod |= TokenModifier::Readonly;
             if (symbol.kind == SymbolKind::Binding) pieces.push_back({span, TokenType::Variable, mod});
             else if (symbol.kind == SymbolKind::Param) pieces.push_back({span, TokenType::Parameter, mod});
             else if (symbol.kind == SymbolKind::Function) pieces.push_back({span, TokenType::Function, mod});
@@ -312,7 +312,7 @@ inline std::string keywordHelp(std::string_view keyword) {
         {"peek", "A non-owning view, which never frees memory and can't escape. cheri doesn't support it yet."},
         {"mut", "Makes a binding or parameter assignable: `let x :: mut <- 0;`. Before a handle it lets the handle be rebound, and after one, `arr mut T`, it makes the elements mutable."},
         {"ptr", "An owning handle to one object, `ptr T(value)`. cheri doesn't support handles yet."},
-        {"arr", "A handle to an array, a pointer and its length, `arr mut T(n)`. cheri doesn't support handles yet."},
+        {"arr", "An array: `arr[N] T` holds N values of type T inline, like `[1, 2, 3]`, indexed from 0 by an unsigned integer as `xs[i]`, and `xs.len()` gives N. `arr[N] mut T` lets its elements be written. A handle to an array on the heap, `arr mut T(n)`, isn't supported yet."},
         {"take", "`take(slot)` moves the value out of a place and returns it, leaving the place to be reassigned. cheri doesn't support it yet."},
         {"swap", "`swap(a, b);` exchanges the values in two places. cheri doesn't support it yet."},
         {"replace", "`replace(slot, new)` stores `new` in a place and returns what was there. cheri doesn't support it yet."},

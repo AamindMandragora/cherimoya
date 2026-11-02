@@ -11,7 +11,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
-#include "printer.hpp"
+#include "printers.hpp"
 #include "sema.hpp"
 
 // how much debug info a build carries: none, the source line each instruction came from, or everything a debugger shows, which adds functions' types, variables, and scopes
@@ -47,7 +47,7 @@ class DebugInfo {
         return {static_cast<unsigned>(line + 1), static_cast<unsigned>(offset - lineStarts[line] + 1)};
     }
 
-    // a value's debug type: integers by their sign, bool and characters as themselves, a boolf as fixed-point with a scale of 1/255, so gdb prints 179 as 0.702, the floats a debugger decodes as floats, and FP8, bfloat16, and f128, which gdb would decode wrong, as their raw bits, which the embedded printers decode, where void and never have none
+    // a value's debug type: integers by their sign, arrays as their elements, bool and characters as themselves, a boolf as fixed-point with a scale of 1/255, so gdb prints 179 as 0.702, the floats a debugger decodes as floats, and FP8, bfloat16, and f128, which gdb would decode wrong, as their raw bits, which the embedded printers decode, where void and never have none
     llvm::DIType* typeOf(SemaType* type) {
         auto found = types.find(type);
         if (found != types.end()) return found->second;
@@ -62,6 +62,11 @@ class DebugInfo {
                 : floating->format == FloatFormat::Single ? 32
                 : floating->format == FloatFormat::Double ? 64 : 128;
             made = builder.createBasicType(name, bits, isDecoded ? llvm::dwarf::DW_ATE_float : llvm::dwarf::DW_ATE_unsigned);
+        } else if (auto array = asArray(type)) {
+            // a fixed array is its elements one after another, counted from 0
+            llvm::DIType* element = typeOf(array->element);
+            auto subscripts = builder.getOrCreateArray({builder.getOrCreateSubrange(0, static_cast<int64_t>(array->size))});
+            made = builder.createArrayType(array->size * element->getSizeInBits(), 0, element, subscripts);
         } else if (type->kind == SemaTypeKind::Primitive) {
             switch (static_cast<PrimitiveSemaType*>(type)->primitive) {
                 case PrimitiveKind::Bool:
@@ -92,7 +97,7 @@ class DebugInfo {
     // a symbol's debug type, const unless it's mut, the way the language treats it
     llvm::DIType* typeOf(const Symbol& symbol) {
         llvm::DIType* type = typeOf(symbol.type);
-        return symbol.isMutable ? type : builder.createQualifiedType(llvm::dwarf::DW_TAG_const_type, type);
+        return symbol.isMutable() ? type : builder.createQualifiedType(llvm::dwarf::DW_TAG_const_type, type);
     }
 
     // a function's debug type, its result then its inputs, where a null result is void, and only everything has types, so a line table's functions all share the empty one

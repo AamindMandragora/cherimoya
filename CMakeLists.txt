@@ -22,8 +22,17 @@ target_include_directories(cheri_llvm SYSTEM INTERFACE ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(cheri_llvm INTERFACE ${LLVM_DEFINITIONS})
 target_link_libraries(cheri_llvm INTERFACE LLVM)
 
+# the gdb printers are Python in a file of their own, which becomes a header holding its text as a raw string, made again whenever the file changes, where the text can't hold the string's closing delimiter
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/src/codegen/printers.py CHERI_GDB_PRINTERS)
+if(CHERI_GDB_PRINTERS MATCHES "\\)py\"")
+  message(FATAL_ERROR "src/codegen/printers.py can't contain )py\", which ends the raw string it's embedded in")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS src/codegen/printers.py)
+configure_file(src/codegen/printers.hpp.in ${CMAKE_CURRENT_BINARY_DIR}/generated/printers.hpp @ONLY)
+
 add_library(cheri INTERFACE)
 target_include_directories(cheri INTERFACE
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
     ${CMAKE_CURRENT_SOURCE_DIR}/src/source
     ${CMAKE_CURRENT_SOURCE_DIR}/src/diagnostics
     ${CMAKE_CURRENT_SOURCE_DIR}/src/lexer

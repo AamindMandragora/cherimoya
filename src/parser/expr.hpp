@@ -223,7 +223,7 @@ public:
     IndexExpr(std::unique_ptr<Expr> o, std::vector<std::unique_ptr<Expr>> a, Span s) : Expr(ExprKind::Index, s), object(std::move(o)), args(std::move(a)) {}
 };
 
-// member expressions hold the object and its field being accessed
+// member expressions hold the object and the name after the dot, a field, or a method when it's called, where the object is null for a method a pipe gives its object: x |> .len
 class MemberExpr : public Expr {
 public:
     std::unique_ptr<Expr> object;

@@ -1,0 +1,15 @@
+# exit: 42
+# checks that arrays pass into functions and come back out as values, each one a copy, so writing a copy's elements leaves the original as it was, and that indexing a call's result works without a binding
+let (xs :: arr[3] mut int) -> bumped -> (r :: arr[3] int) {
+    xs[0] +<- 10;
+    xs -|
+}
+let () -> squares -> (r :: arr[4] i8u) { [0, 1, 4, 9] -| }
+let () -> start -> (code :: int) {
+    let original <- [1, 2, 3];
+    let copy <- bumped(original);
+    match (original[0] = 1 && copy[0] = 11) {
+        true -> { copy[0] + copy[1] + int(squares()[3]) + 20 -| start }
+        false -> { 1 -| start }
+    }
+}

@@ -1,0 +1,4 @@
+#pragma once
+
+// the gdb pretty-printers a debug build embeds, which CMake fills in from printers.py, so the Python stays a file of its own
+inline const char* gdbPrinters = R"py(@CHERI_GDB_PRINTERS@)py";

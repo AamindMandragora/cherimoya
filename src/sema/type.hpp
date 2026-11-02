@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -7,6 +8,7 @@ enum class SemaTypeKind {
     Primitive,
     Int,
     Float,
+    Array,
     Function,
     Error
 };
@@ -106,6 +108,22 @@ inline bool isCharacter(SemaType* type) {
 // checks whether a sema type is boolf, the fuzzy boolean
 inline bool isBoolf(SemaType* type) {
     return type != nullptr && type->kind == SemaTypeKind::Primitive && static_cast<PrimitiveSemaType*>(type)->primitive == PrimitiveKind::Boolf;
+}
+
+// a fixed array type is its element type and how many it holds, held inline like any value, so arr[3] int is three ints side by side, where whether its elements can be written is the binding's business, not the type's
+class ArraySemaType : public SemaType {
+public:
+    SemaType* element;
+    uint64_t size;
+    ArraySemaType(SemaType* e, uint64_t n) : SemaType(SemaTypeKind::Array), element(e), size(n) {}
+    std::string toString() const override {
+        return "arr[" + std::to_string(size) + "] " + element->toString();
+    }
+};
+
+// the array type a sema type is, or null if it isn't one
+inline ArraySemaType* asArray(SemaType* type) {
+    return type != nullptr && type->kind == SemaTypeKind::Array ? static_cast<ArraySemaType*>(type) : nullptr;
 }
 
 // a function type is its parameters' types and the type it yields

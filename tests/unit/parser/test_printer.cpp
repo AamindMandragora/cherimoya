@@ -93,7 +93,7 @@ class Printer {
             case ExprKind::Chain: return startsWithScope(*static_cast<const ChainExpr&>(e).operands[0]);
             case ExprKind::Call: return startsWithScope(*static_cast<const CallExpr&>(e).callee);
             case ExprKind::Index: return startsWithScope(*static_cast<const IndexExpr&>(e).object);
-            case ExprKind::Member: return startsWithScope(*static_cast<const MemberExpr&>(e).object);
+            case ExprKind::Member: return static_cast<const MemberExpr&>(e).object && startsWithScope(*static_cast<const MemberExpr&>(e).object);
             case ExprKind::Construct: return startsWithScope(*static_cast<const ConstructExpr&>(e).target);
             default: return false;
         }
@@ -264,7 +264,7 @@ public:
             }
             case ExprKind::Member: {
                 auto& m = static_cast<const MemberExpr&>(e);
-                return object(*m.object, depth, arrow) + "." + std::string(m.field);
+                return (m.object ? object(*m.object, depth, arrow) : "") + "." + std::string(m.field);
             }
             case ExprKind::Construct: {
                 auto& c = static_cast<const ConstructExpr&>(e);

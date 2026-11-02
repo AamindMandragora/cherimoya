@@ -10,6 +10,7 @@
 class TypeContext {
     std::vector<std::unique_ptr<SemaType>> types;
     std::map<std::vector<SemaType*>, FunctionSemaType*> functionTypes;
+    std::map<std::pair<SemaType*, uint64_t>, ArraySemaType*> arrayTypes;
 
     // takes ownership of a new type and returns a pointer to it that stays valid as long as the context does
     template <typename T, typename... Args>
@@ -84,6 +85,15 @@ public:
     FloatSemaType* floatType(std::string_view name) {
         auto it = floats.find(std::string(name));
         return it == floats.end() ? nullptr : it->second;
+    }
+
+    // interns a fixed array type keyed by its element type and size
+    ArraySemaType* arrayType(SemaType* element, uint64_t size) {
+        auto it = arrayTypes.find({element, size});
+        if (it != arrayTypes.end()) return it->second;
+        auto array = make<ArraySemaType>(element, size);
+        arrayTypes.emplace(std::make_pair(element, size), array);
+        return array;
     }
 
     // interns a function type keyed by its parameter types followed by its return type
