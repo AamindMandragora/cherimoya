@@ -1,7 +1,7 @@
-#pragma once
-
-// the gdb pretty-printers a debug build embeds, in Python, for the values gdb would print wrong, found by each type's name: the floats DWARF can't describe, FP8, bfloat16, and f128, which the debug info holds as their raw bits, the 1-byte integers, which gdb would print as C chars, and runes, which it would print as hex escapes
-inline const char* gdbPrinters = R"py(
+# the gdb pretty-printers a debug build embeds, for the values gdb would print wrong, found by each type's name: the floats DWARF can't
+# describe, FP8, bfloat16, and f128, which the debug info holds as their raw bits, the 1-byte integers, which gdb would print as C chars,
+# alone or in an array, which it would print as a C string, and runes, which it would print as hex escapes, where CMake puts this file's
+# text in printers.hpp, so it can't hold the raw string's closing delimiter, a ) then py then a quote
 import gdb
 from decimal import Decimal, localcontext
 from fractions import Fraction
@@ -74,6 +74,22 @@ class RunePrinter:
 
 BYTES = ("i8", "i8u", "i8w", "i8uw")
 
+# an array of 1-byte integers as its numbers, since gdb would print it as a C string
+class ByteArrayPrinter:
+    def __init__(self, value):
+        self.value = value
+
+    def to_string(self):
+        return None
+
+    def display_hint(self):
+        return "array"
+
+    def children(self):
+        low, high = self.value.type.strip_typedefs().range()
+        for i in range(low, high + 1):
+            yield "[%d]" % i, int(self.value[i])
+
 # finds the printer for a value, by its type's name without const, or none for every type gdb already prints right
 def lookup(value):
     name = value.type.strip_typedefs().unqualified().name
@@ -83,8 +99,10 @@ def lookup(value):
         return BytePrinter(value)
     if name == "rune":
         return RunePrinter(value)
+    stripped = value.type.strip_typedefs()
+    if stripped.code == gdb.TYPE_CODE_ARRAY and stripped.target().strip_typedefs().unqualified().name in BYTES:
+        return ByteArrayPrinter(value)
     return None
 
 objfile = gdb.current_objfile()
 (objfile.pretty_printers if objfile else gdb.pretty_printers).append(lookup)
-)py";

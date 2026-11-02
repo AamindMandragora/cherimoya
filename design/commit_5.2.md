@@ -62,7 +62,7 @@ DWARF is version 5. A Windows MSVC target gets CodeView instead, which Visual St
 
 ## What Was Built
 
-`src/codegen/debug.hpp` gained `DebugInfo`, and `src/codegen/printer.hpp` holds the printers' script. `src/codegen/codegen.hpp` creates the debug info, points every statement and expression at its span, describes every slot and global, opens a lexical block for every scope, and names defaults `name.input<-`. `src/sema/sema.hpp` checks for `start`, `runtime/runtime.c` calls it, and `tools/cheri/main.cpp` gained `-g` and `-gline-tables-only`. `CMakeLists.txt` and `scripts/debug_test.sh` run the debug tests, and the README has a section on debugging.
+`src/codegen/debug.hpp` gained `DebugInfo`, and `src/codegen/printers.py` holds the printers' script, which CMake embeds as a raw string in a generated `printers.hpp`, so it stays a Python file of its own. `src/codegen/codegen.hpp` creates the debug info, points every statement and expression at its span, describes every slot and global, opens a lexical block for every scope, and names defaults `name.input<-`. `src/sema/sema.hpp` checks for `start`, `runtime/runtime.c` calls it, and `tools/cheri/main.cpp` gained `-g` and `-gline-tables-only`. `CMakeLists.txt` and `scripts/debug_test.sh` run the debug tests, and the README has a section on debugging.
 
 14476 unit assertions, 61 programs, and 5 debug programs, 0 failures, and every program in `tests/run/` builds with both levels at `-O0` and `-O3` with IR that verifies.
 

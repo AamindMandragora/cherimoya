@@ -100,6 +100,10 @@ class Codegen {
             case SemaTypeKind::Float:
                 if (isFp8(*asFloat(type))) return lowered[type] = irbuilder.getInt8Ty();
                 return lowered[type] = llvm::Type::getFloatingPointTy(context, semantics(asFloat(type)->format));
+            case SemaTypeKind::Array: {
+                auto& array = static_cast<ArraySemaType&>(*type);
+                return lowered[type] = llvm::ArrayType::get(lower(array.element), array.size);
+            }
             case SemaTypeKind::Function: {
                 auto& function = static_cast<FunctionSemaType&>(*type);
                 std::vector<llvm::Type*> params;
@@ -247,17 +251,111 @@ class Codegen {
         return f;
     }
 
-    // stops the program with a message when fails is true at run time, and otherwise carries on in a fresh block, which every runtime check goes through
-    void trapIf(llvm::Value* fails, const std::string& message, Span span) {
+    // stops the program when fails is true at run time, by the call report makes, and otherwise carries on in a fresh block, which every runtime check goes through
+    template <typename Report>
+    void trapIf(llvm::Value* fails, Report report) {
         llvm::Function* f = irbuilder.GetInsertBlock()->getParent();
         llvm::BasicBlock* fail = llvm::BasicBlock::Create(context, "trap", f);
         llvm::BasicBlock* ok = llvm::BasicBlock::Create(context, "ok", f);
         irbuilder.CreateCondBr(fails, fail, ok);
         irbuilder.SetInsertPoint(fail);
-        uint64_t line = manager.getLineCol(span.start).line;
-        irbuilder.CreateCall(trap(), {irbuilder.CreateGlobalString(message), irbuilder.getInt64(line)});
+        report();
         irbuilder.CreateUnreachable();
         irbuilder.SetInsertPoint(ok);
+    }
+
+    // stops the program with a message and the line it's on when fails is true at run time
+    void trapIf(llvm::Value* fails, const std::string& message, Span span) {
+        uint64_t line = manager.getLineCol(span.start).line;
+        trapIf(fails, [&] { irbuilder.CreateCall(trap(), {irbuilder.CreateGlobalString(message), irbuilder.getInt64(line)}); });
+    }
+
+    // finds or declares the runtime's trap for an index past the end of an array, which prints the index and the length, since they're only known at run time
+    llvm::Function* indexTrap() {
+        llvm::FunctionType* type = llvm::FunctionType::get(irbuilder.getVoidTy(), {irbuilder.getInt64Ty(), irbuilder.getInt64Ty(), irbuilder.getPtrTy(), irbuilder.getInt64Ty()}, false);
+        llvm::Function* f = llvm::cast<llvm::Function>(module->getOrInsertFunction("cheri_trap_index", type).getCallee());
+        f->addFnAttr(llvm::Attribute::NoReturn);
+        return f;
+    }
+
+    // where a place's value lives: a binding's slot or global, or an element inside one, where a value that isn't a place, like a call's result, is put in a slot of its own first, so it can be indexed too
+    llvm::Value* placeAddress(Expr& e) {
+        if (e.kind == ExprKind::Identifier) return addressOf(static_cast<IdentifierExpr&>(e).decl);
+        if (e.kind == ExprKind::Index) return elementAddress(static_cast<IndexExpr&>(e));
+        llvm::Value* value = emitExpr(e);
+        llvm::AllocaInst* slot = makeAlloca(lower(e.type), "temporary");
+        irbuilder.CreateStore(value, slot);
+        return slot;
+    }
+
+    // the address of an element, xs[i], which traps when the index is past the end, saying the index, the array, and how many it holds: index 7 is past the end of 'xs', which holds 5
+    llvm::Value* elementAddress(IndexExpr& index) {
+        auto& array = static_cast<ArraySemaType&>(*index.object->type);
+        llvm::Value* base = placeAddress(*index.object);
+        llvm::Value* position = irbuilder.CreateZExt(emitExpr(*index.args[0]), irbuilder.getInt64Ty());
+        llvm::Value* length = irbuilder.getInt64(array.size);
+        uint64_t line = manager.getLineCol(index.span.start).line;
+        trapIf(irbuilder.CreateICmpUGE(position, length), [&] {
+            irbuilder.CreateCall(indexTrap(), {position, length, irbuilder.CreateGlobalString(sourceText(index.object->span)), irbuilder.getInt64(line)});
+        });
+        return irbuilder.CreateGEP(lower(&array), base, {irbuilder.getInt64(0), position});
+    }
+
+    // builds an array literal's value, a constant when every element is one, which a global can start out holding, and otherwise one element at a time
+    llvm::Value* emitPack(PackExpr& pack) {
+        llvm::Type* type = lower(pack.type);
+        std::vector<llvm::Value*> elements;
+        bool isConstant = true;
+        for (auto& e : pack.elems) {
+            elements.push_back(emitExpr(*e.value));
+            isConstant = isConstant && llvm::isa<llvm::Constant>(elements.back());
+        }
+        if (isConstant) {
+            std::vector<llvm::Constant*> constants;
+            for (auto* element : elements) constants.push_back(llvm::cast<llvm::Constant>(element));
+            return llvm::ConstantArray::get(llvm::cast<llvm::ArrayType>(type), constants);
+        }
+        llvm::Value* value = llvm::PoisonValue::get(type);
+        for (size_t i = 0; i < elements.size(); i++) value = irbuilder.CreateInsertValue(value, elements[i], {static_cast<unsigned>(i)});
+        return value;
+    }
+
+    // compares two arrays element by element, with = or == on each, the way the whole comparison asks, stopping at the first pair that differs, where != and !== are the opposite of = and ==
+    llvm::Value* compareArrays(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, ArraySemaType& array) {
+        bool isNegated = op == TokenKind::Ne || op == TokenKind::NeEq;
+        TokenKind same = op == TokenKind::Eq || op == TokenKind::Ne ? TokenKind::Eq : TokenKind::EqEq;
+        llvm::Type* type = lower(&array);
+        llvm::Type* elementType = lower(array.element);
+        llvm::AllocaInst* left = makeAlloca(type, "left");
+        llvm::AllocaInst* right = makeAlloca(type, "right");
+        irbuilder.CreateStore(lhs, left);
+        irbuilder.CreateStore(rhs, right);
+        llvm::Function* f = irbuilder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* entry = irbuilder.GetInsertBlock();
+        llvm::BasicBlock* header = llvm::BasicBlock::Create(context, "compare.header", f);
+        llvm::BasicBlock* body = llvm::BasicBlock::Create(context, "compare.body", f);
+        llvm::BasicBlock* done = llvm::BasicBlock::Create(context, "compare.done", f);
+        irbuilder.CreateBr(header);
+        irbuilder.SetInsertPoint(header);
+        llvm::PHINode* i = irbuilder.CreatePHI(irbuilder.getInt64Ty(), 2, "i");
+        i->addIncoming(irbuilder.getInt64(0), entry);
+        irbuilder.CreateCondBr(irbuilder.CreateICmpULT(i, irbuilder.getInt64(array.size)), body, done);
+        irbuilder.SetInsertPoint(body);
+        llvm::Value* a = irbuilder.CreateLoad(elementType, irbuilder.CreateGEP(type, left, {irbuilder.getInt64(0), i}));
+        llvm::Value* b = irbuilder.CreateLoad(elementType, irbuilder.CreateGEP(type, right, {irbuilder.getInt64(0), i}));
+        llvm::Value* equal = compare(same, a, b, array.element);
+        // comparing the elements can take blocks of its own, like a nested array's loop, so the pair is decided wherever that left off
+        llvm::BasicBlock* decided = irbuilder.GetInsertBlock();
+        llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "compare.next", f);
+        irbuilder.CreateCondBr(equal, next, done);
+        irbuilder.SetInsertPoint(next);
+        i->addIncoming(irbuilder.CreateAdd(i, irbuilder.getInt64(1)), next);
+        irbuilder.CreateBr(header);
+        irbuilder.SetInsertPoint(done);
+        llvm::PHINode* result = irbuilder.CreatePHI(irbuilder.getInt1Ty(), 2, "equal");
+        result->addIncoming(irbuilder.getTrue(), header);
+        result->addIncoming(irbuilder.getFalse(), decided);
+        return isNegated ? irbuilder.CreateNot(result) : result;
     }
 
     // the source text of a span, which an assertion's trap message is
@@ -592,6 +690,7 @@ class Codegen {
 
     // emits one built-in comparison on two values of the same type, where FP8's = and != compare its bytes and everything else compares in f32, a character compares as its code point, a boolf as its byte, and a bool, the one other type that's compared, only has equality, and its bits are its value
     llvm::Value* compare(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, SemaType* type) {
+        if (ArraySemaType* array = asArray(type)) return compareArrays(op, lhs, rhs, *array);
         if (FloatSemaType* floating = asFloat(type)) {
             if (!isFp8(*floating)) return floatCompare(op, lhs, rhs, *floating);
             if (op == TokenKind::Eq) return irbuilder.CreateICmpEQ(lhs, rhs);
@@ -719,6 +818,18 @@ class Codegen {
         return convert(emitExpr(arg), arg.type, callee.type, span);
     }
 
+    // checks whether a callee is Sized's len, a method: xs.len(), xs |> .len, or len(xs), which sema found to be the method rather than a function, so the name has no symbol
+    bool isLen(const Expr& callee) {
+        if (callee.kind == ExprKind::Member) return static_cast<const MemberExpr&>(callee).field == "len";
+        return callee.kind == ExprKind::Identifier && static_cast<const IdentifierExpr&>(callee).decl == nullptr && static_cast<const IdentifierExpr&>(callee).name == "len";
+    }
+
+    // xs.len() is the array's length, which its type knows, where xs is still evaluated for whatever it does
+    llvm::Value* emitLen(Expr& array) {
+        emitExpr(array);
+        return irbuilder.getInt64(asArray(array.type)->size);
+    }
+
     // calls a function by name: the arguments are evaluated in the order they're written, then each input that didn't get one takes its default, which is a call of its own on the inputs before it, in order
     llvm::Value* emitArguments(Symbol* function, std::vector<Expr*> written, const std::vector<Expr*>& inputs) {
         std::sort(written.begin(), written.end(), [](Expr* a, Expr* b) { return a->span.start < b->span.start; });
@@ -823,9 +934,16 @@ class Codegen {
                 return irbuilder.CreateLoad(lower(symbol->type), addressOf(symbol));
             }
             // a call's callee is always a function's name, so it's looked up instead of emitted, and a type called on a value converts it
+            case ExprKind::Pack:
+                return emitPack(static_cast<PackExpr&>(e));
+            case ExprKind::Index: {
+                llvm::Value* address = elementAddress(static_cast<IndexExpr&>(e));
+                return irbuilder.CreateLoad(lower(e.type), address);
+            }
             case ExprKind::Call: {
                 auto& call = static_cast<CallExpr&>(e);
                 if (call.callee->kind == ExprKind::TypeExpr) return emitConversion(*call.callee, *call.args[0].value, e.span);
+                if (isLen(*call.callee)) return emitLen(call.callee->kind == ExprKind::Member ? *static_cast<MemberExpr&>(*call.callee).object : *call.args[0].value);
                 std::vector<Expr*> written;
                 for (auto& arg : call.args) written.push_back(arg.value.get());
                 return emitArguments(static_cast<IdentifierExpr&>(*call.callee).decl, written, call.inputs);
@@ -843,6 +961,7 @@ class Codegen {
                     callee = call.callee.get();
                 }
                 if (callee->kind == ExprKind::TypeExpr) return emitConversion(*callee, arg, e.span);
+                if (isLen(*callee)) return emitLen(arg);
                 return emitArguments(static_cast<IdentifierExpr&>(*callee).decl, written, pipe.inputs);
             }
             case ExprKind::Block: {
@@ -974,7 +1093,7 @@ class Codegen {
                     if (let.init->kind == ExprKind::Wildcard) break;
                     llvm::Value* value = emitExpr(*let.init);
                     auto* constant = llvm::dyn_cast<llvm::Constant>(value);
-                    if (constant && !symbol->isMutable) {
+                    if (constant && !symbol->isMutable()) {
                         global->setInitializer(constant);
                         global->setConstant(true);
                     } else {
@@ -990,21 +1109,23 @@ class Codegen {
             case StmtKind::Assign: {
                 auto& assign = static_cast<AssignStmt&>(s);
                 TokenKind op = assign.op ? assign.op->op->base->kind : TokenKind::Error;
+                if (assign.place->kind == ExprKind::Wildcard) {
+                    emitExpr(*assign.value);
+                    break;
+                }
+                // the place is found first, so an element's index runs, and is checked, before the value, the order they're written in
+                SemaType* type = assign.place->type;
+                llvm::Value* address = placeAddress(*assign.place);
                 if (op == TokenKind::AmpAmp || op == TokenKind::BarBar) {
-                    Symbol* place = static_cast<IdentifierExpr&>(*assign.place).decl;
-                    llvm::Value* address = addressOf(place);
-                    llvm::Value* current = irbuilder.CreateLoad(lower(place->type), address);
-                    irbuilder.CreateStore(shortCircuit(op == TokenKind::AmpAmp, current, place->type, *assign.value), address);
+                    llvm::Value* current = irbuilder.CreateLoad(lower(type), address);
+                    irbuilder.CreateStore(shortCircuit(op == TokenKind::AmpAmp, current, type, *assign.value), address);
                     break;
                 }
                 llvm::Value* value = emitExpr(*assign.value);
-                if (assign.place->kind == ExprKind::Wildcard) break;
-                Symbol* place = static_cast<IdentifierExpr&>(*assign.place).decl;
-                llvm::Value* address = addressOf(place);
                 if (assign.op) {
-                    llvm::Value* current = irbuilder.CreateLoad(lower(place->type), address);
-                    value = op == TokenKind::CaretCaret ? exclusiveOr(current, value, place->type)
-                        : arithmetic(op, current, value, assign.place->type, Span{assign.place->span.start, assign.value->span.end});
+                    llvm::Value* current = irbuilder.CreateLoad(lower(type), address);
+                    value = op == TokenKind::CaretCaret ? exclusiveOr(current, value, type)
+                        : arithmetic(op, current, value, type, Span{assign.place->span.start, assign.value->span.end});
                 }
                 irbuilder.CreateStore(value, address);
                 break;

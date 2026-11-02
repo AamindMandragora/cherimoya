@@ -1199,6 +1199,13 @@ public:
                 left = std::make_unique<WildcardExpr>(tokSpan(tok));
                 break;
 
+            // a method with no object, which is what a pipe gives one: the .len in xs |> .len
+            case TokenKind::Dot: {
+                auto name = expect(TokenKind::Identifier, "a method name after '.' in 'x |> .method'");
+                left = std::make_unique<MemberExpr>(nullptr, name.text, Span{tok.loc, tokSpan(name).end});
+                break;
+            }
+
             // a closure, fold, grouping, or annotation
             case TokenKind::LParen:
                 left = parseParen(tok);

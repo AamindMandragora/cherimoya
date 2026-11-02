@@ -1,0 +1,22 @@
+# dwarf: DW_TAG_array_type
+# dwarf: DW_TAG_subrange_type
+# gdb: break arrays.moya:20
+# gdb: run
+# gdb: print grid
+# gdb: print grid[1]
+# gdb: print bytes
+# gdb: print primes
+# gdb: ptype grid
+# expect: $1 = {{1, 2, 3}, {4, 5, 6}}
+# expect: $2 = {4, 5, 6}
+# expect: $3 = {-1, 0, 1}
+# expect: $4 = {2, 3, 5, 7}
+# expect: type = int [2][3]
+# checks that arrays show as arrays, nested ones too, with their elements printed the way each type prints alone, so 1-byte integers are numbers rather than a C string, and that a top-level array is a global like any binding
+let primes <- [2, 3, 5, 7];
+let () -> start -> (code :: int) {
+    let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
+    let bytes :: arr[3] i8 <- [-1, 0, 1];
+    grid[0][0] <- int(bytes[0]);
+    grid[0][0] + 1 -|
+}

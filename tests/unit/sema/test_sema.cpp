@@ -214,6 +214,73 @@ TEST_CASE("Sema: named arguments and defaults", "[sema]") {
     CHECK(semaErrors("let x <- i32(v <- 1);") == 1);
 }
 
+// checks array literals, which take their elements' type the way an operator takes its operands', sizes known when the program compiles, including constants declared anywhere in a signature's scope, indexing by unsigned integers, len, and comparing arrays
+TEST_CASE("Sema: arrays", "[sema]") {
+    CHECK(symbolType("let xs <- [1, 2, 3];", "xs") == "arr[3] int");
+    CHECK(symbolType("let xs <- [1, 2.5];", "xs") == "arr[2] float");
+    CHECK(symbolType("let x :: i8 <- 1; let xs <- [1, x];", "xs") == "arr[2] i8");
+    CHECK(symbolType("let m <- [[1, 2], [3, 4], [5, 6]];", "m") == "arr[3] arr[2] int");
+    CHECK(semaErrors("let xs :: arr[3] i8 <- [1, 2, 3];") == 0);
+    CHECK(semaErrors("let xs :: arr[3] int <- [1, 2];") == 1);
+    CHECK(semaErrors("let xs <- [1, true];") == 1);
+    CHECK(semaErrors("let xs <- [];") == 1);
+    CHECK(semaErrors("let xs :: arr[0] int <- [];") == 0);
+    // sizes
+    CHECK(semaErrors("let N <- 2 + 1; let xs :: arr[N] int <- [1, 2, 3];") == 0);
+    CHECK(semaErrors("let (xs :: arr[N] int) -> first -> (r :: int) { xs[0] -| } let N <- 2;") == 0);
+    CHECK(semaErrors("let n :: mut <- 3; let xs :: arr[n] mut int <- _;") == 1);
+    CHECK(semaErrors("let xs :: arr[2 - 3] int <- _;") == 1);
+    // indexing and len
+    CHECK(symbolType("let xs <- [1, 2]; let a <- xs[1];", "a") == "int");
+    CHECK(symbolType("let m <- [[1, 2]]; let a <- m[0][1];", "a") == "int");
+    CHECK(symbolType("let xs <- [1, 2]; let n <- len(xs);", "n") == "i64u");
+    CHECK(symbolType("let xs <- [1, 2]; let n <- xs |> len;", "n") == "i64u");
+    CHECK(semaErrors("let xs <- [1, 2]; let i :: i8u <- 1; let a <- xs[i];") == 0);
+    CHECK(semaErrors("let xs <- [1, 2]; let a <- xs[2];") == 1);
+    CHECK(semaErrors("let xs <- [1, 2]; let N <- 2; let a <- xs[N];") == 1);
+    CHECK(semaErrors("let xs <- [1, 2]; let i <- 1; let a <- xs[i];") == 1);
+    CHECK(semaErrors("let xs <- [1, 2]; let a <- xs[0.5];") == 1);
+    CHECK(semaErrors("let xs <- [1, 2]; let a <- xs[0, 1];") == 1);
+    CHECK(semaErrors("let a <- 5[0];") == 1);
+    CHECK(semaErrors("let a <- len(5);") == 1);
+    CHECK(semaErrors("let (n :: int) -> len -> (r :: int) { n -| } let a <- len(5);") == 0);
+}
+
+// checks methods, which only protocols give a type, where the only one so far is Sized's len, called on its object, piped into with its dot, or called like a function, which picks the method over a function of the same name
+TEST_CASE("Sema: methods", "[sema]") {
+    CHECK(symbolType("let xs <- [1, 2]; let n <- xs.len();", "n") == "i64u");
+    CHECK(symbolType("let xs <- [1, 2]; let n <- xs |> .len;", "n") == "i64u");
+    CHECK(symbolType("let xs <- [1, 2]; let n <- .len <| xs;", "n") == "i64u");
+    CHECK(symbolType("let m <- [[1, 2]]; let n <- m[0].len();", "n") == "i64u");
+    CHECK(symbolType("let (xs :: arr[2] int) -> len -> (r :: int) { 0 -| } let n <- len([1, 2]);", "n") == "i64u");
+    CHECK(semaErrors("let xs <- [1, 2]; let n <- xs.len;") == 1);
+    CHECK(semaErrors("let xs <- [1, 2]; let n <- xs.len(1);") == 1);
+    CHECK(semaErrors("let x <- 5; let n <- x.len();") == 1);
+    CHECK(semaErrors("let xs <- [1, 2]; let n <- xs.size();") == 1);
+    CHECK(semaErrors("let n <- .len;") == 1);
+    CHECK(semaErrors("let x <- 5; let n <- x.field;") == 1);
+    // = and == compare arrays, and nothing orders them
+    CHECK(semaErrors("let xs <- [1, 2]; let a <- xs = [1, 2] && xs !== [2, 1];") == 0);
+    CHECK(semaErrors("let xs <- [1, 2]; let a <- xs < xs;") == 1);
+    CHECK(semaErrors("let xs <- [1, 2]; let a <- xs = [1, 2, 3];") == 1);
+}
+
+// checks where mut sits on an array: on its elements, they can be written, in front, the whole array can be replaced, a bare mut on an inferred type allows both at every level, and an uninitialized array needs one of them
+TEST_CASE("Sema: array mutability", "[sema]") {
+    CHECK(semaErrors("let xs :: arr[2] mut int <- [1, 2]; xs[0] <- 3; xs[1] +<- 1;") == 0);
+    CHECK(semaErrors("let xs :: arr[2] mut int <- [1, 2]; xs <- [3, 4];") == 1);
+    CHECK(semaErrors("let xs :: mut arr[2] int <- [1, 2]; xs <- [3, 4];") == 0);
+    CHECK(semaErrors("let xs :: mut arr[2] int <- [1, 2]; xs[0] <- 3;") == 1);
+    CHECK(semaErrors("let m :: mut <- [[1, 2], [3, 4]]; m[0][1] <- 5; m[1] <- [0, 0]; m <- m;") == 0);
+    CHECK(semaErrors("let m :: arr[2] mut arr[2] int <- [[1, 2], [3, 4]]; m[1] <- [0, 0];") == 0);
+    CHECK(semaErrors("let m :: arr[2] mut arr[2] int <- [[1, 2], [3, 4]]; m[0][1] <- 5;") == 1);
+    CHECK(semaErrors("let (xs :: arr[2] mut int) -> f -> () { xs[0] <- 1; }") == 0);
+    CHECK(semaErrors("let (xs :: arr[2] int) -> f -> () { xs[0] <- 1; }") == 1);
+    CHECK(semaErrors("let v :: arr[4] mut int <- _; v[0] <- 1;") == 0);
+    CHECK(semaErrors("let v :: arr[4] int <- _;") == 1);
+    CHECK(semaErrors("let () -> f -> () { [1, 2][0] <- 3; }") == 1);
+}
+
 // checks that assignments and compound assignments keep the place's type, and that a discard takes anything
 TEST_CASE("Sema: assignments", "[sema]") {
     CHECK(semaErrors("let x :: mut <- 1; x <- 2;") == 0);
@@ -258,7 +325,7 @@ TEST_CASE("Sema: unsupported forms", "[sema]") {
     CHECK(semaErrors("let [a, b] <- p;") == 2);
     CHECK(semaErrors("let x :: Id <- 5; let y <- x; let z <- y;") == 1);
     CHECK(semaErrors("let s <- \"hi\";") == 1);
-    CHECK(semaErrors("let p <- [1, 2];") == 1);
+    CHECK(semaErrors("let p <- [x <- 1, y <- 2];") == 1);
     CHECK(semaErrors("let x <- 0; repeat (i) <- x { }") == 1);
 }
 
@@ -636,6 +703,11 @@ TEST_CASE("Sema: fixes", "[sema]") {
     CHECK(fixed("let t <- (1, 2);") == "let t <- [1, 2];");
     CHECK(fixed("let x :: mut int;") == "let x :: mut int <- _;");
     CHECK(fixed("let r <- [lo <- 1, ..., 5];") == "let r <- [1, ..., 5];");
+    // arrays
+    CHECK(fixed("let xs <- [1, 2]; xs[0] <- 3;") == "let xs :: mut <- [1, 2]; xs[0] <- 3;");
+    CHECK(fixed("let xs :: arr[2] int <- [1, 2]; xs[0] <- 3;") == "");
+    CHECK(fixed("let xs <- [1, 2]; let i <- 1; let a <- xs[i];") == "let xs <- [1, 2]; let i <- 1; let a <- xs[i64u(i)];");
+    CHECK(fixed("let xs <- [1, 2]; let n <- xs.len;") == "let xs <- [1, 2]; let n <- xs.len();");
     // arguments and defaults
     const std::string add = "let (a :: int, b :: int) -> add -> (r :: int) { a + b -| } ";
     CHECK(fixed(add + "let x <- add(a <- 1, 2);") == "");

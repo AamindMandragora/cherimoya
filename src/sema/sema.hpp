@@ -89,6 +89,8 @@ class Sema {
     // what the file is checked as, every test found so far, and the functions around the one being checked, outermost first, which a nested test's name starts with
     Role role = Role::Module;
     std::vector<Test> tests;
+    // the value of every immutable binding whose initializer folds to an integer, which array sizes and constant indices can use
+    std::unordered_map<const Symbol*, uint64_t> constants;
     std::vector<std::string_view> enclosing;
 
     // reports something sema doesn't check yet, and poisons the result
@@ -109,8 +111,8 @@ class Sema {
     }
 
     // makes a symbol that lives as long as sema does
-    Symbol* makeSymbol(std::string_view name, SymbolKind kind, SemaType* type, bool isMutable, Span span) {
-        symbols.push_back(Symbol{name, kind, type, isMutable, span, owner, {}, nullptr});
+    Symbol* makeSymbol(std::string_view name, SymbolKind kind, SemaType* type, std::vector<bool> mutability, Span span) {
+        symbols.push_back(Symbol{name, kind, type, std::move(mutability), span, owner, {}, nullptr});
         uses.push_back({span, &symbols.back(), true});
         return &symbols.back();
     }
@@ -125,11 +127,90 @@ class Sema {
         scope = saved;
     }
 
-    // checks whether a type is mutable as a whole value: mut int, or mut with the type left to inference
+    // checks whether a type is mutable as a whole value: mut int, mut arr[3] int, which can be replaced, or mut with the type left to inference
     bool isMut(const Type& t) {
         if (t.kind == TypeKind::Refined) return isMut(*static_cast<const RefinedType&>(t).inner);
         if (t.kind != TypeKind::Qualified) return false;
-        return static_cast<const QualifiedType&>(t).position == QualPosition::Value;
+        return static_cast<const QualifiedType&>(t).position != QualPosition::Elements;
+    }
+
+    // what a binding of a type can write, the binding itself first and then each level of an array's elements, outermost first, from where mut sits: mut arr[2] arr[3] int replaces the whole, arr[2] mut arr[3] int writes the outer level, and a bare mut on a type left to inference writes everything
+    std::vector<bool> mutabilityOf(const Type* t, SemaType* type) {
+        size_t depth = 0;
+        for (auto array = asArray(type); array; array = asArray(array->element)) depth++;
+        std::vector<bool> levels(depth + 1, false);
+        if (t) levels[0] = isMut(*t);
+        while (t && t->kind == TypeKind::Refined) t = static_cast<const RefinedType&>(*t).inner.get();
+        if (t && t->kind == TypeKind::Qualified) {
+            auto& qualified = static_cast<const QualifiedType&>(*t);
+            if (!qualified.inner) return std::vector<bool>(depth + 1, true);
+            t = qualified.inner.get();
+        }
+        for (size_t level = 1; level <= depth && t && t->kind == TypeKind::Handle; level++) {
+            const Type* inner = static_cast<const HandleType&>(*t).inner.get();
+            if (inner && inner->kind == TypeKind::Qualified && static_cast<const QualifiedType&>(*inner).position == QualPosition::Elements) {
+                levels[level] = true;
+                inner = static_cast<const QualifiedType&>(*inner).inner.get();
+            }
+            t = inner;
+        }
+        return levels;
+    }
+
+    // the value of an integer expression the program knows when it compiles, which is all an array's size or a constant index can be: an integer literal, an immutable binding whose initializer folds, and + - * / % over those, or nothing for anything else, including a result below zero
+    std::optional<uint64_t> fold(const Expr& e, bool isHoisting = false) {
+        switch (e.kind) {
+            case ExprKind::IntLiteral: {
+                auto [radix, digits] = literalDigits(static_cast<const IntLiteralExpr&>(e).literal);
+                uint64_t value = 0;
+                for (char c : digits) {
+                    if (value > (UINT64_MAX - hexValue(c)) / radix) return std::nullopt;
+                    value = value * radix + hexValue(c);
+                }
+                return value;
+            }
+            // a name is found by its symbol once it's checked, and by name while constants are hoisted, before anything has a symbol
+            case ExprKind::Identifier: {
+                auto& identifier = static_cast<const IdentifierExpr&>(e);
+                if (isHoisting) return scope->lookupConstant(identifier.name);
+                auto found = constants.find(identifier.decl);
+                if (found == constants.end()) return std::nullopt;
+                return found->second;
+            }
+            case ExprKind::Binary: {
+                auto& binary = static_cast<const BinaryExpr&>(e);
+                auto lhs = fold(*binary.lhs, isHoisting);
+                auto rhs = fold(*binary.rhs, isHoisting);
+                if (!lhs || !rhs) return std::nullopt;
+                switch (binary.op.kind) {
+                    case TokenKind::Plus: return *lhs + *rhs >= *lhs ? std::optional<uint64_t>(*lhs + *rhs) : std::nullopt;
+                    case TokenKind::Minus: return *lhs >= *rhs ? std::optional<uint64_t>(*lhs - *rhs) : std::nullopt;
+                    case TokenKind::Star: return *rhs == 0 || *lhs <= UINT64_MAX / *rhs ? std::optional<uint64_t>(*lhs * *rhs) : std::nullopt;
+                    case TokenKind::Slash: return *rhs ? std::optional<uint64_t>(*lhs / *rhs) : std::nullopt;
+                    case TokenKind::Percent: return *rhs ? std::optional<uint64_t>(*lhs % *rhs) : std::nullopt;
+                    default: return std::nullopt;
+                }
+            }
+            default:
+                return std::nullopt;
+        }
+    }
+
+    // the N in arr[N] T, which has to be known when the program compiles: an integer literal, or an immutable binding whose initializer folds to one, where a bare name reaches sema as a type, since arr[A] T could name an allocator
+    std::optional<uint64_t> arraySize(const GenericArg& arg, Span span) {
+        std::optional<uint64_t> size;
+        if (arg.value) {
+            checkExpr(*arg.value);
+            size = fold(*arg.value);
+        } else if (arg.type && arg.type->kind == TypeKind::Named) {
+            auto& named = static_cast<const NamedType&>(*arg.type);
+            if (named.path.size() == 1 && named.args.empty()) {
+                if (Symbol* symbol = scope->lookup(named.path[0].text)) uses.push_back({arg.type->span, symbol, false});
+                size = scope->lookupConstant(named.path[0].text);
+            }
+        }
+        if (!size) engine.printError("cherimoya requires an array's size to be known when the program compiles, please use an integer literal or an immutable binding of one", span);
+        return size;
     }
 
     // turns a parsed type into a sema type, or null when the type is left to inference (let x :: mut <- 5), where refinements resolve to their base type and their predicates are checked once the subject is in scope
@@ -150,15 +231,23 @@ class Sema {
                 for (size_t i = 0; i < named.path.size(); i++) text += (i ? "." : "") + std::string(named.path[i].text);
                 return unsupported("the type '" + text + "'", t.span);
             }
+            // where mut sits decides what a binding can write, which mutabilityOf reads, so the type is the same either way
             case TypeKind::Qualified: {
                 auto& qualified = static_cast<const QualifiedType&>(t);
-                if (qualified.position != QualPosition::Value) return unsupported("handles", t.span);
                 return qualified.inner ? resolveType(*qualified.inner) : nullptr;
             }
             case TypeKind::Refined:
                 return resolveType(*static_cast<const RefinedType&>(t).inner);
-            case TypeKind::Handle:
-                return unsupported("handles", t.span);
+            // arr[N] T is a fixed array, and a handle without a size, or a ptr, holds memory that has to be freed
+            case TypeKind::Handle: {
+                auto& handle = static_cast<const HandleType&>(t);
+                if (handle.handle.kind == TokenKind::KwPtr) return unsupported("pointers", t.span);
+                if (!handle.arg) return unsupported("arrays without a fixed size", t.span);
+                auto size = arraySize(*handle.arg, handle.arg->value ? handle.arg->value->span : handle.arg->type->span);
+                SemaType* element = handle.inner ? resolveType(*handle.inner) : nullptr;
+                if (!size || element == nullptr || isPoisoned(element)) return context.semaError;
+                return context.arrayType(element, *size);
+            }
             case TypeKind::Mode:
                 return unsupported("'" + std::string(static_cast<const ModeType&>(t).mode.text) + "'", t.span);
             case TypeKind::Tuple:
@@ -181,7 +270,7 @@ class Sema {
         auto& refined = static_cast<const RefinedType&>(t);
         checkRefinements(*refined.inner, subject);
         inScope(refined.span, [&] {
-            if (refined.binder) scope->insert(makeSymbol(refined.binder->text, SymbolKind::Binding, subject->type, false, tokSpan(*refined.binder)));
+            if (refined.binder) scope->insert(makeSymbol(refined.binder->text, SymbolKind::Binding, subject->type, {false}, tokSpan(*refined.binder)));
             expectBool(*refined.predicate, "a refinement");
         });
     }
@@ -198,8 +287,8 @@ class Sema {
         return {"Compare it with a cutoff, '> 0.5'", {{replaced, value + " > 0.5"}}};
     }
 
-    // makes a binding or parameter mutable where it's declared: mut goes in front of its type, or :: mut after its name when it has none
-    std::vector<Fix> mutability(const Symbol& symbol) {
+    // makes a binding or parameter mutable where it's declared: mut goes in front of its type, or :: mut after its name when it has none, where making its elements writable only has a fix when it has no type, since a bare mut writes every level
+    std::vector<Fix> mutability(const Symbol& symbol, bool isElements = false) {
         std::string_view text = engine.getManager().text();
         size_t at = symbol.span.end;
         while (at < text.size() && text[at] == ' ') at++;
@@ -207,6 +296,7 @@ class Sema {
         if (text.compare(at, 2, "::") == 0) {
             at += 2;
             while (at < text.size() && text[at] == ' ') at++;
+            if (isElements) return {};
             return {{title, {insertion(at, "mut ")}}};
         }
         if (text.compare(at, 2, "<-") == 0) return {{title, {insertion(symbol.span.end, " :: mut")}}};
@@ -253,8 +343,14 @@ class Sema {
         return type ? type : context.semaError;
     }
 
-    // the first pass over a list of statements: declares every function in it, so they can be used before they're defined
+    // the first pass over a list of statements: finds the value of every constant let in it, then declares every function in it, so a signature's array sizes can use the constants, and the functions can be used before they're defined
     void hoist(std::vector<std::unique_ptr<Stmt>>& stmts) {
+        for (auto& s : stmts) {
+            if (s->kind != StmtKind::Let) continue;
+            auto& let = static_cast<LetStmt&>(*s);
+            if (let.pattern->kind != PatternKind::Binder || (let.type && isMut(*let.type))) continue;
+            if (auto value = fold(*let.init, true)) scope->insertConstant(static_cast<BinderPattern&>(*let.pattern).name.text, *value);
+        }
         for (auto& s : stmts) {
             auto found = fnOf(s.get());
             for (Stmt* attr = s.get(); attr && attr->kind == StmtKind::Attr; attr = static_cast<AttrStmt&>(*attr).target.get()) {
@@ -277,7 +373,7 @@ class Sema {
                 signature.push_back(type);
             }
             signature.push_back(outputType(fn));
-            auto symbol = makeSymbol(fn.name.text, SymbolKind::Function, context.functionType(signature), false, tokSpan(fn.name));
+            auto symbol = makeSymbol(fn.name.text, SymbolKind::Function, context.functionType(signature), {false}, tokSpan(fn.name));
             symbol->function = &fn;
             scope->insert(symbol);
             fn.decl = symbol;
@@ -374,8 +470,7 @@ class Sema {
             for (size_t i = 0; i < fn.inputs.size(); i++) {
                 auto& p = fn.inputs[i];
                 if (p.fallback) checkDefault(*p.fallback, signature->params[i]);
-                bool isMutable = p.type && isMut(*p.type);
-                auto param = makeSymbol(p.name.text, SymbolKind::Param, signature->params[i], isMutable, tokSpan(p.name));
+                auto param = makeSymbol(p.name.text, SymbolKind::Param, signature->params[i], mutabilityOf(p.type.get(), signature->params[i]), tokSpan(p.name));
                 p.decl = param;
                 scope->insert(param);
                 if (p.type) checkRefinements(*p.type, param);
@@ -388,7 +483,7 @@ class Sema {
                         engine.printError("cherimoya requires defaults to be on a function's inputs, please remove '<- " + textOf(o.fallback->span) + "'", o.fallback->span, {}, {{"Remove the default", {{{from, o.fallback->span.end}, ""}}}});
                     }
                     auto type = fn.outputs.size() == 1 ? signature->returns : context.semaError;
-                    auto output = makeSymbol(o.name.text, SymbolKind::Param, type, false, tokSpan(o.name));
+                    auto output = makeSymbol(o.name.text, SymbolKind::Param, type, {false}, tokSpan(o.name));
                     scope->insert(output);
                     if (o.type) checkRefinements(*o.type, output);
                 }
@@ -421,8 +516,11 @@ class Sema {
             if (declared == nullptr) {
                 engine.printError("cherimoya requires an uninitialized binding to have a type, please write 'let x :: mut int <- _;'", let.span);
                 type = context.semaError;
-            } else if (!isMut(*let.type)) {
-                engine.printError("cherimoya requires an uninitialized binding to be mutable, please write 'let x :: mut int <- _;'", let.span);
+            } else if (!isPoisoned(declared)) {
+                // an array whose elements can be written can start out uninitialized too, since that's how it gets its values
+                auto levels = mutabilityOf(let.type.get(), declared);
+                bool isWritable = levels[0] || (levels.size() > 1 && levels[1]);
+                if (!isWritable) engine.printError("cherimoya requires an uninitialized binding to be mutable, please write 'let x :: mut int <- _;'", let.span);
             }
         } else {
             auto init = checkExpr(*let.init, declared);
@@ -442,10 +540,13 @@ class Sema {
             return;
         }
         auto& binder = static_cast<BinderPattern&>(*let.pattern);
-        auto symbol = makeSymbol(binder.name.text, SymbolKind::Binding, type, let.type && isMut(*let.type), binder.span);
+        auto symbol = makeSymbol(binder.name.text, SymbolKind::Binding, type, mutabilityOf(let.type.get(), type), binder.span);
         binder.decl = symbol;
         scope->insert(symbol);
         if (let.type) checkRefinements(*let.type, symbol);
+        if (!symbol->isMutable() && let.init->kind != ExprKind::Wildcard) {
+            if (auto value = fold(*let.init)) constants[symbol] = *value;
+        }
         if (!let.type && !isPoisoned(type)) inferred.push_back(symbol);
     }
 
@@ -587,7 +688,7 @@ class Sema {
                 return true;
             case PatternKind::Binder: {
                 auto& binder = static_cast<BinderPattern&>(p);
-                binder.decl = makeSymbol(binder.name.text, SymbolKind::Binding, subject, false, binder.span);
+                binder.decl = makeSymbol(binder.name.text, SymbolKind::Binding, subject, {false}, binder.span);
                 scope->insert(binder.decl);
                 return true;
             }
@@ -782,14 +883,45 @@ class Sema {
         return symbol->type;
     }
 
-    // checks the left side of an assignment: it has to be a binding declared mut, and gives the type it holds
+    // the type an array's elements have to be written as so a level of them can be written: arr[2] arr[3] int at level 1 is arr[2] arr[3] mut int
+    std::string writableAt(SemaType* type, size_t level) {
+        auto array = asArray(type);
+        if (!array) return type->toString();
+        std::string head = "arr[" + std::to_string(array->size) + "] ";
+        return head + (level == 0 ? "mut " + array->element->toString() : writableAt(array->element, level - 1));
+    }
+
+    // checks an element as the left side of an assignment, xs[i] or m[i][j], where the array has to be a binding whose elements at that depth can be written
+    SemaType* checkElementPlace(IndexExpr& place) {
+        auto type = checkExpr(place);
+        size_t depth = 0;
+        Expr* root = &place;
+        while (root->kind == ExprKind::Index) {
+            root = static_cast<IndexExpr&>(*root).object.get();
+            depth++;
+        }
+        auto symbol = root->kind == ExprKind::Identifier ? static_cast<IdentifierExpr&>(*root).decl : nullptr;
+        if (symbol == nullptr || symbol->kind == SymbolKind::Function) {
+            if (!isPoisoned(type)) engine.printError("cherimoya requires the left side of an assignment to be a binding or its elements, please store the value in a 'let' first", place.span);
+            return type;
+        }
+        auto& levels = symbol->mutability;
+        if (isPoisoned(type) || (depth < levels.size() && levels[depth])) return type;
+        std::string name(symbol->name);
+        engine.printError("cherimoya requires the elements of '" + name + "' to be mutable to assign to them, please declare it as '" + writableAt(symbol->type, depth - 1) + "'",
+            place.span, {{"'" + name + "' is declared here", symbol->span}}, mutability(*symbol, true));
+        return type;
+    }
+
+    // checks the left side of an assignment: it has to be a binding declared mut, or an element it can write, and gives the type it holds
     SemaType* checkPlace(Expr& place) {
+        if (place.kind == ExprKind::Index) return checkElementPlace(static_cast<IndexExpr&>(place));
         if (place.kind != ExprKind::Identifier) return checkExpr(place);
         auto& identifier = static_cast<IdentifierExpr&>(place);
         auto type = checkIdentifier(identifier, true);
         place.type = type;
         auto symbol = identifier.decl;
-        if (symbol == nullptr || symbol->isMutable) return type;
+        if (symbol == nullptr || symbol->isMutable()) return type;
         std::string name(identifier.name);
         if (symbol->kind == SymbolKind::Function) {
             engine.printError("cherimoya requires the left side of an assignment to be a binding, please assign to a 'let' instead of the function '" + name + "'", place.span);
@@ -1170,8 +1302,136 @@ class Sema {
         return slots;
     }
 
+    // checks whether a type has a method by a protocol it implements, where the only protocol so far is the built-in Sized, whose len every array has, until protocols can be written
+    bool hasMethod(SemaType* type, std::string_view name) {
+        return asArray(type) != nullptr && name == "len";
+    }
+
+    // reports a method with no object, .len, anywhere but a pipe, which is what gives it one
+    SemaType* unpipedMethod(MemberExpr& member) {
+        engine.printError("cherimoya requires a method without its object, '." + std::string(member.field) + "', to be piped into, please write 'x |> ." + std::string(member.field) + "'", member.span);
+        return context.semaError;
+    }
+
+    // checks a method used without calling it, xs.len, which needs its parentheses, or a field, which records bring
+    SemaType* checkMember(MemberExpr& member) {
+        if (!member.object) return unpipedMethod(member);
+        auto type = checkExpr(*member.object);
+        if (isPoisoned(type)) return type;
+        if (hasMethod(type, member.field)) {
+            engine.printError("cherimoya requires a method to be called, please write '" + textOf(member.span) + "()'", member.span, {}, {{"Call it with '()'", {insertion(member.span.end, "()")}}});
+            return context.semaError;
+        }
+        return unsupported("fields", member.span);
+    }
+
+    // checks whether a name is a method of any protocol, which is what makes a call by that name worth checking as a method first
+    bool isMethodName(std::string_view name) {
+        return name == "len";
+    }
+
+    // checks a method call on an object, the rest of its arguments given, which calls the method a protocol the object's type implements gives it, where Sized's len takes nothing more and gives how many elements an array holds, as an i64u, the type that indexes it
+    SemaType* checkMethod(Expr& object, std::string_view name, const std::vector<Argument>& args, Span span) {
+        auto type = object.type ? object.type : checkExpr(object);
+        for (auto& arg : args) checkExpr(*arg.value);
+        if (isPoisoned(type)) return type;
+        if (!hasMethod(type, name)) {
+            engine.printError("cherimoya expected a method that '" + type->toString() + "' has, got '" + std::string(name) + "' instead", span);
+            return context.semaError;
+        }
+        if (!args.empty()) {
+            engine.printError("cherimoya expected 0 arguments in the call to '" + std::string(name) + "', got " + std::to_string(args.size()) + " instead", span);
+            return context.semaError;
+        }
+        return context.intType("i64u");
+    }
+
+    // checks an array literal, [1, 2, 3], whose elements share one type, picked the way an operator picks its operands': the element type the context expects, else the first element that isn't a literal, else a float literal's, so [1, 2.5] is floats, where an empty one needs its type from where it goes
+    SemaType* checkPack(PackExpr& pack, SemaType* expected) {
+        for (auto& e : pack.elems) {
+            if (e.name) return unsupported("named packs", tokSpan(*e.name));
+        }
+        auto expectedArray = asArray(expected);
+        SemaType* element = expectedArray ? expectedArray->element : nullptr;
+        bool isExpected = element != nullptr;
+        if (pack.elems.empty()) {
+            if (isExpected) return context.arrayType(element, 0);
+            engine.printError("cherimoya requires an empty array's type to be known, please annotate it, like '([] :: arr[0] int)'", pack.span);
+            return context.semaError;
+        }
+        for (auto& e : pack.elems) {
+            if (element == nullptr && !isLiteral(*e.value)) element = checkExpr(*e.value);
+        }
+        for (auto& e : pack.elems) {
+            if (element == nullptr && isFloatLiteral(*e.value)) element = checkExpr(*e.value);
+        }
+        if (element == nullptr) element = checkExpr(*pack.elems[0].value);
+        bool isNever = false;
+        for (auto& e : pack.elems) {
+            auto type = e.value->type ? e.value->type : checkExpr(*e.value, element);
+            isNever = isNever || type == context.semaNever;
+            if (isCompatible(element, type) || isPoisoned(element)) continue;
+            if (isExpected) {
+                mismatch(element, type, e.value->span);
+            } else {
+                engine.printError("cherimoya doesn't support packs whose elements have different types yet, which are tuples, please give every element the type '" + element->toString() + "'", e.value->span);
+            }
+            return context.semaError;
+        }
+        if (isPoisoned(element)) return element;
+        return isNever ? static_cast<SemaType*>(context.semaNever) : context.arrayType(element, pack.elems.size());
+    }
+
+    // checks indexing an array, xs[i], by one unsigned integer, where a literal index is an i64u, and one known when the program compiles has to be below the array's length, and gives the element's type
+    SemaType* checkIndex(IndexExpr& index) {
+        if (index.args.empty()) return unsupported("dereferencing", index.span);
+        if (index.args.size() == 1 && index.args[0]->kind == ExprKind::Range) return unsupported("slicing", index.span);
+        auto object = checkExpr(*index.object);
+        std::vector<SemaType*> positions;
+        for (auto& arg : index.args) positions.push_back(checkExpr(*arg, context.intType("i64u")));
+        if (isPoisoned(object)) return object;
+        auto array = asArray(object);
+        if (!array) {
+            engine.printError("cherimoya expected an array before '[...]', got '" + object->toString() + "' instead", index.object->span);
+            return context.semaError;
+        }
+        if (index.args.size() != 1) {
+            engine.printError("cherimoya expected 1 index into an array, got " + std::to_string(index.args.size()) + " instead", index.span);
+            return context.semaError;
+        }
+        auto position = positions[0];
+        auto& at = *index.args[0];
+        if (isPoisoned(position)) return position;
+        auto integer = asInt(position);
+        if (!integer) {
+            engine.printError("cherimoya expected an unsigned integer as an index, got '" + position->toString() + "' instead", at.span);
+            return context.semaError;
+        }
+        if (integer->isSigned) {
+            engine.printError("cherimoya requires an index to be unsigned, please convert it, like 'i64u(" + textOf(at.span) + ")'", at.span, {},
+                {{"Convert it with 'i64u(...)'", {insertion(at.span.start, "i64u("), insertion(at.span.end, ")")}}});
+            return context.semaError;
+        }
+        if (auto value = fold(at); value && *value >= array->size) {
+            engine.printError("cherimoya expected an index below " + std::to_string(array->size) + " into '" + textOf(index.object->span) + "', got " + std::to_string(*value) + " instead", at.span);
+            return context.semaError;
+        }
+        return array->element;
+    }
+
     // checks a call: the callee has to be a function's name, and each argument has to match the input it goes to, where close is where the call's ) is, if it has one, and inputs gets the value each input takes
     SemaType* checkCall(Expr& callee, const std::vector<Argument>& args, Span span, std::vector<Expr*>& inputs, std::optional<size_t> close, bool isPipe = false) {
+        // object.name(args) calls a method, and so does a call by a method's name whose first argument's type has that method, which wins over a function by the same name, so len(xs) is xs.len() even beside a function named len
+        if (callee.kind == ExprKind::Member) {
+            auto& member = static_cast<MemberExpr&>(callee);
+            if (!member.object) return unpipedMethod(member);
+            return checkMethod(*member.object, member.field, args, span);
+        }
+        if (callee.kind == ExprKind::Identifier && !args.empty() && !args[0].name && isMethodName(static_cast<IdentifierExpr&>(callee).name)) {
+            std::string_view name = static_cast<IdentifierExpr&>(callee).name;
+            auto first = checkExpr(*args[0].value);
+            if (hasMethod(first, name) || scope->lookup(name) == nullptr) return checkMethod(*args[0].value, name, {args.begin() + 1, args.end()}, span);
+        }
         SemaType* type;
         if (callee.kind == ExprKind::Identifier) {
             type = checkIdentifier(static_cast<IdentifierExpr&>(callee), true);
@@ -1195,7 +1455,8 @@ class Sema {
         std::vector<SemaType*> actual;
         for (size_t i = 0; i < args.size(); i++) {
             SemaType* parameter = slots[i] ? fnType->params[*slots[i]] : nullptr;
-            actual.push_back(checkExpr(*args[i].value, parameter));
+            // the first argument is already checked when the call was looked at as a method's first
+            actual.push_back(args[i].value->type ? args[i].value->type : checkExpr(*args[i].value, parameter));
             if (parameter && !isCompatible(parameter, actual.back())) mismatch(parameter, actual.back(), args[i].value->span);
         }
         if (type == context.semaError) return context.semaError;
@@ -1213,10 +1474,7 @@ class Sema {
             case ExprKind::StringLiteral: return "strings";
             case ExprKind::OpRef: return "operators as values";
             case ExprKind::Old: return "'old'";
-            case ExprKind::Index: return "indexing";
-            case ExprKind::Member: return "fields";
             case ExprKind::Construct: return "construction";
-            case ExprKind::Pack: return "packs";
             case ExprKind::Range: return "ranges";
             case ExprKind::Compr: return "comprehensions";
             case ExprKind::Fold: return "folds";
@@ -1316,6 +1574,12 @@ class Sema {
                 checkExpr(*extra.rhs);
                 return unsupported("extra operators", tokSpan(extra.op));
             }
+            case ExprKind::Pack:
+                return checkPack(static_cast<PackExpr&>(e), expected);
+            case ExprKind::Member:
+                return checkMember(static_cast<MemberExpr&>(e));
+            case ExprKind::Index:
+                return checkIndex(static_cast<IndexExpr&>(e));
             case ExprKind::Call: {
                 auto& call = static_cast<CallExpr&>(e);
                 return checkCall(*call.callee, argumentsOf(call.args), e.span, call.inputs, e.span.end - 1);
@@ -1326,7 +1590,7 @@ class Sema {
                 bool forward = pipe.op.kind == TokenKind::PipeFwd;
                 auto& fn = forward ? *pipe.rhs : *pipe.lhs;
                 auto& arg = forward ? *pipe.lhs : *pipe.rhs;
-                // a call in the function's place gives the rest of the arguments, after the piped value
+                // a call in the function's place gives the rest of the arguments, after the piped value, and a method with no object, x |> .len, is the piped value's
                 std::vector<Argument> args{{std::nullopt, &arg, arg.span}};
                 Expr* callee = &fn;
                 std::optional<size_t> close = std::nullopt;
@@ -1336,7 +1600,9 @@ class Sema {
                     callee = call.callee.get();
                     close = call.span.end - 1;
                 }
-                auto type = checkCall(*callee, args, e.span, pipe.inputs, close, true);
+                bool isMethod = callee->kind == ExprKind::Member && !static_cast<MemberExpr&>(*callee).object;
+                auto type = isMethod ? checkMethod(arg, static_cast<MemberExpr&>(*callee).field, {args.begin() + 1, args.end()}, e.span)
+                    : checkCall(*callee, args, e.span, pipe.inputs, close, true);
                 if (fn.kind == ExprKind::Call) fn.type = type;
                 // a forward pipe reads top to bottom, so each one is a step, and so is the value it starts from, when that isn't a forward pipe itself, where a step with a poisoned type has nothing to show
                 if (forward) {

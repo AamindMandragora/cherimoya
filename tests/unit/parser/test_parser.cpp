@@ -70,7 +70,7 @@ static std::string dumpExpr(const Expr& e) {
         }
         case ExprKind::Member: {
             auto& m = static_cast<const MemberExpr&>(e);
-            return "(. " + dumpExpr(*m.object) + " " + std::string(m.field) + ")";
+            return "(. " + (m.object ? dumpExpr(*m.object) + " " : "") + std::string(m.field) + ")";
         }
         case ExprKind::Construct: {
             auto& c = static_cast<const ConstructExpr&>(e);
@@ -545,6 +545,9 @@ TEST_CASE("Parser: calls are postfix", "[parser]") {
     CHECK(parseDump("f(a, c <- 2, b <- g(x))") == "(call f a c<-2 b<-(call g x))");
     CHECK(parseDump("f(Point <- [0, 0])") == "(call f Point<-(pack 0 0))");
     CHECK(parseDump("x |> clamp(hi <- 10)") == "(|> x (call clamp hi<-10))");
+    CHECK(parseDump("xs |> .len") == "(|> xs (. len))");
+    CHECK(parseDump(".len <| xs") == "(<| (. len) xs)");
+    CHECK(parseDump("xs.len()") == "(call (. xs len))");
     CHECK(parseDump("f(g(x))") == "(call f (call g x))");
     CHECK(parseDump("len(xs) - 1") == "(- (call len xs) 1)");
     CHECK(parseDump("-f(x)") == "(pre:- (call f x))");
