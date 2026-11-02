@@ -1196,8 +1196,26 @@ public:
     Codegen(std::string_view name, SourceManager& m, DebugOptions debugOptions = {}) : module(std::make_unique<llvm::Module>(name, context)), irbuilder(context), symbolPrefix("cheri." + std::string(name)), manager(m) {
         if (debugOptions.level != DebugLevel::None) debug = std::make_unique<DebugInfo>(*module, manager.text(), std::move(debugOptions));
     }
-    // lowers a whole checked program: every function is declared first, nested ones included, then every body is defined, then start is exported for the runtime
-    std::unique_ptr<llvm::Module> generate(std::vector<std::unique_ptr<Stmt>>& program) {
+    // makes cheri_run_test, which the test runtime calls with a test's number, its place among the tests, and which calls that test and returns, where a number that's no test's does nothing
+    void emitTestRunner(const std::vector<Test>& tests) {
+        auto* type = llvm::FunctionType::get(irbuilder.getVoidTy(), {irbuilder.getInt64Ty()}, false);
+        llvm::Function* runner = llvm::Function::Create(type, llvm::Function::ExternalLinkage, "cheri_run_test", *module);
+        irbuilder.SetInsertPoint(llvm::BasicBlock::Create(context, "definition", runner));
+        llvm::BasicBlock* done = llvm::BasicBlock::Create(context, "done", runner);
+        llvm::SwitchInst* which = irbuilder.CreateSwitch(runner->getArg(0), done, tests.size());
+        for (size_t i = 0; i < tests.size(); i++) {
+            llvm::BasicBlock* run = llvm::BasicBlock::Create(context, "test", runner);
+            which->addCase(irbuilder.getInt64(i), run);
+            irbuilder.SetInsertPoint(run);
+            irbuilder.CreateCall(functionOf(tests[i].fn->decl));
+            irbuilder.CreateBr(done);
+        }
+        irbuilder.SetInsertPoint(done);
+        irbuilder.CreateRetVoid();
+    }
+
+    // lowers a whole checked program: every function is declared first, nested ones included, then every body is defined, then start is exported for the runtime, or, for a file of tests, the runner that calls them
+    std::unique_ptr<llvm::Module> generate(std::vector<std::unique_ptr<Stmt>>& program, const std::vector<Test>& tests = {}) {
         // functions can be declared anywhere at the top, including inside top-level blocks, so the whole program is searched
         collectStmts(program, symbolPrefix);
         // everything at the top that isn't a function runs once, in order, in cheri.module.init, which the runtime calls before start
@@ -1223,6 +1241,7 @@ public:
             auto& decl = *static_cast<DeclStmt&>(*top).decl;
             if (decl.kind == DeclKind::Fn && static_cast<FnDecl&>(decl).name.text == "start") llvm::GlobalAlias::create("cheri_start", declared[static_cast<FnDecl&>(decl).decl]);
         }
+        if (!tests.empty()) emitTestRunner(tests);
         if (debug) debug->finish();
         return std::move(module);
     }

@@ -1,7 +1,7 @@
 {
     "name": "cherimoya",
     "displayName": "Cherimoya",
-    "description": "Diagnostics, highlighting, hovers, and definitions for cherimoya, from cheri's language server",
+    "description": "Diagnostics, highlighting, hovers, definitions, and test lenses for cherimoya, from cheri's language server",
     "version": "0.1.0",
     "publisher": "cherimoya",
     "engines": {
@@ -12,7 +12,8 @@
     ],
     "main": "./dist/extension.js",
     "activationEvents": [
-        "onLanguage:cherimoya"
+        "onLanguage:cherimoya",
+        "onLanguage:cherimoya-tests"
     ],
     "contributes": {
         "languages": [
@@ -30,6 +31,26 @@
                     "light": "./icons/moya.svg",
                     "dark": "./icons/moya.svg"
                 }
+            },
+            {
+                "id": "cherimoya-tests",
+                "aliases": [
+                    "Cherimoya Tests"
+                ],
+                "extensions": [
+                    ".toya"
+                ],
+                "configuration": "./language-configuration.json",
+                "icon": {
+                    "light": "./icons/toya.svg",
+                    "dark": "./icons/toya.svg"
+                }
+            }
+        ],
+        "taskDefinitions": [
+            {
+                "type": "cheri",
+                "properties": {}
             }
         ],
         "configuration": {

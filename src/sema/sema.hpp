@@ -54,6 +54,17 @@ struct Label {
     std::string_view name;
 };
 
+// what a file is checked as: a module, which is how the language server and the tests check a .moya file, a program that will run, which needs a start, or a .toya file of tests, which can't have one, since cheri test runs its tests instead
+enum class Role { Module, Program, Tests };
+
+// a function marked @test, named the way a debugger names it, outer.inner for a nested one, with the text its trap's message has to hold when it's expected to trap, and the seconds it gets when it has a limit
+struct Test {
+    const FnDecl* fn;
+    std::string name;
+    std::optional<std::string> traps;
+    std::optional<uint64_t> timeout;
+};
+
 // sema resolves every name to its symbol and gives every expression a type, writing both straight into the AST
 class Sema {
     TypeContext context;
@@ -75,6 +86,10 @@ class Sema {
     std::vector<const Symbol*> inferred;
     std::vector<Step> steps;
     std::vector<Label> labels;
+    // what the file is checked as, every test found so far, and the functions around the one being checked, outermost first, which a nested test's name starts with
+    Role role = Role::Module;
+    std::vector<Test> tests;
+    std::vector<std::string_view> enclosing;
 
     // reports something sema doesn't check yet, and poisons the result
     SemaType* unsupported(std::string_view what, Span span) {
@@ -242,6 +257,9 @@ class Sema {
     void hoist(std::vector<std::unique_ptr<Stmt>>& stmts) {
         for (auto& s : stmts) {
             auto found = fnOf(s.get());
+            for (Stmt* attr = s.get(); attr && attr->kind == StmtKind::Attr; attr = static_cast<AttrStmt&>(*attr).target.get()) {
+                if (static_cast<AttrStmt&>(*attr).name.text == "test") checkTest(static_cast<AttrStmt&>(*attr), found);
+            }
             if (found == nullptr) continue;
             auto& fn = *found;
             if (fn.name.kind != TokenKind::Identifier) {
@@ -273,6 +291,74 @@ class Sema {
         auto actual = checkExpr(fallback, type);
         if (!isCompatible(type, actual)) mismatch(type, actual, fallback.span);
         targets = std::move(saved);
+    }
+
+    // checks a @test: it goes in a .toya file, on a function that takes and yields nothing, and its arguments are named, traps a string the trap's message has to hold, and timeout a whole number of seconds, where a test that passes all of that is recorded
+    void checkTest(AttrStmt& attr, FnDecl* fn) {
+        if (role != Role::Tests) {
+            engine.printError("cherimoya requires tests to be in a .toya file, please move it to one", tokSpan(attr.name));
+            return;
+        }
+        if (fn == nullptr) {
+            engine.printError("cherimoya requires '@test' to be on a function, please put it before one like 'let () -> name -> ()'", tokSpan(attr.name));
+            return;
+        }
+        if (!fn->inputs.empty() || !fn->outputs.empty()) {
+            engine.printError("cherimoya doesn't support tests with inputs and outputs yet, which it will fuzz against their contracts", tokSpan(fn->name));
+            return;
+        }
+        std::string name;
+        for (auto outer : enclosing) name += std::string(outer) + ".";
+        Test test{fn, name + std::string(fn->name.text), std::nullopt, std::nullopt};
+        bool isValid = true;
+        std::vector<std::string_view> seen;
+        for (auto& arg : attr.args) {
+            if (!arg.name) {
+                engine.printError("cherimoya requires '@test' arguments to be named, please write 'traps <- \"message\"' or 'timeout <- 5'", arg.value->span);
+                isValid = false;
+                continue;
+            }
+            std::string_view key = arg.name->text;
+            bool isTraps = key == "traps";
+            if (!isTraps && key != "timeout") {
+                engine.printError("cherimoya requires '@test' arguments to be 'traps' or 'timeout', please remove '" + std::string(key) + " <-'", tokSpan(*arg.name));
+                isValid = false;
+                continue;
+            }
+            if (std::find(seen.begin(), seen.end(), key) != seen.end()) {
+                engine.printError("cherimoya requires each '@test' argument once, please remove the second '" + std::string(key) + "'", tokSpan(*arg.name));
+                isValid = false;
+                continue;
+            }
+            seen.push_back(key);
+            if (isTraps) {
+                if (arg.value->kind == ExprKind::StringLiteral) {
+                    test.traps = stringLiteralValue(static_cast<StringLiteralExpr&>(*arg.value).literal);
+                } else {
+                    engine.printError("cherimoya requires 'traps' to be a string, please write the text its trap's message should contain, like 'traps <- \"overflowed\"'", arg.value->span);
+                    isValid = false;
+                }
+                continue;
+            }
+            // a timeout is an integer literal above 0, which a day's worth of seconds or a little more always fits
+            std::optional<uint64_t> seconds;
+            if (arg.value->kind == ExprKind::IntLiteral) {
+                auto [radix, digits] = literalDigits(static_cast<IntLiteralExpr&>(*arg.value).literal);
+                uint64_t value = 0;
+                for (char c : digits) {
+                    value = value * radix + hexValue(c);
+                    if (value > 1000000000) break;
+                }
+                if (value > 0 && value <= 1000000000) seconds = value;
+            }
+            if (seconds) {
+                test.timeout = seconds;
+            } else {
+                engine.printError("cherimoya requires 'timeout' to be a whole number of seconds above 0, please write one like 'timeout <- 5'", arg.value->span);
+                isValid = false;
+            }
+        }
+        if (isValid) tests.push_back(test);
     }
 
     // the last pass for a function: its parameters, their defaults, and their refinements, its obligations, then its body in a scope of its own
@@ -313,7 +399,9 @@ class Sema {
                 auto output = signature->returns;
                 auto name = tokSpan(fn.name);
                 targets.push_back(Target{TargetKind::Function, fn.name.text, output, nullptr, {}, false, name});
+                enclosing.push_back(fn.name.text);
                 bool completes = checkStmts(fn.body->stmts);
+                enclosing.pop_back();
                 targets.pop_back();
                 fn.body->type = output;
                 if (completes && output != context.semaVoid && !isPoisoned(output)) {
@@ -1290,14 +1378,26 @@ class Sema {
 public:
     Sema(DiagnosticEngine& e) : engine(e), scope(nullptr), owner(0), functions(0) {}
 
-    // checks a whole program as one list of statements, and when entry is set, that it has a start to run
-    void check(std::vector<std::unique_ptr<Stmt>>& program, bool entry = false) {
+    // checks a whole file as one list of statements, as the role says: a program has to have a start to run, and a file of tests can't have one, and gets a warning when it has no tests
+    void check(std::vector<std::unique_ptr<Stmt>>& program, Role checked = Role::Module) {
+        role = checked;
         Scope global(nullptr, engine, Span{0, engine.getManager().text().size()});
         scope = &global;
         checkStmts(program);
-        if (entry) checkStart(global);
+        if (role == Role::Program) checkStart(global);
+        if (role == Role::Tests) {
+            if (Symbol* entry = global.lookup("start")) {
+                engine.printError("cherimoya requires a .toya file to have no 'start', since cheri test runs its tests instead, please rename it", entry->span);
+            }
+            if (tests.empty()) engine.printWarning("cherimoya found no tests in this file, please mark one with '@test'", Span{0, 0});
+            // a nested test is found when the function around it is checked, after the top-level ones, so they're put back in the order they're written
+            std::sort(tests.begin(), tests.end(), [](const Test& a, const Test& b) { return a.fn->span.start < b.fn->span.start; });
+        }
         scope = nullptr;
     }
+
+    // every test the file holds, in the order sema found them
+    const std::vector<Test>& allTests() const { return tests; }
 
     // every symbol sema declared, in order
     const std::deque<Symbol>& allSymbols() const { return symbols; }

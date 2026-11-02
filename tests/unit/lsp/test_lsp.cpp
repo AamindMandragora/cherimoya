@@ -195,6 +195,25 @@ TEST_CASE("LSP: quick fixes", "[lsp]") {
     CHECK(at("let () ->").empty());
 }
 
+// checks that a .toya document is checked as tests, with a Run test lens on each test's name that names its document and the test, and that a .moya one gets no lenses, since a test there is an error
+TEST_CASE("LSP: test lenses", "[lsp]") {
+    std::string text = "let (n :: int) -> double -> (r :: int) { n * 2 -| }\n@test\nlet () -> doubles -> () { assert (double(2) = 4); }\n";
+    Document tests("file:///t.toya", text);
+    CHECK(tests.engine.errorCount() == 0);
+    auto lenses = codeLenses(tests);
+    REQUIRE(lenses.size() == 1);
+    auto& lens = *lenses[0].getAsObject();
+    CHECK(lens.getObject("range")->getObject("start")->getInteger("line") == 2);
+    CHECK(lens.getObject("range")->getObject("start")->getInteger("character") == 10);
+    auto& command = *lens.getObject("command");
+    CHECK(command.getString("title")->str() == "Run test");
+    CHECK(command.getString("command")->str() == "cherimoya.runTest");
+    CHECK((*command.getArray("arguments"))[1].getAsString()->str() == "doubles");
+    Document module("file:///t.moya", text);
+    CHECK(module.engine.errorCount() == 1);
+    CHECK(codeLenses(module).empty());
+}
+
 // checks every kind of inlay hint: an inferred type with the edit that writes it in, parameter names but not for an argument that's already the parameter's name, a named argument, or a pipe's argument, the defaults a call leaves out, the type of each step of a pipe spread over lines but not its last, and labels on a long function's closing brace but not a short one's
 TEST_CASE("LSP: inlay hints", "[lsp]") {
     std::string text =
@@ -361,6 +380,7 @@ TEST_CASE("LSP: a session", "[lsp]") {
     auto& capabilities = *session.sent[0].getAsObject()->getObject("result")->getObject("capabilities");
     CHECK(capabilities.getObject("textDocumentSync")->getInteger("change") == 2);
     CHECK(capabilities.getBoolean("inlayHintProvider") == true);
+    CHECK(capabilities.getObject("codeLensProvider") != nullptr);
     CHECK(capabilities.getObject("semanticTokensProvider")->getObject("legend")->getArray("tokenTypes")->size() == tokenTypes.size());
     CHECK(stringOf(session.sent[1], "method") == "textDocument/publishDiagnostics");
     CHECK(session.sent[1].getAsObject()->getObject("params")->getArray("diagnostics")->size() == 1);

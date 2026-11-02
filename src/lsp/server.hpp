@@ -53,6 +53,7 @@ class Server {
             {"renameProvider", true},
             {"codeActionProvider", Object{{"codeActionKinds", Array{"quickfix"}}}},
             {"inlayHintProvider", true},
+            {"codeLensProvider", Object{}},
             {"documentSymbolProvider", true},
             {"completionProvider", Object{}},
             {"signatureHelpProvider", Object{{"triggerCharacters", Array{"(", ","}}}},
@@ -110,7 +111,7 @@ class Server {
         static const std::vector<std::string> documentMethods = {
             "textDocument/semanticTokens/full", "textDocument/hover", "textDocument/definition", "textDocument/references",
             "textDocument/rename", "textDocument/documentSymbol", "textDocument/completion", "textDocument/signatureHelp",
-            "textDocument/codeAction", "textDocument/inlayHint",
+            "textDocument/codeAction", "textDocument/inlayHint", "textDocument/codeLens",
         };
         if (std::find(documentMethods.begin(), documentMethods.end(), method) == documentMethods.end()) {
             return replyError(id, -32601, "cheri doesn't handle '" + method + "'");
@@ -138,6 +139,7 @@ class Server {
         }
         if (method == "textDocument/documentSymbol") return reply(id, documentSymbols(document));
         if (method == "textDocument/completion") return reply(id, completion(document, offset));
+        if (method == "textDocument/codeLens") return reply(id, codeLenses(document));
         if (method == "textDocument/codeAction" || method == "textDocument/inlayHint") {
             const Object* range = params.getObject("range");
             if (!range) return reply(id, Array{});

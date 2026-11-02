@@ -68,14 +68,15 @@ public:
     Sema sema{engine};
     std::unique_ptr<LineIndex> lines;
 
-    // runs the whole front end over a version of the document
+    // runs the whole front end over a version of the document, as a file of tests when it's a .toya, and as a module otherwise, since the editor's open file isn't always the program's
     Document(std::string u, const std::string& text) : uri(std::move(u)) {
         manager.loadString(text);
         Lexer lexer(engine);
         tokens = lexer.lex();
         comments = lexer.allComments();
         program = Parser(tokens, engine).parseProgram();
-        sema.check(program);
+        bool isTests = uri.size() >= 5 && uri.compare(uri.size() - 5, 5, ".toya") == 0;
+        sema.check(program, isTests ? Role::Tests : Role::Module);
         lines = std::make_unique<LineIndex>(manager.text());
     }
 };

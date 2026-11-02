@@ -1,0 +1,13 @@
+tests/test/nested/helpers.toya
+  ok       helpers_stay_helpers
+tests/test/outcomes.toya
+  ok       adds_negatives
+  ok       overflows (trapped as expected)
+  FAIL     wrong
+           trap at line 17: assert (add(2, 2) = 5);
+  FAIL     no_trap
+           finished, but it should have trapped with 'overflowed'
+  TIMEOUT  stuck (after 1s)
+  ok       outer.inner
+
+4 passed, 3 failed

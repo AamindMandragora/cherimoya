@@ -5,18 +5,18 @@
 #include "parser.hpp"
 #include "sema.hpp"
 
-// lexes, parses, and checks one input as a whole program, owning everything the symbols and types point into
+// lexes, parses, and checks one input as a whole file, a module unless the role says otherwise, owning everything the symbols and types point into
 struct Checked {
     SourceManager sm;
     DiagnosticEngine diag{sm};
     std::vector<Token> tokens;
     std::vector<std::unique_ptr<Stmt>> program;
     Sema sema{diag};
-    explicit Checked(const std::string& input) {
+    explicit Checked(const std::string& input, Role role = Role::Module) {
         sm.loadString(input);
         tokens = Lexer(diag).lex();
         program = Parser(tokens, diag).parseProgram();
-        sema.check(program);
+        sema.check(program, role);
     }
 };
 
@@ -40,7 +40,7 @@ static size_t entryErrors(const std::string& input) {
     Parser parser(tokens, diag);
     auto program = parser.parseProgram();
     Sema sema(diag);
-    sema.check(program, true);
+    sema.check(program, Role::Program);
     return diag.errorCount();
 }
 
@@ -50,6 +50,40 @@ static std::string symbolType(const std::string& input, std::string_view name) {
     std::string type;
     for (auto& symbol : checked.sema.allSymbols()) if (symbol.name == name) type = symbol.type->toString();
     return type;
+}
+
+// checks input as a .toya file and describes every test it found, as its name, then the text its trap has to hold and its timeout when it has them
+static std::vector<std::string> testsIn(const std::string& input) {
+    Checked checked(input, Role::Tests);
+    std::vector<std::string> found;
+    for (auto& test : checked.sema.allTests()) {
+        found.push_back(test.name + (test.traps ? " traps " + *test.traps : "") + (test.timeout ? " timeout " + std::to_string(*test.timeout) : ""));
+    }
+    return found;
+}
+
+// checks input as a .toya file and returns how many errors it reported
+static size_t testErrors(const std::string& input) {
+    return Checked(input, Role::Tests).diag.errorCount();
+}
+
+// checks tests: @test marks them apart from helpers, with a trap's text and a timeout, nested ones are named after the functions around them and come back in the order they're written, and everything @test can get wrong is an error
+TEST_CASE("Sema: tests", "[sema]") {
+    CHECK(testsIn("@test let () -> a -> () { } let () -> helper -> () { }") == std::vector<std::string>{"a"});
+    CHECK(testsIn("@test(traps <- \"overflowed\", timeout <- 3) let () -> b -> () { }") == std::vector<std::string>{"b traps overflowed timeout 3"});
+    CHECK(testsIn("@test(traps <- \"\\u{3BB} \\x41\") let () -> c -> () { }") == std::vector<std::string>{"c traps \u03bb A"});
+    CHECK(testsIn("let () -> outer -> () { @test let () -> inner -> () { } } @test let () -> z -> () { }") == std::vector<std::string>{"outer.inner", "z"});
+    for (const char* bad : {"@test(5)", "@test(flaky <- 1)", "@test(traps <- 3)", "@test(timeout <- 0)", "@test(timeout <- 1.5)", "@test(timeout <- 1, timeout <- 2)"}) {
+        CHECK(testErrors(std::string(bad) + " let () -> t -> () { }") == 1);
+    }
+    CHECK(testErrors("@test let (n :: int) -> t -> () { }") == 1);
+    CHECK(testErrors("@test let () -> t -> (r :: int) { 0 -| }") == 1);
+    CHECK(testErrors("@test let x <- 1;") == 1);
+    CHECK(testErrors("@test let () -> t -> () { } let () -> start -> (code :: int) { 0 -| }") == 1);
+    // a test is only a test in a .toya file, and a .toya file without any gets a warning
+    CHECK(semaErrors("@test let () -> t -> () { }") == 1);
+    CHECK(Checked("let x <- 1;", Role::Tests).diag.warningCount() == 1);
+    CHECK(Checked("@test let () -> t -> () { }", Role::Tests).diag.warningCount() == 0);
 }
 
 // checks that bindings take their type from the annotation or the initializer, and that the two have to agree
@@ -587,7 +621,7 @@ static std::string fixed(const std::string& input, size_t which = 0, bool isEntr
     auto tokens = Lexer(diag).lex();
     auto program = Parser(tokens, diag).parseProgram();
     Sema sema(diag);
-    sema.check(program, isEntry);
+    sema.check(program, isEntry ? Role::Program : Role::Module);
     for (auto& diagnostic : diag.all()) {
         if (diagnostic.fixes.size() > which) return applyEdits(input, diagnostic.fixes[which].edits);
     }
