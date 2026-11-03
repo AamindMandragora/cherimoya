@@ -64,7 +64,7 @@ Cherimoya is early. What works today:
 - **Tests** in `.toya` files, run by `cheri test`, each in a process of its own, with tests that expect a trap and timeouts.
 - **Debug info** with `-g`: DWARF, or CodeView on Windows, for gdb and lldb, with source names, every variable and its type, and printers that gdb loads from the binary for the values C's rules would print wrong, like FP8 and `rune`.
 
-- **A language server**, `cheri lsp`, with extensions for VS Code and Emacs, and a tree-sitter grammar that follows cheri's parser exactly: diagnostics as you type, highlighting by meaning, hover with the documentation your comments give a name, go to definition, references, rename, an outline, completion ranked by the type a position expects, signature help, quick fixes for the mistakes that have one, which `cheri check --fix` applies from the command line too, and inlay hints: the types cherimoya inferred, the input each argument goes to, the defaults a call leaves out, the type of each step of a pipe spread over lines, and the name of a long function at its closing brace, along with a Run test lens above every test in a `.toya` file.
+- **A language server**, `cheri lsp`, with extensions for VS Code, Emacs, and Zed, where Zed reads programs with a tree-sitter grammar that follows cheri's parser exactly: diagnostics as you type, highlighting by meaning, hover with the documentation your comments give a name, go to definition, references, rename, an outline, completion ranked by the type a position expects, signature help, quick fixes for the mistakes that have one, which `cheri check --fix` applies from the command line too, and inlay hints: the types cherimoya inferred, the input each argument goes to, the defaults a call leaves out, the type of each step of a pipe spread over lines, and the name of a long function at its closing brace, along with a Run test lens above every test in a `.toya` file.
 
 Not yet: strings, packs of different types, ranges, comprehensions, and folds, for-each loops, arrays on the heap and pointers, records, sums, protocols, generics, closures and functions as values, operator overloading and the extra operators, modules, ownership checking, and verification with Z3.
 
@@ -184,6 +184,17 @@ Then set `cherimoya.compilerPath` to your `build/cheri`, unless `cheri` is on yo
 (add-hook 'cherimoya-mode-hook #'eglot-ensure)                      ; or #'lsp
 ```
 
+`editors/zed/` is a Zed extension that runs `cheri lsp` for every `.moya` and `.toya` file, colors, indents, and outlines them with the tree-sitter grammar in `tree-sitter/`, and puts a Run test button beside every top-level test. To install it, run `zed: install dev extension` from the command palette and pick `editors/zed`, which needs Rust installed through rustup. Zed colors the code with the grammar alone until it's told to layer the server's colors on top, which is also what marks a mutable binding apart from an immutable one, in its settings:
+
+```json
+{
+  "languages": { "Cherimoya": { "semantic_tokens": "combined" } },
+  "lsp": { "cheri": { "binary": { "path": "/path/to/cherimoya/build/cheri" } } }
+}
+```
+
+where the `lsp` part is only needed when `cheri` isn't on your path.
+
 Any other editor that speaks the Language Server Protocol can start `cheri lsp` the same way.
 
 ## Layout
@@ -199,7 +210,8 @@ Any other editor that speaks the Language Server Protocol can start `cheri lsp` 
 | `runtime/` | the C runtime every program links with, and the entry points of a program and of a file of tests |
 | `tools/cheri/` | the `cheri` driver |
 | `editors/vscode/` | the VS Code extension |
-| `tree-sitter/` | the tree-sitter grammar, which editors read programs with |
+| `editors/zed/` | the Zed extension |
+| `tree-sitter/` | the tree-sitter grammar, which Zed and other editors read programs with |
 | `tests/unit/` | Catch2 tests for the lexer, parser, sema, runtime, and language server |
 | `tests/run/` | whole programs, each checked by its exit code |
 | `tests/debug/` | programs built with debug info, checked with llvm-dwarfdump and gdb |

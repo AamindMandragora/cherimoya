@@ -1,0 +1,18 @@
+# the Zed extension for cherimoya: the language, read by the tree-sitter grammar in this repository, and cheri's language server, which the extension's Rust starts
+id = "cherimoya"
+name = "Cherimoya"
+version = "0.1.0"
+schema_version = 1
+authors = ["AamindMandragora"]
+description = "Cherimoya, colored by its tree-sitter grammar and checked by cheri's language server"
+repository = "https://github.com/AamindMandragora/cherimoya"
+
+[language_servers.cheri]
+name = "cheri"
+languages = ["Cherimoya"]
+
+# the grammar is read from this repository at a commit, which has to be bumped whenever the grammar changes, since Zed builds it from git
+[grammars.cherimoya]
+repository = "https://github.com/AamindMandragora/cherimoya"
+rev = "2af0e8d50cb97c5b759b3de7df35cb5f5226dddb"
+path = "tree-sitter"

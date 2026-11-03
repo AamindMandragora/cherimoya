@@ -1,0 +1,13 @@
+# cherimoya to Zed: .moya files hold programs and .toya files hold tests, both read by the same grammar, with # comments and four-space indentation, where an opening bracket gets its closing one typed with it, except inside a string or a comment
+name = "Cherimoya"
+grammar = "cherimoya"
+path_suffixes = ["moya", "toya"]
+line_comments = ["# "]
+tab_size = 4
+brackets = [
+    { start = "{", end = "}", close = true, newline = true },
+    { start = "[", end = "]", close = true, newline = true },
+    { start = "(", end = ")", close = true, newline = true },
+    { start = "\"", end = "\"", close = true, newline = false, not_in = ["string", "comment"] },
+    { start = "'", end = "'", close = true, newline = false, not_in = ["string", "comment"] },
+]

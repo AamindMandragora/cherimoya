@@ -1,0 +1,9 @@
+// the task a Run test button runs, cheri test with the file and the one test it names, where --exact keeps a test from also running every test whose name holds it
+[
+  {
+    "label": "cheri test $ZED_CUSTOM_test",
+    "command": "cheri",
+    "args": ["test", "$ZED_FILE", "$ZED_CUSTOM_test", "--exact"],
+    "tags": ["cherimoya-test"]
+  }
+]
