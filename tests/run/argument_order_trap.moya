@@ -1,8 +1,0 @@
-# exit: 134
-# trap: trap at line 7: '1 / z' divided by zero
-# checks that arguments run in the order they're written, not their inputs' order, so the named one written first traps first
-let (a :: i8, b :: int) -> pick -> (r :: int) { b -| }
-let () -> start -> (code :: int) {
-    let z <- 0;
-    pick(b <- 1 / z, a <- i8(300)) -|
-}

@@ -214,13 +214,16 @@ Any other editor that speaks the Language Server Protocol can start `cheri lsp` 
 | `tree-sitter/` | the tree-sitter grammar, which Zed and other editors read programs with |
 | `tests/unit/` | Catch2 tests for the lexer, parser, sema, runtime, and language server |
 | `tests/run/` | whole programs, each checked by its exit code |
+| `tests/features/` | `.toya` files testing each part of the language, run once the basics pass |
 | `tests/debug/` | programs built with debug info, checked with llvm-dwarfdump and gdb |
 | `tests/test/` | `.toya` files with every outcome a test can have, which `cheri test` has to report exactly as `expected.out` says |
 | `design/` | a design note for every commit |
 
 ## Tests
 
-The lexer, parser, sema, runtime, and language server have unit tests in C++, under `tests/unit/`, and codegen is tested through whole programs. Those live in `tests/run/`: each one is a `.moya` file whose first line is the exit code it should produce, and the test suite builds it with `cheri` at `-O0` and at `-O3`, runs it, and compares. A program that should trap names the trap on a `# trap:` line, and its stderr has to contain it.
+The tests come in three tiers. The unit tests, in C++ under `tests/unit/`, check the lexer, parser, sema, runtime, and language server. The runtime basics check what everything else leans on, as `.moya` programs in `tests/run/` and as the check of `cheri test` itself in `tests/test/`. Every feature of the language is then tested in `tests/features/`, once the first two tiers pass, since a feature test checks itself with `assert` and runs under `cheri test`, so a broken basic would make its results mean nothing, and ctest leaves the feature tests unrun when any test in the first two tiers fails.
+
+The programs in `tests/run/` check what only a whole program can: `start` and its exit code, the top level running first, and an assert and a trap seen from outside. Each one is a `.moya` file whose first line is the exit code it should produce, and the test suite builds it with `cheri` at `-O0` and at `-O3`, runs it, and compares. A program that should trap names the trap on a `# trap:` line, and its stderr has to contain it.
 
 ```
 # exit: 134
@@ -241,4 +244,13 @@ let (n :: int, lo :: int <- 0) -> clamp -> (r :: int) { ... }
 
 `cheri test` itself is tested on `tests/test/`, whose `.toya` files have every outcome a test can have, and whose run has to print exactly what `expected.out` holds.
 
-Adding a program test means adding a file.
+The feature tests are `.toya` files in `tests/features/`, one per part of the language, with one test for each behavior, which the test suite runs with `cheri test` at `-O0` and at `-O3`:
+
+```
+@test(traps <- "'a / b' divided by zero")
+let () -> divideByZero -> () {
+    _ <- div(7, 0);
+}
+```
+
+Adding a test means adding a file, or a test to one.

@@ -358,8 +358,9 @@ class Sema {
             }
             if (found == nullptr) continue;
             auto& fn = *found;
+            // a name that's an operator is overloading it, and anything else, like a keyword, the parser already reported
             if (fn.name.kind != TokenKind::Identifier) {
-                unsupported("operator overloading", tokSpan(fn.name));
+                if (fn.name.op != nullptr) unsupported("operator overloading", tokSpan(fn.name));
                 continue;
             }
             if (!fn.generics.empty()) unsupported("generic functions", fn.span);

@@ -80,7 +80,8 @@ if(CHERI_BUILD_TESTS)
 
   list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
   include(Catch)
-  catch_discover_tests(cheri_tests)
+  # the unit tests, the programs in tests/run, and cheri test's own check are the basics, which every feature test needs to pass first, since a feature test checks itself with assert and = and runs under cheri test, so a broken basic would make its results mean nothing, and ctest leaves a feature test unrun when any of them fails
+  catch_discover_tests(cheri_tests PROPERTIES FIXTURES_SETUP basics)
 
   # every program in tests/run is built with cheri and run, and its exit code checked against its first line
   file(GLOB RUN_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/run/*.moya)
@@ -91,12 +92,23 @@ if(CHERI_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_test.sh
     $<TARGET_FILE:cheri_bin> ${test}
     ${CMAKE_CURRENT_BINARY_DIR}/run)
+    set_tests_properties("Run: ${name}" PROPERTIES FIXTURES_SETUP basics)
   endforeach()
 
   # cheri test runs every .toya file under tests/test, which hold every outcome a test can have, and has to print exactly what tests/test/expected.out holds
   add_test(NAME "Test: cheri test"
            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_test.sh $<TARGET_FILE:cheri_bin> tests/test tests/test/expected.out
            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  set_tests_properties("Test: cheri test" PROPERTIES FIXTURES_SETUP basics)
+
+  # every .toya file in tests/features checks a part of the language, one test per behavior, run by cheri test once the basics pass
+  file(GLOB FEATURE_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/features/*.toya)
+  foreach(test ${FEATURE_TESTS})
+    get_filename_component(name ${test} NAME_WE)
+    add_test(NAME "Feature: ${name}"
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/feature_test.sh $<TARGET_FILE:cheri_bin> ${test})
+    set_tests_properties("Feature: ${name}" PROPERTIES FIXTURES_REQUIRED basics)
+  endforeach()
 
   # every program in tests/debug is built with debug info, which llvm-dwarfdump checks, and debugged in gdb when it's installed
   find_program(LLVM_DWARFDUMP llvm-dwarfdump HINTS ${LLVM_TOOLS_BINARY_DIR} REQUIRED)

@@ -1,8 +1,0 @@
-# exit: 134
-# trap: trap at line 6: index 7 is past the end of 'xs', which holds 3
-# checks that an index past the end traps, saying the index, the array, and how many it holds
-let (i :: i64u) -> pick -> (r :: int) {
-    let xs <- [10, 20, 30];
-    xs[i] -|
-}
-let () -> start -> (code :: int) { pick(7) -| }

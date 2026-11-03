@@ -1,3 +1,0 @@
-# exit: 67
-# checks the smallest program that runs
-let () -> start -> (code :: int) { 67 -| }

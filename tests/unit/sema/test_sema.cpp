@@ -327,6 +327,12 @@ TEST_CASE("Sema: unsupported forms", "[sema]") {
     CHECK(semaErrors("let s <- \"hi\";") == 1);
     CHECK(semaErrors("let p <- [x <- 1, y <- 2];") == 1);
     CHECK(semaErrors("let x <- 0; repeat (i) <- x { }") == 1);
+    CHECK(semaErrors("let (a :: int, b :: int) -> + -> (r :: int) { a -| }") == 1);
+    // a keyword as a function's name is the parser's one error, which names it as a keyword, while and, or, and not are plain names
+    Checked keyword("let () -> wit -> () { }");
+    REQUIRE(keyword.diag.errorCount() == 1);
+    CHECK(keyword.diag.all()[0].message == "cherimoya expected a function name (an identifier or an overloadable operator) in 'let (inputs) -> name -> (outputs) { body }', got the keyword 'wit' instead");
+    CHECK(semaErrors("let () -> and -> () { } let () -> or -> () { } let () -> not -> () { }") == 0);
 }
 
 // checks function results: every yield has to match the output, and every path has to yield

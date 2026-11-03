@@ -1,0 +1,152 @@
+# checks blocks and chunks and labeled yields out of them, matches with literal, negative, binder, and guard arms, functions nested in bodies, blocks, and conditions, bindings, assignment, and pipes
+let (n :: int) -> classify -> (r :: int) {
+    match (n) {
+        0 -> { 10 -| }
+        -1 -> { 20 -| }
+        m -> { m * 3 -| }
+    } -|
+}
+let (n :: int) -> clamp -> (r :: int) {
+    match { (n > 100) -> { 100 -| clamp } }
+    match { (n < 0) -> { 0 -| clamp } }
+    n -|
+}
+let (n :: int) -> outer -> (r :: int) {
+    let (x :: int) -> square -> (r :: int) { x * x -| }
+    let total <- {
+        let (x :: int) -> twice -> (r :: int) { x + x -| }
+        twice(n) -|
+    };
+    square(n) + total + helper(n) -|
+}
+let (x :: int) -> helper -> (r :: int) {
+    let (y :: int) -> square -> (r :: int) { y + 1 -| }
+    square(x) -|
+}
+let (n :: int) -> f -> (r :: int) {
+    assert ({ let () -> two -> (t :: int) { 2 -| } two() = 2 -| });
+    match {
+        ({ let () -> big -> (b :: int) { 100 -| } n < big() -| }) -> { n * 2 -| f }
+        _ -> { 0 -| f }
+    }
+}
+let (a :: int) -> succ -> (r :: int) { a + 1 -| }
+let (n :: int) -> double -> (r :: int) { n * 2 -| }
+
+@test
+let () -> blockValue -> () {
+    let x <- { let a <- 25; a * 2 -| };
+    assert (x = 50);
+}
+
+@test
+let () -> labeledYieldFromBlock -> () {
+    let y <- { outer { { 2 -| outer } } -| };
+    assert (y = 2);
+}
+
+@test
+let () -> chunkValue -> () {
+    let a <- chunk { 6 -| };
+    assert (a = 6);
+}
+
+@test
+let () -> labeledYieldThroughChunk -> () {
+    let b <- { scratch { chunk { 7 -| scratch } } -| };
+    assert (b = 7);
+}
+
+@test
+let () -> witCompilesAway -> () {
+    let a <- chunk { 6 -| };
+    wit {a > 0};
+    assert (a = 6);
+}
+
+@test
+let () -> matchLiteral -> () {
+    assert (classify(0) = 10);
+}
+
+@test
+let () -> matchNegativeLiteral -> () {
+    assert (classify(-1) = 20);
+}
+
+@test
+let () -> matchBinder -> () {
+    assert (classify(6) = 18);
+}
+
+@test
+let () -> guardAbove -> () {
+    assert (clamp(500) = 100);
+}
+
+@test
+let () -> guardBelow -> () {
+    assert (clamp(-5) = 0);
+}
+
+@test
+let () -> matchBool -> () {
+    let flag <- true;
+    let bonus <- match (flag) {
+        true -> { 2 -| }
+        false -> { 0 -| }
+    };
+    assert (bonus = 2);
+}
+
+@test
+let () -> nestedInBody -> () {
+    assert (helper(4) = 5);
+    assert (outer(4) = 29);
+}
+
+@test
+let () -> nestedInConditions -> () {
+    assert (f(3) = 6);
+}
+
+@test
+let () -> bindings -> () {
+    let x <- 13;
+    let y :: int <- x * 11;
+    assert (x = 13);
+    assert (y = 143);
+    assert (y + 6 = 149);
+}
+
+@test
+let () -> assignment -> () {
+    let x :: mut <- 10;
+    x <- x * 3;
+    assert (x = 30);
+}
+
+@test
+let () -> compoundAssignment -> () {
+    let x :: mut <- 30;
+    x +<- 7;
+    assert (x = 37);
+}
+
+@test
+let () -> discard -> () {
+    let x :: mut <- 37;
+    _ <- x;
+    assert (x = 37);
+}
+
+@test
+let () -> forwardPipe -> () {
+    let x <- (33 |> double);
+    assert (x = 66);
+}
+
+@test
+let () -> backwardPipe -> () {
+    assert ((succ <| 66) = 67);
+}

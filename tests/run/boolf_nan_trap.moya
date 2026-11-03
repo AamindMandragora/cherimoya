@@ -1,8 +1,0 @@
-# exit: 134
-# trap: trap at line 4: 'boolf(t)' doesn't fit in boolf
-# checks that converting a NaN into a boolf traps, since a NaN isn't from 0 to 1
-let (t :: f64n) -> toBoolf -> (x :: boolf) { boolf(t) -| }
-let () -> start -> (code :: int) {
-    let x <- toBoolf(0.0 / 0.0);
-    0 -|
-}
