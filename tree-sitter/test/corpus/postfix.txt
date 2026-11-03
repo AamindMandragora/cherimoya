@@ -1,0 +1,342 @@
+================================================================================
+calls chain onto their results
+================================================================================
+
+# calls, indexes, members, and construction all sit at level 1 and chain onto what came before them
+f();
+f(a);
+f(a, b, c);
+f(g(x));
+f(a)(b);
+-f(x);
+len(xs) - 1;
+geo.cmp(a, b);
+xs.len();
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (comment)
+  (expressionStatement
+    (callExpression
+      callee: (identifier)
+      arguments: (argumentList)))
+  (expressionStatement
+    (callExpression
+      callee: (identifier)
+      arguments: (argumentList
+        (identifier))))
+  (expressionStatement
+    (callExpression
+      callee: (identifier)
+      arguments: (argumentList
+        (identifier)
+        (identifier)
+        (identifier))))
+  (expressionStatement
+    (callExpression
+      callee: (identifier)
+      arguments: (argumentList
+        (callExpression
+          callee: (identifier)
+          arguments: (argumentList
+            (identifier))))))
+  (expressionStatement
+    (callExpression
+      callee: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (identifier)))
+      arguments: (argumentList
+        (identifier))))
+  (expressionStatement
+    (unaryExpression
+      operand: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (identifier)))))
+  (expressionStatement
+    (binaryExpression
+      left: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (identifier)))
+      right: (integer)))
+  (expressionStatement
+    (callExpression
+      callee: (memberExpression
+        object: (identifier)
+        field: (identifier))
+      arguments: (argumentList
+        (identifier)
+        (identifier))))
+  (expressionStatement
+    (callExpression
+      callee: (memberExpression
+        object: (identifier)
+        field: (identifier))
+      arguments: (argumentList))))
+
+================================================================================
+named arguments
+================================================================================
+
+f(a, c <- 2, b <- g(x));
+f(Point <- [0, 0]);
+f((Point <- [0, 0]));
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (callExpression
+      callee: (identifier)
+      arguments: (argumentList
+        (identifier)
+        (namedArgument
+          name: (identifier)
+          value: (integer))
+        (namedArgument
+          name: (identifier)
+          value: (callExpression
+            callee: (identifier)
+            arguments: (argumentList
+              (identifier)))))))
+  (expressionStatement
+    (callExpression
+      callee: (identifier)
+      arguments: (argumentList
+        (namedArgument
+          name: (identifier)
+          value: (pack
+            (integer)
+            (integer))))))
+  (expressionStatement
+    (callExpression
+      callee: (identifier)
+      arguments: (argumentList
+        (parenthesizedExpression
+          (constructExpression
+            target: (identifier)
+            value: (pack
+              (integer)
+              (integer))))))))
+
+================================================================================
+methods with no object
+================================================================================
+
+xs |> .len;
+.len <| xs;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (pipeExpression
+      left: (identifier)
+      right: (methodExpression
+        name: (identifier))))
+  (expressionStatement
+    (pipeExpression
+      left: (methodExpression
+        name: (identifier))
+      right: (identifier))))
+
+================================================================================
+indexing, slicing, and dereference
+================================================================================
+
+a[i];
+a[i][j];
+a[i + 1];
+p[];
+p[].x;
+f(x)[0];
+slot(xs, i)[];
+xs[a, ..., <b];
+xs[x : x <- ys];
+Map[K, V];
+alloc[T](n);
+(x)[0];
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (indexExpression
+      object: (identifier)
+      index: (identifier)))
+  (expressionStatement
+    (indexExpression
+      object: (indexExpression
+        object: (identifier)
+        index: (identifier))
+      index: (identifier)))
+  (expressionStatement
+    (indexExpression
+      object: (identifier)
+      index: (binaryExpression
+        left: (identifier)
+        right: (integer))))
+  (expressionStatement
+    (indexExpression
+      object: (identifier)))
+  (expressionStatement
+    (memberExpression
+      object: (indexExpression
+        object: (identifier))
+      field: (identifier)))
+  (expressionStatement
+    (indexExpression
+      object: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (identifier)))
+      index: (integer)))
+  (expressionStatement
+    (indexExpression
+      object: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (identifier)
+          (identifier)))))
+  (expressionStatement
+    (indexExpression
+      object: (identifier)
+      index: (range
+        first: (identifier)
+        last: (exclusiveBound
+          value: (identifier)))))
+  (expressionStatement
+    (indexExpression
+      object: (identifier)
+      index: (comprehension
+        head: (identifier)
+        clause: (membershipClause
+          pattern: (identifier)
+          source: (identifier)))))
+  (expressionStatement
+    (indexExpression
+      object: (identifier)
+      index: (identifier)
+      index: (identifier)))
+  (expressionStatement
+    (callExpression
+      callee: (indexExpression
+        object: (identifier)
+        index: (identifier))
+      arguments: (argumentList
+        (identifier))))
+  (expressionStatement
+    (indexExpression
+      object: (parenthesizedExpression
+        (identifier))
+      index: (integer))))
+
+================================================================================
+member access
+================================================================================
+
+a.b;
+a.b.c;
+get(l, i).name;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (memberExpression
+      object: (identifier)
+      field: (identifier)))
+  (expressionStatement
+    (memberExpression
+      object: (memberExpression
+        object: (identifier)
+        field: (identifier))
+      field: (identifier)))
+  (expressionStatement
+    (memberExpression
+      object: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (identifier)
+          (identifier)))
+      field: (identifier))))
+
+================================================================================
+construction builds from a pack
+================================================================================
+
+x <- Point <- [1.0, 2.0];
+x <- Point <- [y <- 2.0, x <- 1.0];
+x <- Some <- [x];
+x <- Vec2 <- [1.0, 2.0].x;
+x <- Opt[T] <- [x];
+x <- Vec2 <- [1.0, 2.0] <+> Vec2 <- [3.0, 4.0];
+x <- T <- [0, ..., n];
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (assignmentStatement
+    place: (identifier)
+    value: (constructExpression
+      target: (identifier)
+      value: (pack
+        (float)
+        (float))))
+  (assignmentStatement
+    place: (identifier)
+    value: (constructExpression
+      target: (identifier)
+      value: (pack
+        (namedElement
+          name: (identifier)
+          value: (float))
+        (namedElement
+          name: (identifier)
+          value: (float)))))
+  (assignmentStatement
+    place: (identifier)
+    value: (constructExpression
+      target: (identifier)
+      value: (pack
+        (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (memberExpression
+      object: (constructExpression
+        target: (identifier)
+        value: (pack
+          (float)
+          (float)))
+      field: (identifier)))
+  (assignmentStatement
+    place: (identifier)
+    value: (constructExpression
+      target: (indexExpression
+        object: (identifier)
+        index: (identifier))
+      value: (pack
+        (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (extraBinaryExpression
+      left: (constructExpression
+        target: (identifier)
+        value: (pack
+          (float)
+          (float)))
+      right: (constructExpression
+        target: (identifier)
+        value: (pack
+          (float)
+          (float)))))
+  (assignmentStatement
+    place: (identifier)
+    value: (constructExpression
+      target: (identifier)
+      value: (range
+        first: (integer)
+        last: (identifier)))))

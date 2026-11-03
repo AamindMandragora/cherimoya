@@ -1,0 +1,363 @@
+================================================================================
+plain and named blocks
+================================================================================
+
+# blocks, match, repeat, and chunk are expressions, and one at the start of a statement is a statement of its own
+{ x <- 1; }
+{ }
+outer { -| outer }
+{ x -| } -|
+let x <- { 5 -| };
+{ x <- 1; } { y <- 2; }
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (comment)
+  (expressionStatement
+    (block
+      (assignmentStatement
+        place: (identifier)
+        value: (integer))))
+  (expressionStatement
+    (block))
+  (expressionStatement
+    (block
+      name: (identifier)
+      (yieldStatement
+        target: (identifier))))
+  (yieldStatement
+    value: (block
+      (yieldStatement
+        value: (identifier))))
+  (letStatement
+    pattern: (identifier)
+    value: (block
+      (yieldStatement
+        value: (integer))))
+  (expressionStatement
+    (block
+      (assignmentStatement
+        place: (identifier)
+        value: (integer))))
+  (expressionStatement
+    (block
+      (assignmentStatement
+        place: (identifier)
+        value: (integer)))))
+
+================================================================================
+match with a subject
+================================================================================
+
+match (s) { Circle[r] -> { 3.14159 * r * r -| } Rect[w, h] -> { w * h -| } }
+match ([x, y]) { [true, true] -> { 3 -| } [false, _] -> { 0 -| } }
+match (=, x) { 0 -> { } _ -> { } }
+match name (==, f(x)) { _ -> { } }
+match name (x) { _ -> { -| name } }
+let p <- match (n % 2) { 0 -> { 1 -| } _ -> { 2 -| } };
+match (n) { [..., <0] -> { 0 -| } [0, ..., 100] -> { n -| } [>100, ...] -> { 100 -| } } -|
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (matchExpression
+      subject: (identifier)
+      arm: (matchArm
+        pattern: (variantPattern
+          name: (identifier)
+          payload: (identifier))
+        body: (block
+          (yieldStatement
+            value: (binaryExpression
+              left: (binaryExpression
+                left: (float)
+                right: (identifier))
+              right: (identifier)))))
+      arm: (matchArm
+        pattern: (variantPattern
+          name: (identifier)
+          payload: (identifier)
+          payload: (identifier))
+        body: (block
+          (yieldStatement
+            value: (binaryExpression
+              left: (identifier)
+              right: (identifier)))))))
+  (expressionStatement
+    (matchExpression
+      subject: (pack
+        (identifier)
+        (identifier))
+      arm: (matchArm
+        pattern: (packPattern
+          (boolean)
+          (boolean))
+        body: (block
+          (yieldStatement
+            value: (integer))))
+      arm: (matchArm
+        pattern: (packPattern
+          (boolean)
+          (wildcard))
+        body: (block
+          (yieldStatement
+            value: (integer))))))
+  (expressionStatement
+    (matchExpression
+      subject: (identifier)
+      arm: (matchArm
+        pattern: (integer)
+        body: (block))
+      arm: (matchArm
+        pattern: (wildcard)
+        body: (block))))
+  (expressionStatement
+    (matchExpression
+      name: (identifier)
+      subject: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (identifier)))
+      arm: (matchArm
+        pattern: (wildcard)
+        body: (block))))
+  (expressionStatement
+    (matchExpression
+      name: (identifier)
+      subject: (identifier)
+      arm: (matchArm
+        pattern: (wildcard)
+        body: (block
+          (yieldStatement
+            target: (identifier))))))
+  (letStatement
+    pattern: (identifier)
+    value: (matchExpression
+      subject: (binaryExpression
+        left: (identifier)
+        right: (integer))
+      arm: (matchArm
+        pattern: (integer)
+        body: (block
+          (yieldStatement
+            value: (integer))))
+      arm: (matchArm
+        pattern: (wildcard)
+        body: (block
+          (yieldStatement
+            value: (integer))))))
+  (yieldStatement
+    value: (matchExpression
+      subject: (identifier)
+      arm: (matchArm
+        pattern: (rangePattern
+          last: (exclusiveBound
+            value: (integer)))
+        body: (block
+          (yieldStatement
+            value: (integer))))
+      arm: (matchArm
+        pattern: (rangePattern
+          first: (integer)
+          last: (integer))
+        body: (block
+          (yieldStatement
+            value: (identifier))))
+      arm: (matchArm
+        pattern: (rangePattern
+          first: (exclusiveBound
+            value: (integer)))
+        body: (block
+          (yieldStatement
+            value: (integer)))))))
+
+================================================================================
+subjectless match
+================================================================================
+
+match { (xs[i] < 0) -> { -| i } }
+match { (a < b && ready) -> { 1 -| } _ -> { 2 -| } }
+match name { _ -> { } }
+match { }
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (matchExpression
+      arm: (matchArm
+        pattern: (guardPattern
+          condition: (chainExpression
+            operand: (indexExpression
+              object: (identifier)
+              index: (identifier))
+            operand: (integer)))
+        body: (block
+          (yieldStatement
+            target: (identifier))))))
+  (expressionStatement
+    (matchExpression
+      arm: (matchArm
+        pattern: (guardPattern
+          condition: (binaryExpression
+            left: (chainExpression
+              operand: (identifier)
+              operand: (identifier))
+            right: (identifier)))
+        body: (block
+          (yieldStatement
+            value: (integer))))
+      arm: (matchArm
+        pattern: (wildcard)
+        body: (block
+          (yieldStatement
+            value: (integer))))))
+  (expressionStatement
+    (matchExpression
+      name: (identifier)
+      arm: (matchArm
+        pattern: (wildcard)
+        body: (block))))
+  (expressionStatement
+    (matchExpression)))
+
+================================================================================
+every form of repeat
+================================================================================
+
+repeat (x) <- xs { f(x); }
+repeat (n > 0) { n -<- 1; }
+repeat { }
+repeat (step) <- [0, ...] { }
+repeat outer (i) <- [0, ..., <n] { -| outer }
+repeat (i) <- xs wit {i <= n} { }
+repeat (ok) wit {inv} { }
+repeat wit {inv} { }
+repeat name { }
+repeat (i) <- [0, 2, ..., <len(xs)] { xs[i] *<- 2; }
+let v <- repeat { 1 -| };
+repeat { x -| repeat } -|
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (repeatExpression
+      pattern: (identifier)
+      source: (identifier)
+      body: (block
+        (expressionStatement
+          (callExpression
+            callee: (identifier)
+            arguments: (argumentList
+              (identifier)))))))
+  (expressionStatement
+    (repeatExpression
+      condition: (chainExpression
+        operand: (identifier)
+        operand: (integer))
+      body: (block
+        (assignmentStatement
+          place: (identifier)
+          value: (integer)))))
+  (expressionStatement
+    (repeatExpression
+      body: (block)))
+  (expressionStatement
+    (repeatExpression
+      pattern: (identifier)
+      source: (range
+        first: (integer))
+      body: (block)))
+  (expressionStatement
+    (repeatExpression
+      name: (identifier)
+      pattern: (identifier)
+      source: (range
+        first: (integer)
+        last: (exclusiveBound
+          value: (identifier)))
+      body: (block
+        (yieldStatement
+          target: (identifier)))))
+  (expressionStatement
+    (repeatExpression
+      pattern: (identifier)
+      source: (identifier)
+      invariant: (chainExpression
+        operand: (identifier)
+        operand: (identifier))
+      body: (block)))
+  (expressionStatement
+    (repeatExpression
+      condition: (identifier)
+      invariant: (identifier)
+      body: (block)))
+  (expressionStatement
+    (repeatExpression
+      invariant: (identifier)
+      body: (block)))
+  (expressionStatement
+    (repeatExpression
+      name: (identifier)
+      body: (block)))
+  (expressionStatement
+    (repeatExpression
+      pattern: (identifier)
+      source: (range
+        first: (integer)
+        second: (integer)
+        last: (exclusiveBound
+          value: (callExpression
+            callee: (identifier)
+            arguments: (argumentList
+              (identifier)))))
+      body: (block
+        (assignmentStatement
+          place: (indexExpression
+            object: (identifier)
+            index: (identifier))
+          value: (integer)))))
+  (letStatement
+    pattern: (identifier)
+    value: (repeatExpression
+      body: (block
+        (yieldStatement
+          value: (integer)))))
+  (yieldStatement
+    value: (repeatExpression
+      body: (block
+        (yieldStatement
+          value: (identifier))))))
+
+================================================================================
+chunk with and without a name
+================================================================================
+
+chunk { let scratch :: mut <- list_new[i64u](); }
+chunk name { -| name }
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (chunkExpression
+      body: (block
+        (letStatement
+          pattern: (identifier)
+          type: (qualifiedType)
+          value: (callExpression
+            callee: (indexExpression
+              object: (identifier)
+              index: (typeExpression
+                type: (namedType
+                  name: (builtinType))))
+            arguments: (argumentList))))))
+  (expressionStatement
+    (chunkExpression
+      name: (identifier)
+      body: (block
+        (yieldStatement
+          target: (identifier))))))

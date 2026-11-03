@@ -1,0 +1,16 @@
+{
+  "grammars": [
+    {
+      "name": "cherimoya",
+      "camelcase": "Cherimoya",
+      "scope": "source.cherimoya",
+      "path": ".",
+      "file-types": ["moya", "toya"]
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Cherimoya grammar for tree-sitter, read the way cheri reads it"
+  }
+}

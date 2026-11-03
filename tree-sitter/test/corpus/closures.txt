@@ -1,0 +1,241 @@
+================================================================================
+inferred and annotated closures
+================================================================================
+
+# a closure is (params) -> (outputs) { body }, where the outputs are optional and the captures come in brackets in front
+x <- (acc, x) -> { acc + x * rate -| };
+x <- (a :: int, b :: int) -> (r :: int) { a * b -| };
+x <- () -> { };
+x <- (x) -> () { };
+x <- (x :: int {x >= 0}) -> { };
+x <- (a, b <- 1,) -> { };
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (comment)
+  (assignmentStatement
+    place: (identifier)
+    value: (closure
+      parameters: (parameterList
+        (parameter
+          name: (identifier))
+        (parameter
+          name: (identifier)))
+      body: (block
+        (yieldStatement
+          value: (binaryExpression
+            left: (identifier)
+            right: (binaryExpression
+              left: (identifier)
+              right: (identifier)))))))
+  (assignmentStatement
+    place: (identifier)
+    value: (closure
+      parameters: (parameterList
+        (parameter
+          name: (identifier)
+          type: (namedType
+            name: (builtinType)))
+        (parameter
+          name: (identifier)
+          type: (namedType
+            name: (builtinType))))
+      outputs: (parameterList
+        (parameter
+          name: (identifier)
+          type: (namedType
+            name: (builtinType))))
+      body: (block
+        (yieldStatement
+          value: (binaryExpression
+            left: (identifier)
+            right: (identifier))))))
+  (assignmentStatement
+    place: (identifier)
+    value: (closure
+      parameters: (parameterList)
+      body: (block)))
+  (assignmentStatement
+    place: (identifier)
+    value: (closure
+      parameters: (parameterList
+        (parameter
+          name: (identifier)))
+      outputs: (parameterList)
+      body: (block)))
+  (assignmentStatement
+    place: (identifier)
+    value: (closure
+      parameters: (parameterList
+        (parameter
+          name: (identifier)
+          type: (refinedType
+            type: (namedType
+              name: (builtinType))
+            predicate: (chainExpression
+              operand: (identifier)
+              operand: (integer)))))
+      body: (block)))
+  (assignmentStatement
+    place: (identifier)
+    value: (closure
+      parameters: (parameterList
+        (parameter
+          name: (identifier))
+        (parameter
+          name: (identifier)
+          default: (integer)))
+      body: (block))))
+
+================================================================================
+capture closures
+================================================================================
+
+x <- [factor] (x) -> { x * factor -| };
+x <- [] () -> { };
+x <- [a, b] (x) -> { };
+[c] (x) -> { };
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (assignmentStatement
+    place: (identifier)
+    value: (closure
+      captures: (captureList
+        (identifier))
+      parameters: (parameterList
+        (parameter
+          name: (identifier)))
+      body: (block
+        (yieldStatement
+          value: (binaryExpression
+            left: (identifier)
+            right: (identifier))))))
+  (assignmentStatement
+    place: (identifier)
+    value: (closure
+      captures: (captureList)
+      parameters: (parameterList)
+      body: (block)))
+  (assignmentStatement
+    place: (identifier)
+    value: (closure
+      captures: (captureList
+        (identifier)
+        (identifier))
+      parameters: (parameterList
+        (parameter
+          name: (identifier)))
+      body: (block)))
+  (expressionStatement
+    (closure
+      captures: (captureList
+        (identifier))
+      parameters: (parameterList
+        (parameter
+          name: (identifier)))
+      body: (block))))
+
+================================================================================
+closures inside other expressions
+================================================================================
+
+x <- [(x :: int) -> (r :: int) { x + 1 -| }, g];
+x <- ((acc, x) -> { acc + x * rate -| }, 0)[[1, 2, 3]];
+x <- (x) -> { } (1);
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (assignmentStatement
+    place: (identifier)
+    value: (pack
+      (closure
+        parameters: (parameterList
+          (parameter
+            name: (identifier)
+            type: (namedType
+              name: (builtinType))))
+        outputs: (parameterList
+          (parameter
+            name: (identifier)
+            type: (namedType
+              name: (builtinType))))
+        body: (block
+          (yieldStatement
+            value: (binaryExpression
+              left: (identifier)
+              right: (integer)))))
+      (identifier)))
+  (assignmentStatement
+    place: (identifier)
+    value: (foldExpression
+      reducer: (closure
+        parameters: (parameterList
+          (parameter
+            name: (identifier))
+          (parameter
+            name: (identifier)))
+        body: (block
+          (yieldStatement
+            value: (binaryExpression
+              left: (identifier)
+              right: (binaryExpression
+                left: (identifier)
+                right: (identifier))))))
+      seed: (integer)
+      sequence: (pack
+        (pack
+          (integer)
+          (integer)
+          (integer)))))
+  (assignmentStatement
+    place: (identifier)
+    value: (callExpression
+      callee: (closure
+        parameters: (parameterList
+          (parameter
+            name: (identifier)))
+        body: (block))
+      arguments: (argumentList
+        (integer)))))
+
+================================================================================
+annotations and groupings
+================================================================================
+
+(p :: Ord);
+cmp((p :: Ord), q);
+(a + b) * c;
+((a));
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (annotationExpression
+      value: (identifier)
+      type: (namedType
+        name: (identifier))))
+  (expressionStatement
+    (callExpression
+      callee: (identifier)
+      arguments: (argumentList
+        (annotationExpression
+          value: (identifier)
+          type: (namedType
+            name: (identifier)))
+        (identifier))))
+  (expressionStatement
+    (binaryExpression
+      left: (parenthesizedExpression
+        (binaryExpression
+          left: (identifier)
+          right: (identifier)))
+      right: (identifier)))
+  (expressionStatement
+    (parenthesizedExpression
+      (parenthesizedExpression
+        (identifier)))))

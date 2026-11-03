@@ -1,0 +1,163 @@
+================================================================================
+attributes on statements and files
+================================================================================
+
+# an attribute applies to the statement after it, or to the whole file when ; follows it
+@tier(strict);
+@tier(strict) { x <- 1; }
+@extern("c") let (fd :: i32) -> close -> (r :: i32);
+@global_allocator let heap <- Bump();
+@a @b let x <- 1;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (comment)
+  (attribute
+    name: (identifier)
+    arguments: (argumentList
+      (identifier)))
+  (attribute
+    name: (identifier)
+    arguments: (argumentList
+      (identifier))
+    target: (expressionStatement
+      (block
+        (assignmentStatement
+          place: (identifier)
+          value: (integer)))))
+  (attribute
+    name: (identifier)
+    arguments: (argumentList
+      (string))
+    target: (functionDeclaration
+      parameters: (parameterList
+        (parameter
+          name: (identifier)
+          type: (namedType
+            name: (builtinType))))
+      name: (identifier)
+      outputs: (parameterList
+        (parameter
+          name: (identifier)
+          type: (namedType
+            name: (builtinType))))))
+  (attribute
+    name: (identifier)
+    target: (letStatement
+      pattern: (identifier)
+      value: (callExpression
+        callee: (identifier)
+        arguments: (argumentList))))
+  (attribute
+    name: (identifier)
+    target: (attribute
+      name: (identifier)
+      target: (letStatement
+        pattern: (identifier)
+        value: (integer)))))
+
+================================================================================
+test attributes
+================================================================================
+
+@test
+let () -> adds -> () {
+    assert (add(-1, -2) = -3);
+}
+
+@test(traps <- "x", timeout <- 2)
+let () -> overflows -> () {
+    _ <- square(4294967296);
+}
+
+let () -> outer -> () {
+    @test
+    let () -> inner -> () { assert (square(3) = 9); }
+}
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (attribute
+    name: (identifier)
+    target: (functionDeclaration
+      parameters: (parameterList)
+      name: (identifier)
+      outputs: (parameterList)
+      body: (block
+        (assertStatement
+          condition: (binaryExpression
+            left: (callExpression
+              callee: (identifier)
+              arguments: (argumentList
+                (unaryExpression
+                  operand: (integer))
+                (unaryExpression
+                  operand: (integer))))
+            right: (unaryExpression
+              operand: (integer)))))))
+  (attribute
+    name: (identifier)
+    arguments: (argumentList
+      (namedArgument
+        name: (identifier)
+        value: (string))
+      (namedArgument
+        name: (identifier)
+        value: (integer)))
+    target: (functionDeclaration
+      parameters: (parameterList)
+      name: (identifier)
+      outputs: (parameterList)
+      body: (block
+        (assignmentStatement
+          place: (wildcard)
+          value: (callExpression
+            callee: (identifier)
+            arguments: (argumentList
+              (integer)))))))
+  (functionDeclaration
+    parameters: (parameterList)
+    name: (identifier)
+    outputs: (parameterList)
+    body: (block
+      (attribute
+        name: (identifier)
+        target: (functionDeclaration
+          parameters: (parameterList)
+          name: (identifier)
+          outputs: (parameterList)
+          body: (block
+            (assertStatement
+              condition: (binaryExpression
+                left: (callExpression
+                  callee: (identifier)
+                  arguments: (argumentList
+                    (integer)))
+                right: (integer)))))))))
+
+================================================================================
+comments between an attribute and what follows it
+================================================================================
+
+@a # its arguments
+(x);
+@b
+# its statement
+let x <- 1;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (attribute
+    name: (identifier)
+    (comment)
+    arguments: (argumentList
+      (identifier)))
+  (attribute
+    name: (identifier)
+    (comment)
+    target: (letStatement
+      pattern: (identifier)
+      value: (integer))))

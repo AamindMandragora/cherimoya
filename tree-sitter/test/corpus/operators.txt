@@ -1,0 +1,537 @@
+================================================================================
+binding orders follow the levels in the operator table
+================================================================================
+
+# every operator reads its level and associativity from the table cheri builds in src/lexer/operators.hpp
+a + b * c;
+a * b + c;
+a + b = c;
+a = b && c != d;
+a == b && c !== d;
+a && b || c;
+a && b ^^ c;
+a << b + c;
+a | b ^ c & d;
+a * b ** c;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (comment)
+  (expressionStatement
+    (binaryExpression
+      left: (identifier)
+      right: (binaryExpression
+        left: (identifier)
+        right: (identifier))))
+  (expressionStatement
+    (binaryExpression
+      left: (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (binaryExpression
+      left: (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (binaryExpression
+      left: (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (binaryExpression
+        left: (identifier)
+        right: (identifier))))
+  (expressionStatement
+    (binaryExpression
+      left: (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (binaryExpression
+        left: (identifier)
+        right: (identifier))))
+  (expressionStatement
+    (binaryExpression
+      left: (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (binaryExpression
+      left: (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (binaryExpression
+      left: (identifier)
+      right: (binaryExpression
+        left: (identifier)
+        right: (identifier))))
+  (expressionStatement
+    (binaryExpression
+      left: (identifier)
+      right: (binaryExpression
+        left: (identifier)
+        right: (binaryExpression
+          left: (identifier)
+          right: (identifier)))))
+  (expressionStatement
+    (binaryExpression
+      left: (identifier)
+      right: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier)))))
+
+================================================================================
+left-associative operators group to the left
+================================================================================
+
+a - b - c;
+a * b / c;
+a >>= b >>= c;
+xs ++ ys ++ zs;
+a <+> b <+> c;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (binaryExpression
+      left: (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (binaryExpression
+      left: (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier))))
+
+================================================================================
+right-associative operators group to the right
+================================================================================
+
+a ** b ** c;
+a ** b *** c;
+a =<< b =<< c;
+f $ g $ x;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier))))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier))))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier))))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier)))))
+
+================================================================================
+built-ins and extra operators share a level
+================================================================================
+
+a * b <*> c;
+a <+> b <*> c;
+a <*> b <+> c;
+a ++ b == c;
+a |&| b ^ c;
+a &&& b ||| c;
+a <<< 2 + 1;
+a // b;
+a -- b;
+m >>= f >=> g;
+p <$> q <|> r;
+a <~ b;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (extraBinaryExpression
+      left: (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier))))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (binaryExpression
+      left: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (binaryExpression
+      left: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (binaryExpression
+        left: (integer)
+        right: (integer))))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (identifier)))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (identifier)))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier))))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier))))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (identifier))))
+
+================================================================================
+comparisons chain into one node
+================================================================================
+
+a < b;
+a < b <= c;
+0 <= x < n + 1;
+a < b = c > d;
+(a <=> b) <= 0;
+(a <=> b) < 0 && c |+| d = e;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (chainExpression
+      operand: (identifier)
+      operand: (identifier)))
+  (expressionStatement
+    (chainExpression
+      operand: (identifier)
+      operand: (identifier)
+      operand: (identifier)))
+  (expressionStatement
+    (chainExpression
+      operand: (integer)
+      operand: (identifier)
+      operand: (binaryExpression
+        left: (identifier)
+        right: (integer))))
+  (expressionStatement
+    (binaryExpression
+      left: (chainExpression
+        operand: (identifier)
+        operand: (identifier))
+      right: (chainExpression
+        operand: (identifier)
+        operand: (identifier))))
+  (expressionStatement
+    (chainExpression
+      operand: (parenthesizedExpression
+        (extraBinaryExpression
+          left: (identifier)
+          right: (identifier)))
+      operand: (integer)))
+  (expressionStatement
+    (binaryExpression
+      left: (chainExpression
+        operand: (parenthesizedExpression
+          (extraBinaryExpression
+            left: (identifier)
+            right: (identifier)))
+        operand: (integer))
+      right: (binaryExpression
+        left: (extraBinaryExpression
+          left: (identifier)
+          right: (identifier))
+        right: (identifier)))))
+
+================================================================================
+non-associative operators take one of each side
+================================================================================
+
+a <=> b;
+a = b;
+a <<> b;
+a |=| b;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (identifier)))
+  (expressionStatement
+    (binaryExpression
+      left: (identifier)
+      right: (identifier)))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (identifier)))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (identifier))))
+
+================================================================================
+prefix operators and old
+================================================================================
+
+-a;
+!a;
+~a;
+! !a;
+-!a;
+-a.b;
+!a = b;
+-a ** b;
+a ** -b;
+old g;
+old p.x;
+old a + b;
+a < ~b;
+node_count(g) = node_count(old g);
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (unaryExpression
+      operand: (identifier)))
+  (expressionStatement
+    (unaryExpression
+      operand: (identifier)))
+  (expressionStatement
+    (unaryExpression
+      operand: (identifier)))
+  (expressionStatement
+    (unaryExpression
+      operand: (unaryExpression
+        operand: (identifier))))
+  (expressionStatement
+    (unaryExpression
+      operand: (unaryExpression
+        operand: (identifier))))
+  (expressionStatement
+    (unaryExpression
+      operand: (memberExpression
+        object: (identifier)
+        field: (identifier))))
+  (expressionStatement
+    (binaryExpression
+      left: (unaryExpression
+        operand: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (unaryExpression
+      operand: (extraBinaryExpression
+        left: (identifier)
+        right: (identifier))))
+  (expressionStatement
+    (extraBinaryExpression
+      left: (identifier)
+      right: (unaryExpression
+        operand: (identifier))))
+  (expressionStatement
+    (oldExpression
+      operand: (identifier)))
+  (expressionStatement
+    (oldExpression
+      operand: (memberExpression
+        object: (identifier)
+        field: (identifier))))
+  (expressionStatement
+    (binaryExpression
+      left: (oldExpression
+        operand: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (chainExpression
+      operand: (identifier)
+      operand: (unaryExpression
+        operand: (identifier))))
+  (expressionStatement
+    (binaryExpression
+      left: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (identifier)))
+      right: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (oldExpression
+            operand: (identifier)))))))
+
+================================================================================
+forward pipes group to the left
+================================================================================
+
+x |> f;
+xs |> f |> g;
+3 |> inc |> double;
+a || b |> f;
+len(xs) - 1 |> f;
+x |> clamp(hi <- 10);
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (pipeExpression
+      left: (identifier)
+      right: (identifier)))
+  (expressionStatement
+    (pipeExpression
+      left: (pipeExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (pipeExpression
+      left: (pipeExpression
+        left: (integer)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (pipeExpression
+      left: (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      right: (identifier)))
+  (expressionStatement
+    (pipeExpression
+      left: (binaryExpression
+        left: (callExpression
+          callee: (identifier)
+          arguments: (argumentList
+            (identifier)))
+        right: (integer))
+      right: (identifier)))
+  (expressionStatement
+    (pipeExpression
+      left: (identifier)
+      right: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (namedArgument
+            name: (identifier)
+            value: (integer)))))))
+
+================================================================================
+backward pipes group to the right
+================================================================================
+
+f <| x;
+double <| inc <| 2 + 3;
+print <| format(a + b);
+f <| (x |> g);
+h(x |> g) <| y;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (pipeExpression
+      left: (identifier)
+      right: (identifier)))
+  (expressionStatement
+    (pipeExpression
+      left: (identifier)
+      right: (pipeExpression
+        left: (identifier)
+        right: (binaryExpression
+          left: (integer)
+          right: (integer)))))
+  (expressionStatement
+    (pipeExpression
+      left: (identifier)
+      right: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (binaryExpression
+            left: (identifier)
+            right: (identifier))))))
+  (expressionStatement
+    (pipeExpression
+      left: (identifier)
+      right: (parenthesizedExpression
+        (pipeExpression
+          left: (identifier)
+          right: (identifier)))))
+  (expressionStatement
+    (pipeExpression
+      left: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (pipeExpression
+            left: (identifier)
+            right: (identifier))))
+      right: (identifier))))

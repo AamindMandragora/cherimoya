@@ -109,4 +109,9 @@ if(CHERI_BUILD_TESTS)
     $<TARGET_FILE:cheri_bin> ${test}
     ${CMAKE_CURRENT_BINARY_DIR}/debug ${LLVM_DWARFDUMP})
   endforeach()
+
+  # the tree-sitter grammar in tree-sitter has to parse every program under tests without an error and pass its corpus tests, which is skipped when its node_modules isn't installed
+  add_test(NAME "Grammar: tree-sitter"
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/grammar_test.sh
+           WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 endif()

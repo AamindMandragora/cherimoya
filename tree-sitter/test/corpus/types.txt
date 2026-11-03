@@ -1,0 +1,733 @@
+================================================================================
+named types
+================================================================================
+
+# types: modes and qualifiers in front, then a handle, a tuple or record, or a named type, then an optional refinement
+let a :: int <- _;
+let a :: Node <- _;
+let a :: std.mem.Allocator <- _;
+let a :: List[int] <- _;
+let a :: Map[K, V] <- _;
+let a :: Option[unscoped ptr Expr] <- _;
+let a :: Fn[F, [S, T], S] <- _;
+let a :: i32.max <- _;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (comment)
+  (letStatement
+    pattern: (identifier)
+    type: (namedType
+      name: (builtinType))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (namedType
+      name: (identifier))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (namedType
+      module: (identifier)
+      module: (identifier)
+      name: (identifier))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (namedType
+      name: (identifier)
+      arguments: (typeArguments
+        (namedType
+          name: (builtinType))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (namedType
+      name: (identifier)
+      arguments: (typeArguments
+        (namedType
+          name: (identifier))
+        (namedType
+          name: (identifier))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (namedType
+      name: (identifier)
+      arguments: (typeArguments
+        (modeType
+          type: (handleType
+            type: (namedType
+              name: (identifier))))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (namedType
+      name: (identifier)
+      arguments: (typeArguments
+        (namedType
+          name: (identifier))
+        (tupleType
+          (namedType
+            name: (identifier))
+          (namedType
+            name: (identifier)))
+        (namedType
+          name: (identifier))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (namedType
+      module: (builtinType)
+      name: (identifier))
+    value: (wildcard)))
+
+================================================================================
+every built-in type spelling
+================================================================================
+
+let a :: [i8, i16, i32, i64, i128, i8u, i16u, i32u, i64u, i128u, i8w, i16w, i32w, i64w, i128w, i8uw, i16uw, i32uw, i64uw, i128uw] <- _;
+let a :: [f8, f8e4m3, f8e5m2, f16, f16e8m7, f32, f64, f128, f8e4m3n, f8e5m2n, f16n, f16e8m7n, f32n, f64n, f128n] <- _;
+let a :: [bool, int, float, char, rune, boolf] <- _;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (letStatement
+    pattern: (identifier)
+    type: (tupleType
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (tupleType
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (tupleType
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType)))
+    value: (wildcard)))
+
+================================================================================
+handles
+================================================================================
+
+let a :: ptr T <- _;
+let a :: arr T <- _;
+let a :: arr[16] T <- _;
+let a :: arr[A] T <- _;
+let a :: arr[Chunk] mut T <- _;
+let a :: arr[N * 2] T <- _;
+let a :: arr[A] [int, int] <- _;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (letStatement
+    pattern: (identifier)
+    type: (handleType
+      type: (namedType
+        name: (identifier)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (handleType
+      type: (namedType
+        name: (identifier)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (handleType
+      argument: (integer)
+      type: (namedType
+        name: (identifier)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (handleType
+      argument: (namedType
+        name: (identifier))
+      type: (namedType
+        name: (identifier)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (handleType
+      argument: (namedType
+        name: (identifier))
+      type: (qualifiedType
+        type: (namedType
+          name: (identifier))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (handleType
+      argument: (binaryExpression
+        left: (identifier)
+        right: (integer))
+      type: (namedType
+        name: (identifier)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (handleType
+      argument: (namedType
+        name: (identifier))
+      type: (tupleType
+        (namedType
+          name: (builtinType))
+        (namedType
+          name: (builtinType))))
+    value: (wildcard)))
+
+================================================================================
+tuples and records
+================================================================================
+
+let a :: [int, f64] <- _;
+let a :: [] <- _;
+let a :: [int,] <- _;
+let a :: [x :: f64, y :: f64] <- _;
+let a :: [data :: arr[A] mut T, count :: i64u] <- _;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (letStatement
+    pattern: (identifier)
+    type: (tupleType
+      (namedType
+        name: (builtinType))
+      (namedType
+        name: (builtinType)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (tupleType)
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (tupleType
+      (namedType
+        name: (builtinType)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (recordType
+      (recordField
+        name: (identifier)
+        type: (namedType
+          name: (builtinType)))
+      (recordField
+        name: (identifier)
+        type: (namedType
+          name: (builtinType))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (recordType
+      (recordField
+        name: (identifier)
+        type: (handleType
+          argument: (namedType
+            name: (identifier))
+          type: (qualifiedType
+            type: (namedType
+              name: (identifier)))))
+      (recordField
+        name: (identifier)
+        type: (namedType
+          name: (builtinType))))
+    value: (wildcard)))
+
+================================================================================
+where mut sits decides what it applies to, and the modes
+================================================================================
+
+let a :: mut int <- _;
+let a :: mut arr T <- _;
+let a :: arr mut T <- _;
+let a :: mut arr mut T <- _;
+let a :: mut ptr T <- _;
+let a :: peek arr char <- _;
+let a :: peek mut S <- _;
+let a :: peek arr mut i64u <- _;
+let a :: unscoped ptr Expr <- _;
+let a :: unscoped <- _;
+let a :: mut <- _;
+let a :: wit <- _;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (letStatement
+    pattern: (identifier)
+    type: (qualifiedType
+      type: (namedType
+        name: (builtinType)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (qualifiedType
+      type: (handleType
+        type: (namedType
+          name: (identifier))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (handleType
+      type: (qualifiedType
+        type: (namedType
+          name: (identifier))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (qualifiedType
+      type: (handleType
+        type: (qualifiedType
+          type: (namedType
+            name: (identifier)))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (qualifiedType
+      type: (handleType
+        type: (namedType
+          name: (identifier))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (modeType
+      type: (handleType
+        type: (namedType
+          name: (builtinType))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (modeType
+      type: (qualifiedType
+        type: (namedType
+          name: (identifier))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (modeType
+      type: (handleType
+        type: (qualifiedType
+          type: (namedType
+            name: (builtinType)))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (modeType
+      type: (handleType
+        type: (namedType
+          name: (identifier))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (modeType)
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (qualifiedType)
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (modeType)
+    value: (wildcard)))
+
+================================================================================
+refinements with and without a binder
+================================================================================
+
+let a :: int {p : 0 <= p <= 100} <- _;
+let a :: int {a >= 0} <- _;
+let a :: int {0 <= r < b && a = q * b + r} <- _;
+let a :: [x :: f64, y :: f64] {p : p.x >= 0.0} <- _;
+let a :: Graph {node_count(g) = node_count(old g)} <- _;
+let a :: peek T {p} <- _;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (letStatement
+    pattern: (identifier)
+    type: (refinedType
+      type: (namedType
+        name: (builtinType))
+      binder: (identifier)
+      predicate: (chainExpression
+        operand: (integer)
+        operand: (identifier)
+        operand: (integer)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (refinedType
+      type: (namedType
+        name: (builtinType))
+      predicate: (chainExpression
+        operand: (identifier)
+        operand: (integer)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (refinedType
+      type: (namedType
+        name: (builtinType))
+      predicate: (binaryExpression
+        left: (chainExpression
+          operand: (integer)
+          operand: (identifier)
+          operand: (identifier))
+        right: (binaryExpression
+          left: (identifier)
+          right: (binaryExpression
+            left: (binaryExpression
+              left: (identifier)
+              right: (identifier))
+            right: (identifier)))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (refinedType
+      type: (recordType
+        (recordField
+          name: (identifier)
+          type: (namedType
+            name: (builtinType)))
+        (recordField
+          name: (identifier)
+          type: (namedType
+            name: (builtinType))))
+      binder: (identifier)
+      predicate: (chainExpression
+        operand: (memberExpression
+          object: (identifier)
+          field: (identifier))
+        operand: (float)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (refinedType
+      type: (namedType
+        name: (identifier))
+      predicate: (binaryExpression
+        left: (callExpression
+          callee: (identifier)
+          arguments: (argumentList
+            (identifier)))
+        right: (callExpression
+          callee: (identifier)
+          arguments: (argumentList
+            (oldExpression
+              operand: (identifier))))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (refinedType
+      type: (modeType
+        type: (namedType
+          name: (identifier)))
+      predicate: (identifier))
+    value: (wildcard)))
+
+================================================================================
+generic arguments are types when they start like one
+================================================================================
+
+let a :: Map[int {x > 0}, K.y {z}, K[x] {y}] <- _;
+let a :: arr[n] T <- _;
+let a :: arr[n + 1] T <- _;
+let a :: arr[f(x)] T <- _;
+let a :: arr[-1] T <- _;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (letStatement
+    pattern: (identifier)
+    type: (namedType
+      name: (identifier)
+      arguments: (typeArguments
+        (refinedType
+          type: (namedType
+            name: (builtinType))
+          predicate: (chainExpression
+            operand: (identifier)
+            operand: (integer)))
+        (refinedType
+          type: (namedType
+            module: (identifier)
+            name: (identifier))
+          predicate: (identifier))
+        (refinedType
+          type: (namedType
+            name: (identifier)
+            arguments: (typeArguments
+              (namedType
+                name: (identifier))))
+          predicate: (identifier))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (handleType
+      argument: (namedType
+        name: (identifier))
+      type: (namedType
+        name: (identifier)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (handleType
+      argument: (binaryExpression
+        left: (identifier)
+        right: (integer))
+      type: (namedType
+        name: (identifier)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (handleType
+      argument: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (identifier)))
+      type: (namedType
+        name: (identifier)))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (handleType
+      argument: (unaryExpression
+        operand: (integer))
+      type: (namedType
+        name: (identifier)))
+    value: (wildcard)))
+
+================================================================================
+types in value position
+================================================================================
+
+x <- i32(x);
+x <- f64(x);
+x <- i64u(id) + 1;
+x <- arr mut T(n);
+x <- arr mut T(n, fill);
+x <- arr mut T(n, _);
+x <- arr T(seq);
+x <- arr i64u([x : x <- xs]);
+x <- ptr T(value);
+x <- size[i32]();
+x <- List[peek T];
+x <- NodeId(3);
+x <- i32.max;
+x <- mut;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (assignmentStatement
+    place: (identifier)
+    value: (callExpression
+      callee: (typeExpression
+        type: (namedType
+          name: (builtinType)))
+      arguments: (argumentList
+        (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (callExpression
+      callee: (typeExpression
+        type: (namedType
+          name: (builtinType)))
+      arguments: (argumentList
+        (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (binaryExpression
+      left: (callExpression
+        callee: (typeExpression
+          type: (namedType
+            name: (builtinType)))
+        arguments: (argumentList
+          (identifier)))
+      right: (integer)))
+  (assignmentStatement
+    place: (identifier)
+    value: (callExpression
+      callee: (typeExpression
+        type: (handleType
+          type: (qualifiedType
+            type: (namedType
+              name: (identifier)))))
+      arguments: (argumentList
+        (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (callExpression
+      callee: (typeExpression
+        type: (handleType
+          type: (qualifiedType
+            type: (namedType
+              name: (identifier)))))
+      arguments: (argumentList
+        (identifier)
+        (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (callExpression
+      callee: (typeExpression
+        type: (handleType
+          type: (qualifiedType
+            type: (namedType
+              name: (identifier)))))
+      arguments: (argumentList
+        (identifier)
+        (wildcard))))
+  (assignmentStatement
+    place: (identifier)
+    value: (callExpression
+      callee: (typeExpression
+        type: (handleType
+          type: (namedType
+            name: (identifier))))
+      arguments: (argumentList
+        (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (callExpression
+      callee: (typeExpression
+        type: (handleType
+          type: (namedType
+            name: (builtinType))))
+      arguments: (argumentList
+        (comprehension
+          head: (identifier)
+          clause: (membershipClause
+            pattern: (identifier)
+            source: (identifier))))))
+  (assignmentStatement
+    place: (identifier)
+    value: (callExpression
+      callee: (typeExpression
+        type: (handleType
+          type: (namedType
+            name: (identifier))))
+      arguments: (argumentList
+        (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (callExpression
+      callee: (indexExpression
+        object: (identifier)
+        index: (typeExpression
+          type: (namedType
+            name: (builtinType))))
+      arguments: (argumentList)))
+  (assignmentStatement
+    place: (identifier)
+    value: (indexExpression
+      object: (identifier)
+      index: (typeExpression
+        type: (modeType
+          type: (namedType
+            name: (identifier))))))
+  (assignmentStatement
+    place: (identifier)
+    value: (callExpression
+      callee: (identifier)
+      arguments: (argumentList
+        (integer))))
+  (assignmentStatement
+    place: (identifier)
+    value: (typeExpression
+      type: (namedType
+        module: (builtinType)
+        name: (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (typeExpression
+      type: (qualifiedType))))
