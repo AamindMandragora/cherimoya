@@ -605,6 +605,12 @@ TEST_CASE("Parser: chained comparisons and mixing", "[parser]") {
     CHECK(parseErrors("(a = b) != c") == 0);
     CHECK(parseErrors("a >>= b =<< c") == 1);
     CHECK(parseErrors("a =<< b >>= c") == 1);
+    // a tighter operator in between still leaves the mix, since the outer one is the one whose right side holds it
+    CHECK(parseErrors("a $ b >>= d") == 1);
+    CHECK(parseErrors("a $ b + c >>= d") == 1);
+    CHECK(parseErrors("a $ b + c * e >>= d") == 1);
+    CHECK(parseErrors("a $ (b + c >>= d)") == 0);
+    CHECK(parseErrors("a $ b + c $ d") == 0);
     CHECK(parseErrors("a ** b *** c") == 0);
     CHECK(parseErrors("a + b <+> c") == 0);
 }

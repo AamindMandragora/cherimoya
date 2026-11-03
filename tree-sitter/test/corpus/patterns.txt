@@ -1,0 +1,346 @@
+================================================================================
+literal, wildcard, and binder patterns
+================================================================================
+
+# every pattern is written like an expression, and cheri sees through parentheses around one
+match (x) {
+    0 -> { }
+    -1 -> { }
+    -2.5 -> { }
+    -(3) -> { }
+    'a' -> { }
+    "s" -> { }
+    true -> { }
+    _ -> { }
+    n -> { }
+    None -> { }
+    (1) -> { }
+    ((n)) -> { }
+}
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (comment)
+  (expressionStatement
+    (matchExpression
+      subject: (identifier)
+      arm: (matchArm
+        pattern: (integer)
+        body: (block))
+      arm: (matchArm
+        pattern: (negativeLiteral
+          value: (integer))
+        body: (block))
+      arm: (matchArm
+        pattern: (negativeLiteral
+          value: (float))
+        body: (block))
+      arm: (matchArm
+        pattern: (negativeLiteral
+          value: (parenthesizedPattern
+            (integer)))
+        body: (block))
+      arm: (matchArm
+        pattern: (character)
+        body: (block))
+      arm: (matchArm
+        pattern: (string)
+        body: (block))
+      arm: (matchArm
+        pattern: (boolean)
+        body: (block))
+      arm: (matchArm
+        pattern: (wildcard)
+        body: (block))
+      arm: (matchArm
+        pattern: (identifier)
+        body: (block))
+      arm: (matchArm
+        pattern: (identifier)
+        body: (block))
+      arm: (matchArm
+        pattern: (parenthesizedPattern
+          (integer))
+        body: (block))
+      arm: (matchArm
+        pattern: (parenthesizedPattern
+          (parenthesizedPattern
+            (identifier)))
+        body: (block)))))
+
+================================================================================
+variant patterns
+================================================================================
+
+match (x) {
+    Some[d] -> { }
+    Rect[w, h] -> { }
+    Some[['0', ..., '9']] -> { }
+    Some[0, ..., 9] -> { }
+    Some[x : x > 0] -> { }
+    Some[Rect[_, h]] -> { }
+    Empty[] -> { }
+}
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (matchExpression
+      subject: (identifier)
+      arm: (matchArm
+        pattern: (variantPattern
+          name: (identifier)
+          payload: (identifier))
+        body: (block))
+      arm: (matchArm
+        pattern: (variantPattern
+          name: (identifier)
+          payload: (identifier)
+          payload: (identifier))
+        body: (block))
+      arm: (matchArm
+        pattern: (variantPattern
+          name: (identifier)
+          payload: (rangePattern
+            first: (character)
+            last: (character)))
+        body: (block))
+      arm: (matchArm
+        pattern: (variantPattern
+          name: (identifier)
+          payload: (rangePattern
+            first: (integer)
+            last: (integer)))
+        body: (block))
+      arm: (matchArm
+        pattern: (variantPattern
+          name: (identifier)
+          payload: (setBuilderPattern
+            binder: (identifier)
+            predicate: (chainExpression
+              operand: (identifier)
+              operand: (integer))))
+        body: (block))
+      arm: (matchArm
+        pattern: (variantPattern
+          name: (identifier)
+          payload: (variantPattern
+            name: (identifier)
+            payload: (wildcard)
+            payload: (identifier)))
+        body: (block))
+      arm: (matchArm
+        pattern: (variantPattern
+          name: (identifier))
+        body: (block)))))
+
+================================================================================
+pack, range, and set-builder patterns
+================================================================================
+
+match (x) {
+    [true, _] -> { }
+    [x, y] -> { }
+    [x <- 0, y <- py] -> { }
+    [] -> { }
+    [..., <0] -> { }
+    [0, ..., 100] -> { }
+    [>100, ...] -> { }
+    [x : x % 2 = 0] -> { }
+    [x : x > 0 && x < 10] -> { }
+}
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (matchExpression
+      subject: (identifier)
+      arm: (matchArm
+        pattern: (packPattern
+          (boolean)
+          (wildcard))
+        body: (block))
+      arm: (matchArm
+        pattern: (packPattern
+          (identifier)
+          (identifier))
+        body: (block))
+      arm: (matchArm
+        pattern: (packPattern
+          (namedPattern
+            name: (identifier)
+            pattern: (integer))
+          (namedPattern
+            name: (identifier)
+            pattern: (identifier)))
+        body: (block))
+      arm: (matchArm
+        pattern: (packPattern)
+        body: (block))
+      arm: (matchArm
+        pattern: (rangePattern
+          last: (exclusiveBound
+            value: (integer)))
+        body: (block))
+      arm: (matchArm
+        pattern: (rangePattern
+          first: (integer)
+          last: (integer))
+        body: (block))
+      arm: (matchArm
+        pattern: (rangePattern
+          first: (exclusiveBound
+            value: (integer)))
+        body: (block))
+      arm: (matchArm
+        pattern: (setBuilderPattern
+          binder: (identifier)
+          predicate: (binaryExpression
+            left: (binaryExpression
+              left: (identifier)
+              right: (integer))
+            right: (integer)))
+        body: (block))
+      arm: (matchArm
+        pattern: (setBuilderPattern
+          binder: (identifier)
+          predicate: (chainExpression
+            operand: (identifier)
+            operand: (integer))
+          predicate: (chainExpression
+            operand: (identifier)
+            operand: (integer)))
+        body: (block)))))
+
+================================================================================
+patterns in let
+================================================================================
+
+let [q, r] <- divmod(17, 5);
+let [x <- px, y <- _] <- p;
+let Some[d] <- o;
+let -1 <- x;
+let take <- 1;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (letStatement
+    pattern: (packPattern
+      (identifier)
+      (identifier))
+    value: (callExpression
+      callee: (identifier)
+      arguments: (argumentList
+        (integer)
+        (integer))))
+  (letStatement
+    pattern: (packPattern
+      (namedPattern
+        name: (identifier)
+        pattern: (identifier))
+      (namedPattern
+        name: (identifier)
+        pattern: (wildcard)))
+    value: (identifier))
+  (letStatement
+    pattern: (variantPattern
+      name: (identifier)
+      payload: (identifier))
+    value: (identifier))
+  (letStatement
+    pattern: (negativeLiteral
+      value: (integer))
+    value: (identifier))
+  (letStatement
+    pattern: (intrinsic)
+    value: (integer)))
+
+================================================================================
+patterns in loops and comprehensions
+================================================================================
+
+repeat ([i, x]) <- enumerate(xs) { }
+repeat ((x)) <- xs { }
+x <- [x : (x) <- xs];
+x <- [d : Some[[a, b]] <- xs];
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (repeatExpression
+      pattern: (packPattern
+        (identifier)
+        (identifier))
+      source: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (identifier)))
+      body: (block)))
+  (expressionStatement
+    (repeatExpression
+      pattern: (parenthesizedPattern
+        (identifier))
+      source: (identifier)
+      body: (block)))
+  (assignmentStatement
+    place: (identifier)
+    value: (comprehension
+      head: (identifier)
+      clause: (membershipClause
+        pattern: (parenthesizedPattern
+          (identifier))
+        source: (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (comprehension
+      head: (identifier)
+      clause: (membershipClause
+        pattern: (variantPattern
+          name: (identifier)
+          payload: (packPattern
+            (identifier)
+            (identifier)))
+        source: (identifier)))))
+
+================================================================================
+names in parentheses
+================================================================================
+
+match (x) {
+    (Some)[d] -> { }
+    ((take))[x] -> { }
+    [(x) : x > 0] -> { }
+}
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (matchExpression
+      subject: (identifier)
+      arm: (matchArm
+        pattern: (variantPattern
+          name: (parenthesizedPattern
+            (identifier))
+          payload: (identifier))
+        body: (block))
+      arm: (matchArm
+        pattern: (variantPattern
+          name: (parenthesizedPattern
+            (parenthesizedPattern
+              (intrinsic)))
+          payload: (identifier))
+        body: (block))
+      arm: (matchArm
+        pattern: (setBuilderPattern
+          binder: (parenthesizedPattern
+            (identifier))
+          predicate: (chainExpression
+            operand: (identifier)
+            operand: (integer)))
+        body: (block)))))

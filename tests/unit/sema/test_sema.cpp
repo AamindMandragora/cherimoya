@@ -716,6 +716,8 @@ TEST_CASE("Sema: fixes", "[sema]") {
     // both ways to parenthesize a mix that needs it
     CHECK(fixed("let a <- 1; let b <- 2; let c <- 3; let x <- a = b != c;") == "let a <- 1; let b <- 2; let c <- 3; let x <- (a = b) != c;");
     CHECK(fixed("let a <- 1; let b <- 2; let c <- 3; let x <- a = b != c;", 1) == "let a <- 1; let b <- 2; let c <- 3; let x <- a = (b != c);");
+    CHECK(fixed("let x <- a $ b + c >>= d;") == "let x <- (a $ b + c) >>= d;");
+    CHECK(fixed("let x <- a $ b + c >>= d;", 1) == "let x <- a $ (b + c >>= d);");
     // sema's discards, mutability, catch-alls, and cutoffs
     CHECK(fixed("let () -> f -> (r :: int) { 1 -| }\nlet () -> g -> () { f(); }") == "let () -> f -> (r :: int) { 1 -| }\nlet () -> g -> () { _ <- f(); }");
     CHECK(fixed("let () -> g -> () { let x <- 1; x <- 2; }") == "let () -> g -> () { let x :: mut <- 1; x <- 2; }");

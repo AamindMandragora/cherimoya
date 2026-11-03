@@ -1,0 +1,10 @@
+# what installing, building, and debugging the grammar leaves behind: npm's packages and their lock, which the exact version in package.json makes unneeded, the parsers tree-sitter build compiles, native or WebAssembly, and the graphs a debug run draws
+/node_modules/
+/package-lock.json
+/build/
+*.so
+*.dylib
+*.dll
+*.wasm
+*.o
+log.html

@@ -1142,7 +1142,7 @@ public:
     }
 
     // repeatedly consumes tokens, recursing with higher and higher rbp until the next token doesn't have a strong enough lbp, at which point the highest level returns and its caller picks up where it left off, where parent is the operator whose right side this is, so the mixing and pipe rules can see across the recursion
-    std::unique_ptr<Expr> parseExpr(int rbp = 0, const OpInfo* parent = nullptr) {
+    std::unique_ptr<Expr> parseExpr(int rbp = 0, const OpInfo* parent = nullptr, SourceLoc parentStart = 0) {
         auto tok = advance();
         std::unique_ptr<Expr> left;
 
@@ -1335,10 +1335,11 @@ public:
 
                 // a binary operator, reading its level and associativity from the table
                 default: {
-                    // a mix that needs parentheses is reported once the right side is parsed, so its fixes know where that side ends
-                    const OpInfo* mixed = needsParens(prev, op) ? prev : nullptr;
-                    Span before = left->span;
-                    auto lastOperand = lastOperandStart(*left);
+                    // a mix that needs parentheses is reported once the right side is parsed, so its fixes know where that side ends, where the mix is with the last operator at this depth, or with the parent whose right side this is, since a tighter operator in between, the + in a $ b + c >>= d, takes the parent's place as the last one, and then the left side runs from the parent's and the last operand is everything at this depth
+                    bool isParentMixed = !needsParens(prev, op) && needsParens(parent, op);
+                    const OpInfo* mixed = needsParens(prev, op) ? prev : isParentMixed ? parent : nullptr;
+                    Span before = isParentMixed ? Span{parentStart, left->span.end} : left->span;
+                    auto lastOperand = isParentMixed ? std::optional<SourceLoc>(left->span.start) : lastOperandStart(*left);
                     auto reportMixed = [&]() {
                         if (!mixed) return;
                         std::string a = mixed->spelling, b(op.text);
@@ -1352,7 +1353,7 @@ public:
                     if (op.op->category == OpCategory::Pipe) {
                         const OpInfo* other = pipe != nullptr && pipe->kind != op.kind ? pipe : nullptr;
                         pipe = op.op;
-                        auto rhs = parseExpr(nextBP, op.op);
+                        auto rhs = parseExpr(nextBP, op.op, start);
                         left = std::make_unique<PipeExpr>(op, std::move(left), std::move(rhs), Span{start, prevEnd()});
                         if (other) {
                             engine.printError("cherimoya requires parentheses to mix '|>' and '<|', please write '(x |> f) <| y' or 'x |> (f <| y)'",
@@ -1367,17 +1368,17 @@ public:
                         std::vector<std::unique_ptr<Expr>> operands;
                         std::vector<Token> ops{op};
                         operands.push_back(std::move(left));
-                        operands.push_back(parseExpr(nextBP, op.op));
+                        operands.push_back(parseExpr(nextBP, op.op, start));
                         while (peek().op != nullptr && peek().op->assoc == Assoc::Chain) {
                             ops.push_back(advance());
-                            operands.push_back(parseExpr(nextBP, op.op));
+                            operands.push_back(parseExpr(nextBP, op.op, start));
                         }
                         left = std::make_unique<ChainExpr>(std::move(operands), std::move(ops), Span{start, prevEnd()});
                         reportMixed();
                         break;
                     }
 
-                    auto rhs = parseExpr(nextBP, op.op);
+                    auto rhs = parseExpr(nextBP, op.op, start);
                     auto span = Span{start, rhs->span.end};
                     if (op.op->category == OpCategory::Extra) {
                         left = std::make_unique<ExtraBinaryExpr>(op, std::move(left), std::move(rhs), span);

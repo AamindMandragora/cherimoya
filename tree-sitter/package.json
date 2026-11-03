@@ -1,0 +1,13 @@
+{
+  "name": "tree-sitter-cherimoya",
+  "version": "0.1.0",
+  "description": "the tree-sitter grammar for cherimoya, which reads every program the way cheri does",
+  "private": true,
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "0.27.1"
+  }
+}

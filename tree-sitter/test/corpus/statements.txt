@@ -1,0 +1,373 @@
+================================================================================
+bindings
+================================================================================
+
+# every statement form, where an expression comes first and decides between assignment, yield, and expression statement
+let x <- 5;
+let x :: int <- 5;
+let x :: mut int <- 5;
+let buf :: unscoped <- arr mut T(n);
+let v :: mut arr[16] char <- _;
+let n0 :: wit <- node_count(g);
+let count :: mut <- list_new[i64u]();
+let ages :: Map[string, int] <- [["ada", 36], ["alan", 41]];
+let x :: int {x > 0} <- 5;
+let step <- (acc, x) -> { acc + x * rate -| };
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (comment)
+  (letStatement
+    pattern: (identifier)
+    value: (integer))
+  (letStatement
+    pattern: (identifier)
+    type: (namedType
+      name: (builtinType))
+    value: (integer))
+  (letStatement
+    pattern: (identifier)
+    type: (qualifiedType
+      type: (namedType
+        name: (builtinType)))
+    value: (integer))
+  (letStatement
+    pattern: (identifier)
+    type: (modeType)
+    value: (callExpression
+      callee: (typeExpression
+        type: (handleType
+          type: (qualifiedType
+            type: (namedType
+              name: (identifier)))))
+      arguments: (argumentList
+        (identifier))))
+  (letStatement
+    pattern: (identifier)
+    type: (qualifiedType
+      type: (handleType
+        argument: (integer)
+        type: (namedType
+          name: (builtinType))))
+    value: (wildcard))
+  (letStatement
+    pattern: (identifier)
+    type: (modeType)
+    value: (callExpression
+      callee: (identifier)
+      arguments: (argumentList
+        (identifier))))
+  (letStatement
+    pattern: (identifier)
+    type: (qualifiedType)
+    value: (callExpression
+      callee: (indexExpression
+        object: (identifier)
+        index: (typeExpression
+          type: (namedType
+            name: (builtinType))))
+      arguments: (argumentList)))
+  (letStatement
+    pattern: (identifier)
+    type: (namedType
+      name: (identifier)
+      arguments: (typeArguments
+        (namedType
+          name: (identifier))
+        (namedType
+          name: (builtinType))))
+    value: (pack
+      (pack
+        (string)
+        (integer))
+      (pack
+        (string)
+        (integer))))
+  (letStatement
+    pattern: (identifier)
+    type: (refinedType
+      type: (namedType
+        name: (builtinType))
+      predicate: (chainExpression
+        operand: (identifier)
+        operand: (integer)))
+    value: (integer))
+  (letStatement
+    pattern: (identifier)
+    value: (closure
+      parameters: (parameterList
+        (parameter
+          name: (identifier))
+        (parameter
+          name: (identifier)))
+      body: (block
+        (yieldStatement
+          value: (binaryExpression
+            left: (identifier)
+            right: (binaryExpression
+              left: (identifier)
+              right: (identifier))))))))
+
+================================================================================
+assignments
+================================================================================
+
+x <- 5;
+xs <- [1, 2];
+p <- Point <- [1, 2];
+a.b <- 1;
+p[] <- v;
+_ <- write(1, s, len(s));
+(x) <- 1;
+(a.b) <- 1;
+take <- 1;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (assignmentStatement
+    place: (identifier)
+    value: (integer))
+  (assignmentStatement
+    place: (identifier)
+    value: (pack
+      (integer)
+      (integer)))
+  (assignmentStatement
+    place: (identifier)
+    value: (constructExpression
+      target: (identifier)
+      value: (pack
+        (integer)
+        (integer))))
+  (assignmentStatement
+    place: (memberExpression
+      object: (identifier)
+      field: (identifier))
+    value: (integer))
+  (assignmentStatement
+    place: (indexExpression
+      object: (identifier))
+    value: (identifier))
+  (assignmentStatement
+    place: (wildcard)
+    value: (callExpression
+      callee: (identifier)
+      arguments: (argumentList
+        (integer)
+        (identifier)
+        (callExpression
+          callee: (identifier)
+          arguments: (argumentList
+            (identifier))))))
+  (assignmentStatement
+    place: (parenthesizedExpression
+      (identifier))
+    value: (integer))
+  (assignmentStatement
+    place: (parenthesizedExpression
+      (memberExpression
+        object: (identifier)
+        field: (identifier)))
+    value: (integer))
+  (assignmentStatement
+    place: (intrinsic)
+    value: (integer)))
+
+================================================================================
+compound assignments
+================================================================================
+
+count +<- 1;
+xs[i] *<- 2;
+counts[hash(k) % n] +<- 1;
+p **<- 2;
+v <+><- w;
+ok &&<- b;
+n -<- 1;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (assignmentStatement
+    place: (identifier)
+    value: (integer))
+  (assignmentStatement
+    place: (indexExpression
+      object: (identifier)
+      index: (identifier))
+    value: (integer))
+  (assignmentStatement
+    place: (indexExpression
+      object: (identifier)
+      index: (binaryExpression
+        left: (callExpression
+          callee: (identifier)
+          arguments: (argumentList
+            (identifier)))
+        right: (identifier)))
+    value: (integer))
+  (assignmentStatement
+    place: (identifier)
+    value: (integer))
+  (assignmentStatement
+    place: (identifier)
+    value: (identifier))
+  (assignmentStatement
+    place: (identifier)
+    value: (identifier))
+  (assignmentStatement
+    place: (identifier)
+    value: (integer)))
+
+================================================================================
+expression statements
+================================================================================
+
+check(5);
+swap(a, b);
+xs |> print;
+[c] (x) -> { };
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (callExpression
+      callee: (identifier)
+      arguments: (argumentList
+        (integer))))
+  (expressionStatement
+    (callExpression
+      callee: (intrinsic)
+      arguments: (argumentList
+        (identifier)
+        (identifier))))
+  (expressionStatement
+    (pipeExpression
+      left: (identifier)
+      right: (identifier)))
+  (expressionStatement
+    (closure
+      captures: (captureList
+        (identifier))
+      parameters: (parameterList
+        (parameter
+          name: (identifier)))
+      body: (block))))
+
+================================================================================
+yields with and without values and targets
+================================================================================
+
+count -|
+-| i
+-|
+100 -| early
+-| repeat
+x -| match
+[q, r] -|
+[a / b, a % b] -|
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (yieldStatement
+    value: (identifier))
+  (yieldStatement
+    target: (identifier))
+  (yieldStatement)
+  (yieldStatement
+    value: (integer)
+    target: (identifier))
+  (yieldStatement)
+  (yieldStatement
+    value: (identifier))
+  (yieldStatement
+    value: (pack
+      (identifier)
+      (identifier)))
+  (yieldStatement
+    value: (pack
+      (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      (binaryExpression
+        left: (identifier)
+        right: (identifier)))))
+
+================================================================================
+wit and assert
+================================================================================
+
+wit {i <= n};
+wit {T :: Ord};
+wit {int :: Ord};
+assert (total = 220);
+assert (q = 3 && r = 2);
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (witStatement
+    predicate: (chainExpression
+      operand: (identifier)
+      operand: (identifier)))
+  (witStatement
+    predicate: (identifier)
+    bound: (namedType
+      name: (identifier)))
+  (witStatement
+    predicate: (typeExpression
+      type: (namedType
+        name: (builtinType)))
+    bound: (namedType
+      name: (identifier)))
+  (assertStatement
+    condition: (binaryExpression
+      left: (identifier)
+      right: (integer)))
+  (assertStatement
+    condition: (binaryExpression
+      left: (binaryExpression
+        left: (identifier)
+        right: (integer))
+      right: (binaryExpression
+        left: (identifier)
+        right: (integer)))))
+
+================================================================================
+a method with no object is a place
+================================================================================
+
+(.b) <- 1;
+.len <- 1;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (assignmentStatement
+    place: (parenthesizedExpression
+      (methodExpression
+        name: (identifier)))
+    value: (integer))
+  (assignmentStatement
+    place: (methodExpression
+      name: (identifier))
+    value: (integer)))
+
+================================================================================
+a name after -| is its target, even if
+================================================================================
+
+-| if (x);
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (yieldStatement
+    target: (identifier))
+  (expressionStatement
+    (parenthesizedExpression
+      (identifier))))

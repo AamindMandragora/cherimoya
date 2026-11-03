@@ -1,0 +1,754 @@
+================================================================================
+functions
+================================================================================
+
+# declarations can sit wherever a statement can, at the top of a file and inside bodies
+let () -> start -> (code :: int) { 0 -| }
+let (x :: int) -> inc -> (r :: int) { x + 1 -| }
+let (a :: int, b :: int <- a + 1) -> f -> () { }
+let (a :: int {a >= 0}, b :: int {b > 0}) -> divmod -> (q :: int, r :: int {0 <= r < b && a = q * b + r}) { [a / b, a % b] -| }
+let (a, b,) -> g -> (r,) { }
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (comment)
+  (functionDeclaration
+    parameters: (parameterList)
+    name: (identifier)
+    outputs: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (builtinType))))
+    body: (block
+      (yieldStatement
+        value: (integer))))
+  (functionDeclaration
+    parameters: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (builtinType))))
+    name: (identifier)
+    outputs: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (builtinType))))
+    body: (block
+      (yieldStatement
+        value: (binaryExpression
+          left: (identifier)
+          right: (integer)))))
+  (functionDeclaration
+    parameters: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (builtinType)))
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (builtinType))
+        default: (binaryExpression
+          left: (identifier)
+          right: (integer))))
+    name: (identifier)
+    outputs: (parameterList)
+    body: (block))
+  (functionDeclaration
+    parameters: (parameterList
+      (parameter
+        name: (identifier)
+        type: (refinedType
+          type: (namedType
+            name: (builtinType))
+          predicate: (chainExpression
+            operand: (identifier)
+            operand: (integer))))
+      (parameter
+        name: (identifier)
+        type: (refinedType
+          type: (namedType
+            name: (builtinType))
+          predicate: (chainExpression
+            operand: (identifier)
+            operand: (integer)))))
+    name: (identifier)
+    outputs: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (builtinType)))
+      (parameter
+        name: (identifier)
+        type: (refinedType
+          type: (namedType
+            name: (builtinType))
+          predicate: (binaryExpression
+            left: (chainExpression
+              operand: (integer)
+              operand: (identifier)
+              operand: (identifier))
+            right: (binaryExpression
+              left: (identifier)
+              right: (binaryExpression
+                left: (binaryExpression
+                  left: (identifier)
+                  right: (identifier))
+                right: (identifier)))))))
+    body: (block
+      (yieldStatement
+        value: (pack
+          (binaryExpression
+            left: (identifier)
+            right: (identifier))
+          (binaryExpression
+            left: (identifier)
+            right: (identifier))))))
+  (functionDeclaration
+    parameters: (parameterList
+      (parameter
+        name: (identifier))
+      (parameter
+        name: (identifier)))
+    name: (identifier)
+    outputs: (parameterList
+      (parameter
+        name: (identifier)))
+    body: (block)))
+
+================================================================================
+generic functions
+================================================================================
+
+let [T :: Ord] (a :: T, b :: T) -> max -> (m :: T) { }
+let [T, A :: Allocator & Default <- Global] () -> list_new -> (l :: List[T, A]) { }
+let [N <- 16] () -> f -> () { }
+let [] () -> f -> () { }
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (functionDeclaration
+    generics: (genericParameters
+      (genericParameter
+        name: (identifier)
+        bound: (namedType
+          name: (identifier))))
+    parameters: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier)))
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier))))
+    name: (identifier)
+    outputs: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier))))
+    body: (block))
+  (functionDeclaration
+    generics: (genericParameters
+      (genericParameter
+        name: (identifier))
+      (genericParameter
+        name: (identifier)
+        bound: (namedType
+          name: (identifier))
+        bound: (namedType
+          name: (identifier))
+        default: (namedType
+          name: (identifier))))
+    parameters: (parameterList)
+    name: (identifier)
+    outputs: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier)
+          arguments: (typeArguments
+            (namedType
+              name: (identifier))
+            (namedType
+              name: (identifier))))))
+    body: (block))
+  (functionDeclaration
+    generics: (genericParameters
+      (genericParameter
+        name: (identifier)
+        default: (integer)))
+    parameters: (parameterList)
+    name: (identifier)
+    outputs: (parameterList)
+    body: (block))
+  (functionDeclaration
+    generics: (genericParameters)
+    parameters: (parameterList)
+    name: (identifier)
+    outputs: (parameterList)
+    body: (block)))
+
+================================================================================
+functions named after operators
+================================================================================
+
+let (a :: Vec2, b :: Vec2) -> + -> (r :: Vec2) { [a.x + b.x, a.y + b.y] -| }
+let (a :: Vec2) -> - -> (r :: Vec2) { [-a.x, -a.y] -| }
+let (a :: Vec2, b :: Vec2) -> <+> -> (r :: Vec2) { a + b -| }
+let (a :: T, b :: T) -> == -> (r :: bool) { }
+let (a :: T) -> ! -> (r :: T) { }
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (functionDeclaration
+    parameters: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier)))
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier))))
+    name: (operatorName)
+    outputs: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier))))
+    body: (block
+      (yieldStatement
+        value: (pack
+          (binaryExpression
+            left: (memberExpression
+              object: (identifier)
+              field: (identifier))
+            right: (memberExpression
+              object: (identifier)
+              field: (identifier)))
+          (binaryExpression
+            left: (memberExpression
+              object: (identifier)
+              field: (identifier))
+            right: (memberExpression
+              object: (identifier)
+              field: (identifier)))))))
+  (functionDeclaration
+    parameters: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier))))
+    name: (operatorName)
+    outputs: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier))))
+    body: (block
+      (yieldStatement
+        value: (pack
+          (unaryExpression
+            operand: (memberExpression
+              object: (identifier)
+              field: (identifier)))
+          (unaryExpression
+            operand: (memberExpression
+              object: (identifier)
+              field: (identifier)))))))
+  (functionDeclaration
+    parameters: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier)))
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier))))
+    name: (operatorName)
+    outputs: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier))))
+    body: (block
+      (yieldStatement
+        value: (binaryExpression
+          left: (identifier)
+          right: (identifier)))))
+  (functionDeclaration
+    parameters: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier)))
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier))))
+    name: (operatorName)
+    outputs: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (builtinType))))
+    body: (block))
+  (functionDeclaration
+    parameters: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier))))
+    name: (operatorName)
+    outputs: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (identifier))))
+    body: (block)))
+
+================================================================================
+obligations, externs, and nested functions
+================================================================================
+
+let (g :: peek mut Graph) -> grow -> () wit {node_count(g) >= node_count(old g)} { }
+let (fd :: i32, buf :: peek arr char, n :: i64u) -> write -> (r :: i64);
+let (s :: peek Shape) -> area -> (a :: f64) { let (r :: f64) -> sq -> (o :: f64) { r * r -| } 0.0 -| }
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (functionDeclaration
+    parameters: (parameterList
+      (parameter
+        name: (identifier)
+        type: (modeType
+          type: (qualifiedType
+            type: (namedType
+              name: (identifier))))))
+    name: (identifier)
+    outputs: (parameterList)
+    obligations: (chainExpression
+      operand: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (identifier)))
+      operand: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (oldExpression
+            operand: (identifier)))))
+    body: (block))
+  (functionDeclaration
+    parameters: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (builtinType)))
+      (parameter
+        name: (identifier)
+        type: (modeType
+          type: (handleType
+            type: (namedType
+              name: (builtinType)))))
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (builtinType))))
+    name: (identifier)
+    outputs: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (builtinType)))))
+  (functionDeclaration
+    parameters: (parameterList
+      (parameter
+        name: (identifier)
+        type: (modeType
+          type: (namedType
+            name: (identifier)))))
+    name: (identifier)
+    outputs: (parameterList
+      (parameter
+        name: (identifier)
+        type: (namedType
+          name: (builtinType))))
+    body: (block
+      (functionDeclaration
+        parameters: (parameterList
+          (parameter
+            name: (identifier)
+            type: (namedType
+              name: (builtinType))))
+        name: (identifier)
+        outputs: (parameterList
+          (parameter
+            name: (identifier)
+            type: (namedType
+              name: (builtinType))))
+        body: (block
+          (yieldStatement
+            value: (binaryExpression
+              left: (identifier)
+              right: (identifier)))))
+      (yieldStatement
+        value: (float)))))
+
+================================================================================
+type definitions
+================================================================================
+
+type NodeId <- i64u;
+type Wrapper <- Foo[int];
+type Percent <- int {p : 0 <= p <= 100};
+type Point <- [x :: f64, y :: f64];
+type Pos <- [x :: f64, y :: f64] {p : p.x >= 0.0};
+type Shape <- Circle[f64] | Rect[f64, f64];
+type Dir <- N | E | S | W;
+type Option[T] <- Some[T] | None;
+type Flag <- int | bool;
+type Map[K :: Ord, V] <- [keys :: arr K, vals :: arr V];
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (typeDeclaration
+    name: (identifier)
+    value: (namedType
+      name: (builtinType)))
+  (typeDeclaration
+    name: (identifier)
+    value: (namedType
+      name: (identifier)
+      arguments: (typeArguments
+        (namedType
+          name: (builtinType)))))
+  (typeDeclaration
+    name: (identifier)
+    value: (refinedType
+      type: (namedType
+        name: (builtinType))
+      binder: (identifier)
+      predicate: (chainExpression
+        operand: (integer)
+        operand: (identifier)
+        operand: (integer))))
+  (typeDeclaration
+    name: (identifier)
+    value: (recordType
+      (recordField
+        name: (identifier)
+        type: (namedType
+          name: (builtinType)))
+      (recordField
+        name: (identifier)
+        type: (namedType
+          name: (builtinType)))))
+  (typeDeclaration
+    name: (identifier)
+    value: (refinedType
+      type: (recordType
+        (recordField
+          name: (identifier)
+          type: (namedType
+            name: (builtinType)))
+        (recordField
+          name: (identifier)
+          type: (namedType
+            name: (builtinType))))
+      binder: (identifier)
+      predicate: (chainExpression
+        operand: (memberExpression
+          object: (identifier)
+          field: (identifier))
+        operand: (float))))
+  (typeDeclaration
+    name: (identifier)
+    value: (sumType
+      (variant
+        name: (identifier)
+        payload: (namedType
+          name: (builtinType)))
+      (variant
+        name: (identifier)
+        payload: (namedType
+          name: (builtinType))
+        payload: (namedType
+          name: (builtinType)))))
+  (typeDeclaration
+    name: (identifier)
+    value: (sumType
+      (variant
+        name: (identifier))
+      (variant
+        name: (identifier))
+      (variant
+        name: (identifier))
+      (variant
+        name: (identifier))))
+  (typeDeclaration
+    name: (identifier)
+    generics: (genericParameters
+      (genericParameter
+        name: (identifier)))
+    value: (sumType
+      (variant
+        name: (identifier)
+        payload: (namedType
+          name: (identifier)))
+      (variant
+        name: (identifier))))
+  (typeDeclaration
+    name: (identifier)
+    value: (sumType
+      (variant
+        name: (builtinType))
+      (variant
+        name: (builtinType))))
+  (typeDeclaration
+    name: (identifier)
+    generics: (genericParameters
+      (genericParameter
+        name: (identifier)
+        bound: (namedType
+          name: (identifier)))
+      (genericParameter
+        name: (identifier)))
+    value: (recordType
+      (recordField
+        name: (identifier)
+        type: (handleType
+          type: (namedType
+            name: (identifier))))
+      (recordField
+        name: (identifier)
+        type: (handleType
+          type: (namedType
+            name: (identifier)))))))
+
+================================================================================
+protocols
+================================================================================
+
+type Ord[T] <- [ let (a :: peek T, b :: peek T) -> cmp -> (r :: int) ];
+type Num[T] <- [ let (a :: T, b :: T) -> + -> (r :: T), let (a :: T) -> - -> (r :: T), ];
+type Spaceship[T] <- [ let (a :: peek T, b :: peek T) -> <=> -> (r :: int) wit {r = r} ];
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (typeDeclaration
+    name: (identifier)
+    generics: (genericParameters
+      (genericParameter
+        name: (identifier)))
+    value: (protocol
+      (functionDeclaration
+        parameters: (parameterList
+          (parameter
+            name: (identifier)
+            type: (modeType
+              type: (namedType
+                name: (identifier))))
+          (parameter
+            name: (identifier)
+            type: (modeType
+              type: (namedType
+                name: (identifier)))))
+        name: (identifier)
+        outputs: (parameterList
+          (parameter
+            name: (identifier)
+            type: (namedType
+              name: (builtinType)))))))
+  (typeDeclaration
+    name: (identifier)
+    generics: (genericParameters
+      (genericParameter
+        name: (identifier)))
+    value: (protocol
+      (functionDeclaration
+        parameters: (parameterList
+          (parameter
+            name: (identifier)
+            type: (namedType
+              name: (identifier)))
+          (parameter
+            name: (identifier)
+            type: (namedType
+              name: (identifier))))
+        name: (operatorName)
+        outputs: (parameterList
+          (parameter
+            name: (identifier)
+            type: (namedType
+              name: (identifier)))))
+      (functionDeclaration
+        parameters: (parameterList
+          (parameter
+            name: (identifier)
+            type: (namedType
+              name: (identifier))))
+        name: (operatorName)
+        outputs: (parameterList
+          (parameter
+            name: (identifier)
+            type: (namedType
+              name: (identifier)))))))
+  (typeDeclaration
+    name: (identifier)
+    generics: (genericParameters
+      (genericParameter
+        name: (identifier)))
+    value: (protocol
+      (functionDeclaration
+        parameters: (parameterList
+          (parameter
+            name: (identifier)
+            type: (modeType
+              type: (namedType
+                name: (identifier))))
+          (parameter
+            name: (identifier)
+            type: (modeType
+              type: (namedType
+                name: (identifier)))))
+        name: (operatorName)
+        outputs: (parameterList
+          (parameter
+            name: (identifier)
+            type: (namedType
+              name: (builtinType))))
+        obligations: (binaryExpression
+          left: (identifier)
+          right: (identifier))))))
+
+================================================================================
+a product with an invariant
+================================================================================
+
+type List[T, A :: Allocator <- Global] <- [data :: arr[A] mut T, count :: i64u] {l : l.count <= len(l.data) && written(l.data) == [0, ..., <l.count]};
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (typeDeclaration
+    name: (identifier)
+    generics: (genericParameters
+      (genericParameter
+        name: (identifier))
+      (genericParameter
+        name: (identifier)
+        bound: (namedType
+          name: (identifier))
+        default: (namedType
+          name: (identifier))))
+    value: (refinedType
+      type: (recordType
+        (recordField
+          name: (identifier)
+          type: (handleType
+            argument: (namedType
+              name: (identifier))
+            type: (qualifiedType
+              type: (namedType
+                name: (identifier)))))
+        (recordField
+          name: (identifier)
+          type: (namedType
+            name: (builtinType))))
+      binder: (identifier)
+      predicate: (binaryExpression
+        left: (chainExpression
+          operand: (memberExpression
+            object: (identifier)
+            field: (identifier))
+          operand: (callExpression
+            callee: (identifier)
+            arguments: (argumentList
+              (memberExpression
+                object: (identifier)
+                field: (identifier)))))
+        right: (binaryExpression
+          left: (callExpression
+            callee: (identifier)
+            arguments: (argumentList
+              (memberExpression
+                object: (identifier)
+                field: (identifier))))
+          right: (range
+            first: (integer)
+            last: (exclusiveBound
+              value: (memberExpression
+                object: (identifier)
+                field: (identifier)))))))))
+
+================================================================================
+export and import lists
+================================================================================
+
+export [List, list_new, push, Result[dist, prev]];
+export [Vec2, <+>, +];
+export [int, Pair[],];
+export [];
+import [List, push, len] <- list;
+import [Allocator] <- std.mem;
+import [Raw] <- std.unsafe;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (exportDeclaration
+    item: (moduleItem
+      name: (identifier))
+    item: (moduleItem
+      name: (identifier))
+    item: (moduleItem
+      name: (identifier))
+    item: (moduleItem
+      name: (identifier)
+      field: (identifier)
+      field: (identifier)))
+  (exportDeclaration
+    item: (moduleItem
+      name: (identifier))
+    item: (moduleItem
+      name: (operatorName))
+    item: (moduleItem
+      name: (operatorName)))
+  (exportDeclaration
+    item: (moduleItem
+      name: (builtinType))
+    item: (moduleItem
+      name: (identifier)))
+  (exportDeclaration)
+  (importDeclaration
+    item: (moduleItem
+      name: (identifier))
+    item: (moduleItem
+      name: (identifier))
+    item: (moduleItem
+      name: (identifier))
+    module: (modulePath
+      (identifier)))
+  (importDeclaration
+    item: (moduleItem
+      name: (identifier))
+    module: (modulePath
+      (identifier)
+      (identifier)))
+  (importDeclaration
+    item: (moduleItem
+      name: (identifier))
+    module: (modulePath
+      (identifier)
+      (identifier))))

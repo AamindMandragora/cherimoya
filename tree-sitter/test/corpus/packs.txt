@@ -1,0 +1,473 @@
+================================================================================
+packs and named packs
+================================================================================
+
+# packs, ranges, and comprehensions are all brackets, told apart by ... and :
+x <- [];
+x <- [a, b, c];
+x <- [1, 2.0];
+x <- [x <- 1.0, y <- 2.0];
+x <- [[1, 2], [3, 4]];
+x <- [a + b, f(c)];
+x <- [x <- [1, 2]];
+x <- [3, -1, 4];
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (comment)
+  (assignmentStatement
+    place: (identifier)
+    value: (pack))
+  (assignmentStatement
+    place: (identifier)
+    value: (pack
+      (identifier)
+      (identifier)
+      (identifier)))
+  (assignmentStatement
+    place: (identifier)
+    value: (pack
+      (integer)
+      (float)))
+  (assignmentStatement
+    place: (identifier)
+    value: (pack
+      (namedElement
+        name: (identifier)
+        value: (float))
+      (namedElement
+        name: (identifier)
+        value: (float))))
+  (assignmentStatement
+    place: (identifier)
+    value: (pack
+      (pack
+        (integer)
+        (integer))
+      (pack
+        (integer)
+        (integer))))
+  (assignmentStatement
+    place: (identifier)
+    value: (pack
+      (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (identifier)))))
+  (assignmentStatement
+    place: (identifier)
+    value: (pack
+      (namedElement
+        name: (identifier)
+        value: (pack
+          (integer)
+          (integer)))))
+  (assignmentStatement
+    place: (identifier)
+    value: (pack
+      (integer)
+      (unaryExpression
+        operand: (integer))
+      (integer))))
+
+================================================================================
+ranges and their endpoints, strides, and one-sided forms
+================================================================================
+
+x <- [0, ..., n];
+x <- [0, ..., <n];
+x <- [>0, ..., n];
+x <- [>0, ..., <n];
+x <- [0, 2, ..., <n];
+x <- [n, n - 1, ..., >0];
+x <- [<n, n - 1, ..., >0];
+x <- [0, ...];
+x <- [0, 1, ...];
+x <- [..., <0];
+x <- [>100, ...];
+x <- ['a', ..., 'z'];
+x <- [0, ..., < -1];
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (assignmentStatement
+    place: (identifier)
+    value: (range
+      first: (integer)
+      last: (identifier)))
+  (assignmentStatement
+    place: (identifier)
+    value: (range
+      first: (integer)
+      last: (exclusiveBound
+        value: (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (range
+      first: (exclusiveBound
+        value: (integer))
+      last: (identifier)))
+  (assignmentStatement
+    place: (identifier)
+    value: (range
+      first: (exclusiveBound
+        value: (integer))
+      last: (exclusiveBound
+        value: (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (range
+      first: (integer)
+      second: (integer)
+      last: (exclusiveBound
+        value: (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (range
+      first: (identifier)
+      second: (binaryExpression
+        left: (identifier)
+        right: (integer))
+      last: (exclusiveBound
+        value: (integer))))
+  (assignmentStatement
+    place: (identifier)
+    value: (range
+      first: (exclusiveBound
+        value: (identifier))
+      second: (binaryExpression
+        left: (identifier)
+        right: (integer))
+      last: (exclusiveBound
+        value: (integer))))
+  (assignmentStatement
+    place: (identifier)
+    value: (range
+      first: (integer)))
+  (assignmentStatement
+    place: (identifier)
+    value: (range
+      first: (integer)
+      second: (integer)))
+  (assignmentStatement
+    place: (identifier)
+    value: (range
+      last: (exclusiveBound
+        value: (integer))))
+  (assignmentStatement
+    place: (identifier)
+    value: (range
+      first: (exclusiveBound
+        value: (integer))))
+  (assignmentStatement
+    place: (identifier)
+    value: (range
+      first: (character)
+      last: (character)))
+  (assignmentStatement
+    place: (identifier)
+    value: (range
+      first: (integer)
+      last: (exclusiveBound
+        value: (unaryExpression
+          operand: (integer))))))
+
+================================================================================
+comprehensions
+================================================================================
+
+x <- [x * x : x <- xs];
+x <- [x * x : x <- xs && x % 2 = 0];
+x <- [[x, y] : x <- xs && y <- ys];
+x <- [x + y : [x, y] <- zip(xs, ys)];
+x <- [d : Some[d] <- xs];
+x <- [[xs[i], ys[i]] : 0 <= i < n];
+x <- [v : v <- [o : o <- os && f(o)]];
+x <- [p : p <- ps && f((Point <- [0, 0]))];
+x <- [x : x <- xs && (a || b)];
+x <- [x : x <- [1, 2]];
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (assignmentStatement
+    place: (identifier)
+    value: (comprehension
+      head: (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      clause: (membershipClause
+        pattern: (identifier)
+        source: (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (comprehension
+      head: (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      clause: (membershipClause
+        pattern: (identifier)
+        source: (identifier))
+      clause: (binaryExpression
+        left: (binaryExpression
+          left: (identifier)
+          right: (integer))
+        right: (integer))))
+  (assignmentStatement
+    place: (identifier)
+    value: (comprehension
+      head: (pack
+        (identifier)
+        (identifier))
+      clause: (membershipClause
+        pattern: (identifier)
+        source: (identifier))
+      clause: (membershipClause
+        pattern: (identifier)
+        source: (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (comprehension
+      head: (binaryExpression
+        left: (identifier)
+        right: (identifier))
+      clause: (membershipClause
+        pattern: (packPattern
+          (identifier)
+          (identifier))
+        source: (callExpression
+          callee: (identifier)
+          arguments: (argumentList
+            (identifier)
+            (identifier))))))
+  (assignmentStatement
+    place: (identifier)
+    value: (comprehension
+      head: (identifier)
+      clause: (membershipClause
+        pattern: (variantPattern
+          name: (identifier)
+          payload: (identifier))
+        source: (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (comprehension
+      head: (pack
+        (indexExpression
+          object: (identifier)
+          index: (identifier))
+        (indexExpression
+          object: (identifier)
+          index: (identifier)))
+      clause: (chainExpression
+        operand: (integer)
+        operand: (identifier)
+        operand: (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (comprehension
+      head: (identifier)
+      clause: (membershipClause
+        pattern: (identifier)
+        source: (comprehension
+          head: (identifier)
+          clause: (membershipClause
+            pattern: (identifier)
+            source: (identifier))
+          clause: (callExpression
+            callee: (identifier)
+            arguments: (argumentList
+              (identifier)))))))
+  (assignmentStatement
+    place: (identifier)
+    value: (comprehension
+      head: (identifier)
+      clause: (membershipClause
+        pattern: (identifier)
+        source: (identifier))
+      clause: (callExpression
+        callee: (identifier)
+        arguments: (argumentList
+          (parenthesizedExpression
+            (constructExpression
+              target: (identifier)
+              value: (pack
+                (integer)
+                (integer))))))))
+  (assignmentStatement
+    place: (identifier)
+    value: (comprehension
+      head: (identifier)
+      clause: (membershipClause
+        pattern: (identifier)
+        source: (identifier))
+      clause: (parenthesizedExpression
+        (binaryExpression
+          left: (identifier)
+          right: (identifier)))))
+  (assignmentStatement
+    place: (identifier)
+    value: (comprehension
+      head: (identifier)
+      clause: (membershipClause
+        pattern: (identifier)
+        source: (pack
+          (integer)
+          (integer))))))
+
+================================================================================
+folds
+================================================================================
+
+x <- (+, 0)[x * x : x <- xs && x % 2 = 0];
+x <- (*, 1)[1, ..., n];
+x <- (max, MIN_INT)[scores];
+x <- (&&, true)[x > 0 : x <- xs];
+x <- (<+>, zero)[vs];
+x <- (moments, [0.0, 0.0])[xs];
+x <- (+, 0)[[1, 2, 3]];
+x <- (-, 0)[xs];
+x <- inc((+, 0)[xs]);
+x <- (+, 0)[xs] / n;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (assignmentStatement
+    place: (identifier)
+    value: (foldExpression
+      reducer: (operatorReference)
+      seed: (integer)
+      sequence: (comprehension
+        head: (binaryExpression
+          left: (identifier)
+          right: (identifier))
+        clause: (membershipClause
+          pattern: (identifier)
+          source: (identifier))
+        clause: (binaryExpression
+          left: (binaryExpression
+            left: (identifier)
+            right: (integer))
+          right: (integer)))))
+  (assignmentStatement
+    place: (identifier)
+    value: (foldExpression
+      reducer: (operatorReference)
+      seed: (integer)
+      sequence: (range
+        first: (integer)
+        last: (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (foldExpression
+      reducer: (identifier)
+      seed: (identifier)
+      sequence: (pack
+        (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (foldExpression
+      reducer: (operatorReference)
+      seed: (boolean)
+      sequence: (comprehension
+        head: (chainExpression
+          operand: (identifier)
+          operand: (integer))
+        clause: (membershipClause
+          pattern: (identifier)
+          source: (identifier)))))
+  (assignmentStatement
+    place: (identifier)
+    value: (foldExpression
+      reducer: (operatorReference)
+      seed: (identifier)
+      sequence: (pack
+        (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (foldExpression
+      reducer: (identifier)
+      seed: (pack
+        (float)
+        (float))
+      sequence: (pack
+        (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (foldExpression
+      reducer: (operatorReference)
+      seed: (integer)
+      sequence: (pack
+        (pack
+          (integer)
+          (integer)
+          (integer)))))
+  (assignmentStatement
+    place: (identifier)
+    value: (foldExpression
+      reducer: (operatorReference)
+      seed: (integer)
+      sequence: (pack
+        (identifier))))
+  (assignmentStatement
+    place: (identifier)
+    value: (callExpression
+      callee: (identifier)
+      arguments: (argumentList
+        (foldExpression
+          reducer: (operatorReference)
+          seed: (integer)
+          sequence: (pack
+            (identifier))))))
+  (assignmentStatement
+    place: (identifier)
+    value: (binaryExpression
+      left: (foldExpression
+        reducer: (operatorReference)
+        seed: (integer)
+        sequence: (pack
+          (identifier)))
+      right: (identifier))))
+
+================================================================================
+scopes inside expressions
+================================================================================
+
+x <- [match (i % 2) { 0 -> { x * 2 -| } _ -> { x -| } } : [i, x] <- enumerate(xs)];
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (assignmentStatement
+    place: (identifier)
+    value: (comprehension
+      head: (matchExpression
+        subject: (binaryExpression
+          left: (identifier)
+          right: (integer))
+        arm: (matchArm
+          pattern: (integer)
+          body: (block
+            (yieldStatement
+              value: (binaryExpression
+                left: (identifier)
+                right: (integer)))))
+        arm: (matchArm
+          pattern: (wildcard)
+          body: (block
+            (yieldStatement
+              value: (identifier)))))
+      clause: (membershipClause
+        pattern: (packPattern
+          (identifier)
+          (identifier))
+        source: (callExpression
+          callee: (identifier)
+          arguments: (argumentList
+            (identifier)))))))
