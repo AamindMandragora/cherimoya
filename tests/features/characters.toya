@@ -1,0 +1,78 @@
+# checks char and rune literals, their comparisons and matches, annotations, conversions to and from integers, and the traps for values a char or rune can't hold
+let (c :: char) -> kind -> (r :: int) {
+    match (c) {
+        'a' -> { 1 -| }
+        '\n' -> { 2 -| }
+        _ -> { 3 -| }
+    } -|
+}
+let (n :: int) -> toChar -> (c :: char) { char(n) -| }
+let (n :: int) -> toRune -> (r :: rune) { rune(n) -| }
+
+@test
+let () -> matchLiteral -> () {
+    assert (kind('a') = 1);
+}
+
+@test
+let () -> matchEscape -> () {
+    assert (kind('\n') = 2);
+}
+
+@test
+let () -> matchFallback -> () {
+    assert (kind('z') = 3);
+}
+
+@test
+let () -> chainedCompare -> () {
+    let isLower <- 'a' <= 'q' <= 'z';
+    assert (isLower);
+}
+
+@test
+let () -> intToChar -> () {
+    let shifted <- char(int('A') + 1);
+    assert (shifted = 'B');
+}
+
+@test
+let () -> charToRune -> () {
+    let wide <- rune('b');
+    assert (wide = 'b');
+}
+
+@test
+let () -> compareRunes -> () {
+    let smile <- '\u{1F600}';
+    let e :: rune <- 'é';
+    assert (e < smile);
+}
+
+@test
+let () -> runeToInt -> () {
+    let smile <- '\u{1F600}';
+    let e :: rune <- 'é';
+    assert (int(smile) = 0x1F600);
+    assert (int(e) = 0xE9);
+}
+
+@test
+let () -> hexEscapeToByte -> () {
+    assert (i8u('\x7F') = 127);
+}
+
+@test
+let () -> annotation -> () {
+    assert ((5 :: int) = 5);
+}
+
+@test(traps <- "'char(n)' doesn't fit in char")
+let () -> charTrap -> () {
+    _ <- toChar(200);
+}
+
+@test(traps <- "'rune(n)' doesn't fit in rune")
+let () -> runeTrap -> () {
+    _ <- toRune(0xD800);
+}

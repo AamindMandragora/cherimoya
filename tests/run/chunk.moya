@@ -1,8 +1,0 @@
-# exit: 13
-# checks that a chunk yields like a block, a labeled yield through one, and that wit compiles to nothing
-let () -> start -> (code :: int) {
-    let a <- chunk { 6 -| };
-    let b <- { scratch { chunk { 7 -| scratch } } -| };
-    wit {a > 0};
-    a + b -|
-}

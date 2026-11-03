@@ -1,0 +1,105 @@
+# checks boolf literals, && || ^^ ! and *, comparisons, matches, short-circuiting, conversions to and from floats, bytes, and bools, and the traps for values outside 0 to 1
+let (x :: boolf) -> level -> (r :: int) {
+    match (x) {
+        0 -> { 0 -| }
+        1 -> { 2 -| }
+        _ -> { 1 -| }
+    } -|
+}
+# divides by n, so it traps when it's called with 0
+let (n :: int) -> bad -> (x :: boolf) { boolf(f64(1 / n)) -| }
+let (t :: f64n) -> toBoolfNan -> (x :: boolf) { boolf(t) -| }
+let (t :: float) -> toBoolf -> (x :: boolf) { boolf(t) -| }
+
+@test
+let () -> andIsSmaller -> () {
+    let warm :: boolf <- 0.8;
+    let humid :: boolf <- 0.4;
+    let both <- warm && humid;
+    assert (both = humid);
+}
+
+@test
+let () -> orIsLarger -> () {
+    let warm :: boolf <- 0.8;
+    let humid :: boolf <- 0.4;
+    let either <- warm || humid;
+    assert (either = warm);
+}
+
+@test
+let () -> notComplements -> () {
+    let warm :: boolf <- 0.8;
+    let neither <- !warm;
+    assert (i8u(neither) = 51);
+}
+
+@test
+let () -> product -> () {
+    let warm :: boolf <- 0.8;
+    let humid :: boolf <- 0.4;
+    let product <- warm * humid;
+    assert (int(i8u(product)) = 82);
+}
+
+@test
+let () -> exactlyOne -> () {
+    let warm :: boolf <- 0.8;
+    let humid :: boolf <- 0.4;
+    let exactly <- warm ^^ humid;
+    assert (i8u(exactly) = 153);
+}
+
+@test
+let () -> fromSingle -> () {
+    let back <- boolf(f32(0.25));
+    assert (i8u(back) = 64);
+}
+
+@test
+let () -> fromBoolToDouble -> () {
+    let whole <- f64(boolf(true));
+    assert (whole = 1.0);
+}
+
+@test
+let () -> compare -> () {
+    let warm :: boolf <- 0.8;
+    let humid :: boolf <- 0.4;
+    assert (warm > 0.5);
+    assert (!(humid > 0.5));
+}
+
+# the right sides would trap, so they can't run
+@test
+let () -> shortCircuit -> () {
+    let never :: boolf <- 0;
+    let always :: boolf <- 1;
+    assert ((never && bad(0)) = 0);
+    assert ((always || bad(0)) = 1);
+}
+
+@test
+let () -> matchZero -> () {
+    assert (level(0) = 0);
+}
+
+@test
+let () -> matchTrue -> () {
+    assert (level(true) = 2);
+}
+
+@test
+let () -> matchFallback -> () {
+    assert (level(0.5) = 1);
+}
+
+@test(traps <- "'boolf(t)' doesn't fit in boolf")
+let () -> nanTrap -> () {
+    _ <- toBoolfNan(0.0 / 0.0);
+}
+
+@test(traps <- "'boolf(t)' doesn't fit in boolf")
+let () -> outOfRangeTrap -> () {
+    _ <- toBoolf(1.5);
+}

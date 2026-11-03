@@ -1,0 +1,166 @@
+# checks float arithmetic in several widths, literals in other bases, integer literals standing for floats, conversions between floats and to and from integers, the total order on a NaN-carrying float, matches on floats, and the traps for NaNs and values that don't fit
+let (x :: f16) -> toBrain -> (r :: f16e8m7) { f16e8m7(x) -| }
+let (x :: i8u) -> toSingle -> (r :: f32) { f32(x) -| }
+let (x :: int) -> toHalf -> (r :: f16) { f16(x) -| }
+let (x :: f32) -> toHalfFloat -> (r :: f16) { f16(x) -| }
+let (x :: f16) -> narrowHalf -> (r :: i32) { i32(x) -| }
+let (x :: f64n) -> strict -> (r :: f64) { f64(x / x) -| }
+let (x :: f64n) -> same -> (r :: f64n) { x -| }
+let (x :: f64) -> broken -> (r :: f64) { x / x -| }
+let (x :: f64) -> narrow -> (r :: i8) { i8(x) -| }
+
+@test
+let () -> singleArithmetic -> () {
+    let a :: f32 <- 1.5;
+    let b <- a * 2 + 0.25;
+    assert (b == 3.25);
+}
+
+@test
+let () -> hexLiteral -> () {
+    let h :: f16 <- 0x1.8;
+    assert (h == 1.5);
+}
+
+@test
+let () -> binaryLiteral -> () {
+    let q :: f128 <- 0b10.1;
+    assert (q == 2.5);
+}
+
+@test
+let () -> brainArithmetic -> () {
+    let bf :: f16e8m7 <- 3.0;
+    assert (bf * 2 == 6.0);
+}
+
+@test
+let () -> negatedIntegerLiteral -> () {
+    let a :: f32 <- 1.5;
+    let negative :: f32 <- -3;
+    assert (negative * a == -4.5);
+}
+
+@test
+let () -> widenToDouble -> () {
+    let a :: f32 <- 1.5;
+    let h :: f16 <- 0x1.8;
+    let wide <- f64(a) + f64(h);
+    assert (wide == 3.0);
+    assert (i32(wide) = 3);
+}
+
+@test
+let () -> halfToBrain -> () {
+    assert (toBrain(1.5) == 1.5);
+}
+
+@test
+let () -> fromUnsigned -> () {
+    assert (toSingle(200) == 200.0);
+}
+
+@test
+let () -> fromIntPastRange -> () {
+    assert (toHalf(100000) > 65504.0);
+}
+
+@test
+let () -> singleToHalf -> () {
+    assert (toHalfFloat(0.1) == 0.0999755859375);
+}
+
+@test
+let () -> truncatePositive -> () {
+    assert (i32(2.7) = 2);
+}
+
+@test
+let () -> truncateNegative -> () {
+    assert (i32(-2.7) = -2);
+}
+
+@test
+let () -> saturateHigh -> () {
+    assert (i8w(1000.0) = 127);
+}
+
+@test
+let () -> saturateLow -> () {
+    assert (i8uw(-5.0) = 0);
+}
+
+@test
+let () -> truncateUnsigned -> () {
+    assert (i8u(7.9) = 7);
+}
+
+@test
+let () -> truncateUnsignedAboveMinusOne -> () {
+    assert (i64u(-0.5) = 0);
+}
+
+@test
+let () -> nanBelowEverything -> () {
+    let zero :: f64n <- 0.0;
+    let nan <- same(zero) / zero;
+    let low :: f64n <- -1000000.0;
+    assert (nan < low);
+    assert (!(low < nan));
+}
+
+@test
+let () -> nanEqualsItself -> () {
+    let zero :: f64n <- 0.0;
+    let nan <- same(zero) / zero;
+    assert (nan == nan);
+}
+
+@test
+let () -> negativeZeroDeepEquals -> () {
+    let zero :: f64n <- 0.0;
+    let negative :: f64n <- -0.0;
+    assert (negative == zero);
+    assert (!(negative = zero));
+}
+
+@test
+let () -> matchDeep -> () {
+    let negative <- -0.0;
+    let deep <- match (negative) {
+        0.0 -> { 11 -| }
+        _ -> { 0 -| }
+    };
+    assert (deep = 11);
+}
+
+@test
+let () -> matchBits -> () {
+    let negative <- -0.0;
+    let shallow <- match (=, negative) {
+        0.0 -> { 0 -| }
+        _ -> { 3 -| }
+    };
+    assert (shallow = 3);
+}
+
+@test(traps <- "'i32(x)' doesn't fit in i32")
+let () -> infinityToInt -> () {
+    let zero :: f16 <- 0.0;
+    _ <- narrowHalf(-1.0 / zero);
+}
+
+@test(traps <- "'f64(x / x)' is a NaN, which float can't hold")
+let () -> nanConvert -> () {
+    _ <- strict(0.0);
+}
+
+@test(traps <- "'x / x' made a NaN, which float can't hold")
+let () -> nanMade -> () {
+    _ <- broken(0.0);
+}
+
+@test(traps <- "'i8(x)' doesn't fit in i8")
+let () -> floatToIntOutOfRange -> () {
+    _ <- narrow(300.0);
+}

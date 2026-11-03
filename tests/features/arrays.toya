@@ -1,0 +1,144 @@
+# checks fixed arrays: literals, nested ones, a size from a constant declared after the function using it, indexing, len every way it can be called, writing elements at each level, an uninitialized array filled by index, comparing whole arrays, passing and returning them as copies, and the trap past the end
+let primes <- [2, 3, 5, 7];
+let (xs :: arr[N] int) -> total -> (r :: int) {
+    let sum :: mut <- 0;
+    let i :: mut i64u <- 0;
+    repeat (i < xs.len()) {
+        sum +<- xs[i];
+        i +<- 1;
+    }
+    sum -|
+}
+let N <- 2 + 1;
+let (xs :: arr[3] mut int) -> bumped -> (r :: arr[3] int) {
+    xs[0] +<- 10;
+    xs -|
+}
+let () -> squares -> (r :: arr[4] i8u) { [0, 1, 4, 9] -| }
+let (i :: i64u) -> pick -> (r :: int) {
+    let xs <- [10, 20, 30];
+    xs[i] -|
+}
+
+@test
+let () -> nestedWrite -> () {
+    let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
+    grid[1][2] <- 60;
+    assert (grid[1][2] = 60);
+    assert (grid = [[1, 2, 3], [4, 5, 60]]);
+}
+
+@test
+let () -> compoundAssignElement -> () {
+    let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
+    grid[0][0] +<- 9;
+    assert (grid[0] = [10, 2, 3]);
+}
+
+@test
+let () -> writeCopiedRow -> () {
+    let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
+    grid[1][2] <- 60;
+    let row :: arr[3] mut int <- grid[1];
+    row[0] <- primes[3];
+    assert (row = [7, 5, 60]);
+    assert (grid[1] = [4, 5, 60]);
+}
+
+@test
+let () -> globalIndex -> () {
+    assert (primes[3] = 7);
+}
+
+@test
+let () -> sizeFromLaterConstant -> () {
+    let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
+    grid[1][2] <- 60;
+    grid[0][0] +<- 9;
+    let row :: arr[3] mut int <- grid[1];
+    row[0] <- primes[3];
+    assert (total(row) = 72);
+    assert (total(grid[0]) = 15);
+}
+
+@test
+let () -> lenAsFunction -> () {
+    let grid <- [[1, 2, 3], [4, 5, 6]];
+    assert (len(grid) = 2);
+}
+
+@test
+let () -> lenAsPipe -> () {
+    let grid <- [[1, 2, 3], [4, 5, 6]];
+    assert ((grid[0] |> .len) = 3);
+}
+
+@test
+let () -> lenAsBackwardPipe -> () {
+    assert ((.len <| primes) = 4);
+}
+
+@test
+let () -> lenAsMethod -> () {
+    assert (primes.len() = 4);
+    assert (int(primes.len()) = 4);
+}
+
+@test
+let () -> lenCombined -> () {
+    let grid <- [[1, 2, 3], [4, 5, 6]];
+    let count <- len(grid) + (grid[0] |> .len) - (.len <| primes) + primes.len();
+    assert (count = 5);
+}
+
+@test
+let () -> uninitializedFilledByIndex -> () {
+    let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
+    grid[0][0] +<- 9;
+    let flags :: arr[2] mut bool <- _;
+    flags[0] <- true;
+    flags[1] <- grid[0] = [10, 2, 3];
+    assert (flags[0]);
+    assert (flags[1]);
+}
+
+@test
+let () -> compareWholeArrays -> () {
+    let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
+    grid[1][2] <- 60;
+    grid[0][0] +<- 9;
+    assert (grid[0] = [10, 2, 3]);
+    assert (grid[0] != grid[1]);
+}
+
+@test
+let () -> compareFloatArraysDeeply -> () {
+    assert ([1.5, 2] == [1.5, 2.0]);
+}
+
+@test
+let () -> passedAsCopy -> () {
+    let original <- [1, 2, 3];
+    let copy <- bumped(original);
+    assert (original[0] = 1);
+    assert (copy[0] = 11);
+}
+
+@test
+let () -> returnedAsValue -> () {
+    let original <- [1, 2, 3];
+    let copy <- bumped(original);
+    assert (copy = [11, 2, 3]);
+    assert (copy[0] + copy[1] = 13);
+}
+
+@test
+let () -> indexCallResult -> () {
+    assert (squares()[3] = 9);
+    assert (int(squares()[3]) = 9);
+}
+
+@test(traps <- "index 7 is past the end of 'xs', which holds 3")
+let () -> indexPastEnd -> () {
+    _ <- pick(7);
+}

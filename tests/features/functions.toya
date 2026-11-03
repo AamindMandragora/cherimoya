@@ -1,0 +1,56 @@
+# checks calls with parameters, named arguments in any order, defaults that read the inputs before them, a default that calls its own function, pipes into calls with the rest of the arguments, and that arguments run in the order they're written
+let (a :: int, b :: int <- a * 2, c :: int <- a + b) -> sum -> (r :: int) { a + b + c -| }
+let (n :: int, m :: int <- inc(n, 1)) -> inc -> (r :: int) { n + m -| }
+let (a :: i8, b :: int) -> pick -> (r :: int) { b -| }
+let (a :: int, b :: int) -> add -> (r :: int) { a + b -| }
+let (n :: int) -> double -> (r :: int) { n * 2 -| }
+
+@test
+let () -> defaults -> () {
+    assert (sum(1) = 6);
+}
+
+@test
+let () -> reordered -> () {
+    assert (sum(c <- 10, a <- 2) = 16);
+}
+
+@test
+let () -> mixed -> () {
+    assert (sum(1, b <- 5) = 12);
+}
+
+@test
+let () -> recursiveDefault -> () {
+    assert (inc(5) = 11);
+}
+
+@test
+let () -> forwardPipeWithArguments -> () {
+    let forward <- 3 |> sum(c <- 0);
+    assert (forward = 9);
+}
+
+@test
+let () -> backwardPipeWithArguments -> () {
+    let backward <- sum(b <- 1) <| 4;
+    assert (backward = 10);
+}
+
+@test
+let () -> barePipe -> () {
+    let bare <- 5 |> inc;
+    assert (bare = 11);
+}
+
+@test
+let () -> callAsArgument -> () {
+    assert (double(30) = 60);
+    assert (add(double(30), 1) = 61);
+}
+
+@test(traps <- "'1 / z' divided by zero")
+let () -> argumentOrder -> () {
+    let z <- 0;
+    _ <- pick(b <- 1 / z, a <- i8(300));
+}

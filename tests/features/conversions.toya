@@ -1,0 +1,32 @@
+# checks integer conversions that widen, narrow when the value fits, and wrap into a wrapping type, and the traps when a value doesn't fit a trapping one
+let (x :: i8u) -> toSigned -> (r :: i8) { i8(x) -| }
+let (x :: i32) -> toUnsigned -> (r :: i32u) { i32u(x) -| }
+
+@test
+let () -> widen -> () {
+    let small :: i8 <- -5;
+    let wide <- i64(small);
+    assert (wide = -5);
+}
+
+@test
+let () -> narrowWhenFits -> () {
+    let fits <- i8u(200 |> i16);
+    assert (fits = 200);
+}
+
+@test
+let () -> wrapIntoWrapping -> () {
+    let wrapped <- i8w(300);
+    assert (wrapped = 44);
+}
+
+@test(traps <- "'i8(x)' doesn't fit in i8")
+let () -> unsignedPastSignedMax -> () {
+    _ <- toSigned(200);
+}
+
+@test(traps <- "'i32u(x)' doesn't fit in i32u")
+let () -> negativeIntoUnsigned -> () {
+    _ <- toUnsigned(-1);
+}

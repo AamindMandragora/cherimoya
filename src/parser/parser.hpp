@@ -51,10 +51,12 @@ class Parser {
         engine.printError("cherimoya expected " + std::string(what) + ", got " + describe(tok) + " instead", tokSpan(tok));
     }
 
-    // names a token for a diagnostic: its text up to the end of its first line, or the end of the file
+    // names a token for a diagnostic: its text up to the end of its first line, or the end of the file, where a keyword says it's one, since it looks like a name that should have worked
     std::string describe(const Token& tok) {
         if (tok.kind == TokenKind::Eof) return "the end of the file";
-        return "'" + std::string(tok.text.substr(0, tok.text.find('\n'))) + "'";
+        auto keyword = keywordTable().find(tok.text);
+        std::string kind = keyword != keywordTable().end() && keyword->second != TokenKind::TypeName && keyword->second == tok.kind ? "the keyword " : "";
+        return kind + "'" + std::string(tok.text.substr(0, tok.text.find('\n'))) + "'";
     }
 
     // names an expression for a diagnostic by its kind

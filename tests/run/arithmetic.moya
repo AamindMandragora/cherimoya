@@ -1,3 +1,0 @@
-# exit: 67
-# checks integer arithmetic and its precedence
-let () -> start -> (code :: int) { (12 + 3) * 5 - 16 / 2 -| }
