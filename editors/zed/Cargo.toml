@@ -1,0 +1,13 @@
+# the extension's Rust, which Zed compiles to WebAssembly and runs to find the language server
+[package]
+name = "cherimoya-zed"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+zed_extension_api = "0.7.0"

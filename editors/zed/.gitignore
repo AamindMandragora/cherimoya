@@ -1,0 +1,5 @@
+# what building the extension leaves behind: Rust's target, the compiled extension, and the grammars Zed fetches and builds
+/target/
+/Cargo.lock
+/extension.wasm
+/grammars/
