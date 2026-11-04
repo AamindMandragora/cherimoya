@@ -9,6 +9,7 @@ enum class SemaTypeKind {
     Int,
     Float,
     Array,
+    Handle,
     Function,
     Error
 };
@@ -124,6 +125,45 @@ public:
 // the array type a sema type is, or null if it isn't one
 inline ArraySemaType* asArray(SemaType* type) {
     return type != nullptr && type->kind == SemaTypeKind::Array ? static_cast<ArraySemaType*>(type) : nullptr;
+}
+
+// a handle owns memory on the heap: an array's elements, as many as it was made with, or a pointer's one value, so arr int is the elements' address and how many there are, and ptr int is one int's address, where like a fixed array's, whether what it holds can be written is the binding's business
+enum class HandleKind { Array, Pointer };
+class HandleSemaType : public SemaType {
+public:
+    HandleKind handle;
+    SemaType* element;
+    HandleSemaType(HandleKind h, SemaType* e) : SemaType(SemaTypeKind::Handle), handle(h), element(e) {}
+    std::string toString() const override {
+        return (handle == HandleKind::Array ? "arr " : "ptr ") + element->toString();
+    }
+};
+
+// the handle type a sema type is, or null if it isn't one, and the same for each kind of handle
+inline HandleSemaType* asHandle(SemaType* type) {
+    return type != nullptr && type->kind == SemaTypeKind::Handle ? static_cast<HandleSemaType*>(type) : nullptr;
+}
+inline HandleSemaType* asHeapArray(SemaType* type) {
+    HandleSemaType* handle = asHandle(type);
+    return handle && handle->handle == HandleKind::Array ? handle : nullptr;
+}
+inline HandleSemaType* asPointer(SemaType* type) {
+    HandleSemaType* handle = asHandle(type);
+    return handle && handle->handle == HandleKind::Pointer ? handle : nullptr;
+}
+
+// what a type holds one level in, which mut can make writable: a fixed or heap array's elements, or a pointer's value, or null for a type that holds nothing
+inline SemaType* elementOf(SemaType* type) {
+    if (ArraySemaType* array = asArray(type)) return array->element;
+    if (HandleSemaType* handle = asHandle(type)) return handle->element;
+    return nullptr;
+}
+
+// checks whether a value of a type owns memory, which has to be freed exactly once, so it moves instead of copying: a handle, or a fixed array of anything that owns
+inline bool owns(SemaType* type) {
+    if (asHandle(type)) return true;
+    if (ArraySemaType* array = asArray(type)) return owns(array->element);
+    return false;
 }
 
 // a function type is its parameters' types and the type it yields

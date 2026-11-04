@@ -1,0 +1,23 @@
+# dwarf: DW_TAG_structure_type
+# dwarf: DW_TAG_pointer_type
+# gdb: break handles.moya:22
+# gdb: run
+# gdb: print xs
+# gdb: print bytes
+# gdb: print grid
+# gdb: print p[0]
+# gdb: print table
+# expect: $1 = arr int of 3 = {1, 2, 3}
+# expect: $2 = arr i8 of 2 = {-1, 7}
+# expect: $3 = arr arr int of 2 = {arr int of 1 = {5}, arr int of 1 = {5}}
+# expect: $4 = 42
+# expect: $5 = arr int of 2 = {0, 0}
+# checks that an array on the heap shows as its elements, nested ones too, with 1-byte elements as numbers, that a pointer is a pointer gdb follows, and that a top-level array on the heap is a global like any binding
+let table <- arr int([0, 0]);
+let () -> start -> (code :: int) {
+    let xs <- arr int([1, 2, 3]);
+    let bytes <- arr i8([-1, 7]);
+    let grid <- arr[table.len()] arr int(arr int([5]));
+    let p <- ptr int(42);
+    int(xs.len()) + p[] -|
+}

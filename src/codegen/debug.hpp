@@ -47,7 +47,7 @@ class DebugInfo {
         return {static_cast<unsigned>(line + 1), static_cast<unsigned>(offset - lineStarts[line] + 1)};
     }
 
-    // a value's debug type: integers by their sign, arrays as their elements, bool and characters as themselves, a boolf as fixed-point with a scale of 1/255, so gdb prints 179 as 0.702, the floats a debugger decodes as floats, and FP8, bfloat16, and f128, which gdb would decode wrong, as their raw bits, which the embedded printers decode, where void and never have none
+    // a value's debug type: integers by their sign, fixed arrays as their elements, handles as pointers, an array on the heap as its address and length, bool and characters as themselves, a boolf as fixed-point with a scale of 1/255, so gdb prints 179 as 0.702, the floats a debugger decodes as floats, and FP8, bfloat16, and f128, which gdb would decode wrong, as their raw bits, which the embedded printers decode, where void and never have none
     llvm::DIType* typeOf(SemaType* type) {
         auto found = types.find(type);
         if (found != types.end()) return found->second;
@@ -67,6 +67,20 @@ class DebugInfo {
             llvm::DIType* element = typeOf(array->element);
             auto subscripts = builder.getOrCreateArray({builder.getOrCreateSubrange(0, static_cast<int64_t>(array->size))});
             made = builder.createArrayType(array->size * element->getSizeInBits(), 0, element, subscripts);
+        } else if (auto handle = asHandle(type)) {
+            // a pointer is a pointer to its value, named the way the source names it, and an array on the heap is a structure of its elements' address and how many there are, which the embedded printers show as its elements
+            llvm::DIType* element = typeOf(handle->element);
+            llvm::DIType* pointer = builder.createPointerType(element, 64, 0, std::nullopt, handle->handle == HandleKind::Pointer ? name : "");
+            if (handle->handle == HandleKind::Pointer) {
+                made = pointer;
+            } else {
+                llvm::DIType* length = builder.createBasicType("i64u", 64, llvm::dwarf::DW_ATE_unsigned);
+                auto members = builder.getOrCreateArray({
+                    builder.createMemberType(file, "data", file, 0, 64, 64, 0, llvm::DINode::FlagZero, pointer),
+                    builder.createMemberType(file, "len", file, 0, 64, 64, 64, llvm::DINode::FlagZero, length),
+                });
+                made = builder.createStructType(file, name, file, 0, 128, 64, llvm::DINode::FlagZero, nullptr, members);
+            }
         } else if (type->kind == SemaTypeKind::Primitive) {
             switch (static_cast<PrimitiveSemaType*>(type)->primitive) {
                 case PrimitiveKind::Bool:

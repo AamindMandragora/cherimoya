@@ -30,6 +30,8 @@ class Codegen {
     SourceManager& manager;
     // the debug info being written alongside the code, or null for a build without it
     std::unique_ptr<DebugInfo> debug;
+    // what sema worked out about ownership: which bindings each way out of a scope frees, which values are temporaries, and which assignments free what they replace
+    const Sema& sema;
 
     // while one lives, every instruction codegen emits points at a span, for the debugger, and the location before it comes back once it goes, so an operator's own instructions point at the operator once its operands are done
     class Located {
@@ -76,7 +78,7 @@ class Codegen {
     // sema interns its types, so each one is lowered once and looked up by pointer after that
     std::unordered_map<SemaType*, llvm::Type*> lowered;
 
-    // turns a sema type into an LLVM type: an integer is as wide as its type, bool is i1, boolf and char are bytes, rune is 32 bits, a float is LLVM's type for its encoding, FP8 is a byte, and void and never are void
+    // turns a sema type into an LLVM type: an integer is as wide as its type, bool is i1, boolf and char are bytes, rune is 32 bits, a float is LLVM's type for its encoding, FP8 is a byte, an array on the heap is its elements' address and how many there are, a pointer is an address, and void and never are void
     llvm::Type* lower(SemaType* type) {
         auto found = lowered.find(type);
         if (found != lowered.end()) return found->second;
@@ -104,6 +106,9 @@ class Codegen {
                 auto& array = static_cast<ArraySemaType&>(*type);
                 return lowered[type] = llvm::ArrayType::get(lower(array.element), array.size);
             }
+            case SemaTypeKind::Handle:
+                if (asPointer(type)) return lowered[type] = irbuilder.getPtrTy();
+                return lowered[type] = llvm::StructType::get(context, {irbuilder.getPtrTy(), irbuilder.getInt64Ty()});
             case SemaTypeKind::Function: {
                 auto& function = static_cast<FunctionSemaType&>(*type);
                 std::vector<llvm::Type*> params;
@@ -278,6 +283,144 @@ class Codegen {
         return f;
     }
 
+    // how many bytes a value of an LLVM type takes in an array of them, which the data layout only decides once the module is built for a machine, so it's the address of the second one past null
+    llvm::Value* sizeOf(llvm::Type* type) {
+        llvm::Value* past = irbuilder.CreateGEP(type, llvm::ConstantPointerNull::get(irbuilder.getPtrTy()), irbuilder.getInt64(1));
+        return irbuilder.CreatePtrToInt(past, irbuilder.getInt64Ty());
+    }
+
+    // allocates count values of an element type through the runtime, zeroed when asked, which traps when they don't fit, saying what was being made: out of memory making 'arr int(n)'
+    llvm::Value* allocate(llvm::Value* count, llvm::Type* element, bool isZeroed, Span span) {
+        auto* type = llvm::FunctionType::get(irbuilder.getPtrTy(), {irbuilder.getInt64Ty(), irbuilder.getInt64Ty(), irbuilder.getInt32Ty(), irbuilder.getPtrTy(), irbuilder.getInt64Ty()}, false);
+        auto alloc = module->getOrInsertFunction("cheri_alloc", type);
+        uint64_t line = manager.getLineCol(span.start).line;
+        return irbuilder.CreateCall(alloc, {count, sizeOf(element), irbuilder.getInt32(isZeroed), irbuilder.CreateGlobalString("out of memory making " + quoted(span)), irbuilder.getInt64(line)});
+    }
+
+    // an array on the heap as one value, its elements' address and how many there are
+    llvm::Value* heapArray(llvm::Type* type, llvm::Value* data, llvm::Value* length) {
+        return irbuilder.CreateInsertValue(irbuilder.CreateInsertValue(llvm::PoisonValue::get(type), data, {0}), length, {1});
+    }
+
+    // runs body once for each i from 0 to below count, in a loop of its own
+    template <typename Body>
+    void forEach(llvm::Value* count, Body body) {
+        llvm::Function* f = irbuilder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* entry = irbuilder.GetInsertBlock();
+        llvm::BasicBlock* header = llvm::BasicBlock::Create(context, "each.header", f);
+        llvm::BasicBlock* loop = llvm::BasicBlock::Create(context, "each.body", f);
+        llvm::BasicBlock* done = llvm::BasicBlock::Create(context, "each.done", f);
+        irbuilder.CreateBr(header);
+        irbuilder.SetInsertPoint(header);
+        llvm::PHINode* i = irbuilder.CreatePHI(irbuilder.getInt64Ty(), 2, "i");
+        i->addIncoming(irbuilder.getInt64(0), entry);
+        irbuilder.CreateCondBr(irbuilder.CreateICmpULT(i, count), loop, done);
+        irbuilder.SetInsertPoint(loop);
+        body(i);
+        i->addIncoming(irbuilder.CreateAdd(i, irbuilder.getInt64(1)), irbuilder.GetInsertBlock());
+        irbuilder.CreateBr(header);
+        irbuilder.SetInsertPoint(done);
+    }
+
+    // frees what a value owns, all the way down: an array on the heap frees each element that owns something, then its memory, a pointer its value, then its memory, and a fixed array each element, where a pointer that's null, which only a top-level binding that hasn't been written yet holds, frees nothing
+    void drop(llvm::Value* value, SemaType* type, bool isFreed = true) {
+        if (!owns(type)) return;
+        llvm::FunctionCallee release = module->getOrInsertFunction("free", llvm::FunctionType::get(irbuilder.getVoidTy(), {irbuilder.getPtrTy()}, false));
+        if (HandleSemaType* handle = asHandle(type)) {
+            bool isArray = handle->handle == HandleKind::Array;
+            llvm::Value* data = isArray ? irbuilder.CreateExtractValue(value, {0}) : value;
+            if (owns(handle->element)) {
+                llvm::Type* element = lower(handle->element);
+                if (isArray) {
+                    forEach(irbuilder.CreateExtractValue(value, {1}), [&](llvm::Value* i) { drop(irbuilder.CreateLoad(element, irbuilder.CreateGEP(element, data, i)), handle->element); });
+                } else {
+                    llvm::Function* f = irbuilder.GetInsertBlock()->getParent();
+                    llvm::BasicBlock* held = llvm::BasicBlock::Create(context, "drop.held", f);
+                    llvm::BasicBlock* done = llvm::BasicBlock::Create(context, "drop.done", f);
+                    irbuilder.CreateCondBr(irbuilder.CreateIsNull(data), done, held);
+                    irbuilder.SetInsertPoint(held);
+                    drop(irbuilder.CreateLoad(element, data), handle->element);
+                    irbuilder.CreateBr(done);
+                    irbuilder.SetInsertPoint(done);
+                }
+            }
+            // a handle on the stack frees what its elements own, but its own memory goes with the function's frame
+            if (isFreed) irbuilder.CreateCall(release, {data});
+            return;
+        }
+        auto& array = *asArray(type);
+        llvm::AllocaInst* slot = makeAlloca(lower(&array), "dropped");
+        irbuilder.CreateStore(value, slot);
+        llvm::Type* element = lower(array.element);
+        forEach(irbuilder.getInt64(array.size), [&](llvm::Value* i) { drop(irbuilder.CreateLoad(element, irbuilder.CreateGEP(lower(&array), slot, {irbuilder.getInt64(0), i})), array.element); });
+    }
+
+    // a deep copy of a value, which only differs from the value when it owns something: an array on the heap gets new memory holding a copy of each element, a pointer a new value, and a fixed array a copy of each element, where span is what's being made, for the trap when it doesn't fit
+    llvm::Value* copy(llvm::Value* value, SemaType* type, Span span) {
+        if (!owns(type)) return value;
+        if (HandleSemaType* handle = asHandle(type)) {
+            llvm::Type* element = lower(handle->element);
+            if (handle->handle == HandleKind::Pointer) {
+                llvm::Value* memory = allocate(irbuilder.getInt64(1), element, false, span);
+                irbuilder.CreateStore(copy(irbuilder.CreateLoad(element, value), handle->element, span), memory);
+                return memory;
+            }
+            llvm::Value* data = irbuilder.CreateExtractValue(value, {0});
+            llvm::Value* length = irbuilder.CreateExtractValue(value, {1});
+            llvm::Value* memory = allocate(length, element, false, span);
+            if (owns(handle->element)) {
+                forEach(length, [&](llvm::Value* i) {
+                    llvm::Value* original = irbuilder.CreateLoad(element, irbuilder.CreateGEP(element, data, i));
+                    irbuilder.CreateStore(copy(original, handle->element, span), irbuilder.CreateGEP(element, memory, i));
+                });
+            } else {
+                irbuilder.CreateMemCpy(memory, llvm::MaybeAlign(), data, llvm::MaybeAlign(), irbuilder.CreateMul(length, sizeOf(element)));
+            }
+            return heapArray(lower(type), memory, length);
+        }
+        auto& array = *asArray(type);
+        llvm::Type* arrayType = lower(&array);
+        llvm::Type* element = lower(array.element);
+        llvm::AllocaInst* original = makeAlloca(arrayType, "original");
+        llvm::AllocaInst* copied = makeAlloca(arrayType, "copied");
+        irbuilder.CreateStore(value, original);
+        forEach(irbuilder.getInt64(array.size), [&](llvm::Value* i) {
+            llvm::Value* each = irbuilder.CreateLoad(element, irbuilder.CreateGEP(arrayType, original, {irbuilder.getInt64(0), i}));
+            irbuilder.CreateStore(copy(each, array.element, span), irbuilder.CreateGEP(arrayType, copied, {irbuilder.getInt64(0), i}));
+        });
+        return irbuilder.CreateLoad(arrayType, copied);
+    }
+
+    // frees what each binding holds, in the order given, which is last declared first
+    void dropAll(const std::vector<Symbol*>& symbols) {
+        for (Symbol* symbol : symbols) drop(irbuilder.CreateLoad(lower(symbol->type), addressOf(symbol)), symbol->type, !sema.isOnStack(symbol));
+    }
+
+    // the owning values made in each statement being emitted, and in each condition inside one, innermost last, which are freed once it's done with them
+    struct Temporary {
+        llvm::Value* value;
+        SemaType* type;
+        bool isOnStack;
+    };
+    std::vector<std::vector<Temporary>> temporaries;
+
+    // frees the temporaries of every frame from depth in, innermost first, which a yield leaving them does, where the frames stay, since the code after the yield is never emitted
+    void dropTemporaries(size_t depth) {
+        for (size_t i = temporaries.size(); i-- > depth;) {
+            for (size_t j = temporaries[i].size(); j-- > 0;) drop(temporaries[i][j].value, temporaries[i][j].type, !temporaries[i][j].isOnStack);
+        }
+    }
+
+    // emits body with a frame of temporaries of its own, freed once it's done, for a condition or anything else that runs apart from the rest of its statement
+    template <typename Body>
+    auto withTemporaries(Body body) {
+        temporaries.emplace_back();
+        auto value = body();
+        if (!irbuilder.GetInsertBlock()->getTerminator()) dropTemporaries(temporaries.size() - 1);
+        temporaries.pop_back();
+        return value;
+    }
+
     // where a place's value lives: a binding's slot or global, or an element inside one, where a value that isn't a place, like a call's result, is put in a slot of its own first, so it can be indexed too
     llvm::Value* placeAddress(Expr& e) {
         if (e.kind == ExprKind::Identifier) return addressOf(static_cast<IdentifierExpr&>(e).decl);
@@ -288,17 +431,73 @@ class Codegen {
         return slot;
     }
 
-    // the address of an element, xs[i], which traps when the index is past the end, saying the index, the array, and how many it holds: index 7 is past the end of 'xs', which holds 5
+    // the address of an element, xs[i], which traps when the index is past the end, saying the index, the array, and how many it holds: index 7 is past the end of 'xs', which holds 5, where a fixed array's elements are inside it and an array on the heap's are where its handle points, and the address of a pointer's value, p[], which is the pointer itself
     llvm::Value* elementAddress(IndexExpr& index) {
-        auto& array = static_cast<ArraySemaType&>(*index.object->type);
+        SemaType* objectType = index.object->type;
         llvm::Value* base = placeAddress(*index.object);
+        if (index.args.empty()) return irbuilder.CreateLoad(irbuilder.getPtrTy(), base);
+        HandleSemaType* heap = asHeapArray(objectType);
+        llvm::Value* handle = heap ? irbuilder.CreateLoad(lower(objectType), base) : nullptr;
         llvm::Value* position = irbuilder.CreateZExt(emitExpr(*index.args[0]), irbuilder.getInt64Ty());
-        llvm::Value* length = irbuilder.getInt64(array.size);
+        llvm::Value* length = heap ? irbuilder.CreateExtractValue(handle, {1}) : irbuilder.getInt64(asArray(objectType)->size);
         uint64_t line = manager.getLineCol(index.span.start).line;
         trapIf(irbuilder.CreateICmpUGE(position, length), [&] {
             irbuilder.CreateCall(indexTrap(), {position, length, irbuilder.CreateGlobalString(sourceText(index.object->span)), irbuilder.getInt64(line)});
         });
-        return irbuilder.CreateGEP(lower(&array), base, {irbuilder.getInt64(0), position});
+        if (heap) return irbuilder.CreateGEP(lower(heap->element), irbuilder.CreateExtractValue(handle, {0}), position);
+        return irbuilder.CreateGEP(lower(objectType), base, {irbuilder.getInt64(0), position});
+    }
+
+    // compares two arrays on the heap element by element with = or ==, once their lengths agree, stopping at the first pair that differs
+    llvm::Value* compareHeapArrays(TokenKind same, llvm::Value* lhs, llvm::Value* rhs, HandleSemaType& array) {
+        llvm::Type* element = lower(array.element);
+        llvm::Value* length = irbuilder.CreateExtractValue(lhs, {1});
+        llvm::Value* left = irbuilder.CreateExtractValue(lhs, {0});
+        llvm::Value* right = irbuilder.CreateExtractValue(rhs, {0});
+        llvm::Function* f = irbuilder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* entry = irbuilder.GetInsertBlock();
+        llvm::BasicBlock* header = llvm::BasicBlock::Create(context, "compare.header", f);
+        llvm::BasicBlock* body = llvm::BasicBlock::Create(context, "compare.body", f);
+        llvm::BasicBlock* done = llvm::BasicBlock::Create(context, "compare.done", f);
+        irbuilder.CreateCondBr(irbuilder.CreateICmpEQ(length, irbuilder.CreateExtractValue(rhs, {1})), header, done);
+        irbuilder.SetInsertPoint(header);
+        llvm::PHINode* i = irbuilder.CreatePHI(irbuilder.getInt64Ty(), 2, "i");
+        i->addIncoming(irbuilder.getInt64(0), entry);
+        irbuilder.CreateCondBr(irbuilder.CreateICmpULT(i, length), body, done);
+        irbuilder.SetInsertPoint(body);
+        llvm::Value* a = irbuilder.CreateLoad(element, irbuilder.CreateGEP(element, left, i));
+        llvm::Value* b = irbuilder.CreateLoad(element, irbuilder.CreateGEP(element, right, i));
+        llvm::Value* equal = compare(same, a, b, array.element);
+        llvm::BasicBlock* decided = irbuilder.GetInsertBlock();
+        llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "compare.next", f);
+        irbuilder.CreateCondBr(equal, next, done);
+        irbuilder.SetInsertPoint(next);
+        i->addIncoming(irbuilder.CreateAdd(i, irbuilder.getInt64(1)), next);
+        irbuilder.CreateBr(header);
+        irbuilder.SetInsertPoint(done);
+        llvm::PHINode* result = irbuilder.CreatePHI(irbuilder.getInt1Ty(), 3, "equal");
+        result->addIncoming(irbuilder.getFalse(), entry);
+        result->addIncoming(irbuilder.getTrue(), header);
+        result->addIncoming(irbuilder.getFalse(), decided);
+        return result;
+    }
+
+    // compares two handles: = asks whether they're the same memory, the same address, and for arrays the same length, and == compares what they hold, element by element or value against value, with ==
+    llvm::Value* compareHandles(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, HandleSemaType& handle) {
+        bool isNegated = op == TokenKind::Ne || op == TokenKind::NeEq;
+        bool isDeep = op == TokenKind::EqEq || op == TokenKind::NeEq;
+        bool isArray = handle.handle == HandleKind::Array;
+        llvm::Value* result;
+        if (!isDeep) {
+            result = isArray ? irbuilder.CreateAnd(irbuilder.CreateICmpEQ(irbuilder.CreateExtractValue(lhs, {0}), irbuilder.CreateExtractValue(rhs, {0})), irbuilder.CreateICmpEQ(irbuilder.CreateExtractValue(lhs, {1}), irbuilder.CreateExtractValue(rhs, {1})))
+                : irbuilder.CreateICmpEQ(lhs, rhs);
+        } else if (isArray) {
+            result = compareHeapArrays(TokenKind::EqEq, lhs, rhs, handle);
+        } else {
+            llvm::Type* element = lower(handle.element);
+            result = compare(TokenKind::EqEq, irbuilder.CreateLoad(element, lhs), irbuilder.CreateLoad(element, rhs), handle.element);
+        }
+        return isNegated ? irbuilder.CreateNot(result) : result;
     }
 
     // builds an array literal's value, a constant when every element is one, which a global can start out holding, and otherwise one element at a time
@@ -691,6 +890,7 @@ class Codegen {
     // emits one built-in comparison on two values of the same type, where FP8's = and != compare its bytes and everything else compares in f32, a character compares as its code point, a boolf as its byte, and a bool, the one other type that's compared, only has equality, and its bits are its value
     llvm::Value* compare(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, SemaType* type) {
         if (ArraySemaType* array = asArray(type)) return compareArrays(op, lhs, rhs, *array);
+        if (HandleSemaType* handle = asHandle(type)) return compareHandles(op, lhs, rhs, *handle);
         if (FloatSemaType* floating = asFloat(type)) {
             if (!isFp8(*floating)) return floatCompare(op, lhs, rhs, *floating);
             if (op == TokenKind::Eq) return irbuilder.CreateICmpEQ(lhs, rhs);
@@ -796,7 +996,7 @@ class Codegen {
         llvm::Value* isDecided = isFuzzy ? irbuilder.CreateICmpEQ(lhs, irbuilder.getInt8(isAnd ? 0 : 255)) : isAnd ? irbuilder.CreateNot(lhs) : lhs;
         irbuilder.CreateCondBr(isDecided, end, rhsBlock);
         irbuilder.SetInsertPoint(rhsBlock);
-        llvm::Value* rhs = emitExpr(rhsExpr);
+        llvm::Value* rhs = withTemporaries([&] { return emitExpr(rhsExpr); });
         // a boolf's && is the minimum and its || the maximum, and a bool's answer is just b
         if (isFuzzy) rhs = irbuilder.CreateBinaryIntrinsic(isAnd ? llvm::Intrinsic::umin : llvm::Intrinsic::umax, lhs, rhs);
         llvm::BasicBlock* rhsEnd = irbuilder.GetInsertBlock();
@@ -824,10 +1024,62 @@ class Codegen {
         return callee.kind == ExprKind::Identifier && static_cast<const IdentifierExpr&>(callee).decl == nullptr && static_cast<const IdentifierExpr&>(callee).name == "len";
     }
 
-    // xs.len() is the array's length, which its type knows, where xs is still evaluated for whatever it does
+    // xs.len() is the array's length, which a fixed array's type knows, where xs is still evaluated for whatever it does, and an array on the heap holds beside its elements' address
     llvm::Value* emitLen(Expr& array) {
-        emitExpr(array);
+        llvm::Value* value = emitExpr(array);
+        if (asHeapArray(array.type)) return irbuilder.CreateExtractValue(value, {1});
         return irbuilder.getInt64(asArray(array.type)->size);
+    }
+
+    // makes an array or a pointer by calling its type: ptr T(v) puts v in memory of its own, arr T(xs) puts a fixed array's elements there, and arr[n] T(...) makes n zeroed elements, which is every type's default, n uninitialized ones, or n deep copies of a fill, as a fixed array when sema folded n, and on the heap otherwise, where a handle sema found never outlives its function goes in the function's frame instead, as many elements as sema folded
+    llvm::Value* emitMake(Expr& made, Expr& callee, const std::vector<Expr*>& args, Span span) {
+        bool isOnStack = sema.isOnStack(&made);
+        auto memoryFor = [&](llvm::Type* element, llvm::Value* count, bool isZeroed) -> llvm::Value* {
+            if (!isOnStack) return allocate(count, element, isZeroed, span);
+            llvm::AllocaInst* slot = makeAlloca(llvm::ArrayType::get(element, sema.stackCount(&made)), "stacked");
+            if (isZeroed) irbuilder.CreateStore(llvm::Constant::getNullValue(slot->getAllocatedType()), slot);
+            return slot;
+        };
+        // the length of an arr[n] T(...) on the heap, then its fill, in the order they're written, both before the memory they go in, the way a call's arguments are, where a fill that's a constant of all zero bits, like 0, 0.0, or false, is the same as the default, so the memory starts out zeroed and nothing has to fill it, and _ leaves it as it is
+        llvm::Value* fill = nullptr;
+        bool isZeroed = args.empty();
+        bool isSized = asArray(callee.type) || (asHeapArray(callee.type) && (args.empty() || !asArray(args[0]->type)));
+        llvm::Value* length = isSized && !asArray(callee.type) ? irbuilder.CreateZExt(emitExpr(*sema.lengthOf(&callee)), irbuilder.getInt64Ty()) : nullptr;
+        if (isSized && !args.empty() && args[0]->kind != ExprKind::Wildcard) {
+            fill = emitExpr(*args[0]);
+            auto* constant = llvm::dyn_cast<llvm::Constant>(fill);
+            isZeroed = constant && constant->isNullValue();
+        }
+        // a deep copy of the fill in each of count elements from the address memory on, unless the memory started out zeroed or there's no fill
+        auto fillIn = [&](llvm::Value* memory, llvm::Value* count, SemaType* element) {
+            if (!fill || isZeroed) return;
+            llvm::Type* type = lower(element);
+            forEach(count, [&](llvm::Value* i) { irbuilder.CreateStore(copy(fill, element, span), irbuilder.CreateGEP(type, memory, i)); });
+        };
+        if (ArraySemaType* fixed = asArray(callee.type)) {
+            llvm::AllocaInst* slot = makeAlloca(lower(fixed), "made");
+            if (isZeroed) irbuilder.CreateStore(llvm::Constant::getNullValue(lower(fixed)), slot);
+            fillIn(irbuilder.CreateGEP(lower(fixed), slot, {irbuilder.getInt64(0), irbuilder.getInt64(0)}), irbuilder.getInt64(fixed->size), fixed->element);
+            return irbuilder.CreateLoad(lower(fixed), slot);
+        }
+        auto& handle = *asHandle(callee.type);
+        llvm::Type* element = lower(handle.element);
+        if (handle.handle == HandleKind::Pointer) {
+            llvm::Value* value = emitExpr(*args[0]);
+            llvm::Value* memory = memoryFor(element, irbuilder.getInt64(1), false);
+            irbuilder.CreateStore(value, memory);
+            return memory;
+        }
+        if (!args.empty() && asArray(args[0]->type)) {
+            llvm::Value* value = emitExpr(*args[0]);
+            llvm::Value* size = irbuilder.getInt64(asArray(args[0]->type)->size);
+            llvm::Value* memory = memoryFor(element, size, false);
+            irbuilder.CreateStore(value, memory);
+            return heapArray(lower(&handle), memory, size);
+        }
+        llvm::Value* memory = memoryFor(element, length, isZeroed);
+        fillIn(memory, length, handle.element);
+        return heapArray(lower(&handle), memory, length);
     }
 
     // calls a function by name: the arguments are evaluated in the order they're written, then each input that didn't get one takes its default, which is a call of its own on the inputs before it, in order
@@ -837,7 +1089,15 @@ class Codegen {
         for (Expr* arg : written) values[arg] = emitExpr(*arg);
         std::vector<llvm::Value*> args;
         for (size_t i = 0; i < inputs.size(); i++) {
-            args.push_back(inputs[i] ? values[inputs[i]] : emitCall(defaults[&function->function->inputs[i]], args));
+            if (inputs[i]) {
+                args.push_back(values[inputs[i]]);
+                continue;
+            }
+            // a default that owns something and goes to an input that borrows it is the call's temporary, freed with the rest of its statement's
+            auto& input = function->function->inputs[i];
+            args.push_back(emitCall(defaults[&input], args));
+            SemaType* type = static_cast<FunctionSemaType*>(function->type)->params[i];
+            if (owns(type) && !input.decl->isOwned && !temporaries.empty()) temporaries.back().push_back({args.back(), type, false});
         }
         return emitCall(functionOf(function), args);
     }
@@ -848,8 +1108,15 @@ class Codegen {
         return f->getReturnType()->isVoidTy() ? nullptr : result;
     }
 
-    // emits an expression into the current block and returns its value, or null for void and never, which have none
+    // emits an expression into the current block and returns its value, or null for void and never, which have none, where an owning value nothing moves is its statement's to free
     llvm::Value* emitExpr(Expr& e) {
+        llvm::Value* value = emitValue(e);
+        if (value && sema.isTemporary(&e) && !temporaries.empty()) temporaries.back().push_back({value, e.type, sema.isOnStack(&e)});
+        return value;
+    }
+
+    // works out an expression's value, which emitExpr then keeps track of
+    llvm::Value* emitValue(Expr& e) {
         Located located(irbuilder, debug.get(), e.span);
         switch (e.kind) {
             case ExprKind::IntLiteral:
@@ -942,6 +1209,11 @@ class Codegen {
             }
             case ExprKind::Call: {
                 auto& call = static_cast<CallExpr&>(e);
+                if (call.callee->kind == ExprKind::TypeExpr && static_cast<TypeExprExpr&>(*call.callee).typeExpr->kind == TypeKind::Handle) {
+                    std::vector<Expr*> args;
+                    for (auto& arg : call.args) args.push_back(arg.value.get());
+                    return emitMake(e, *call.callee, args, e.span);
+                }
                 if (call.callee->kind == ExprKind::TypeExpr) return emitConversion(*call.callee, *call.args[0].value, e.span);
                 if (isLen(*call.callee)) return emitLen(call.callee->kind == ExprKind::Member ? *static_cast<MemberExpr&>(*call.callee).object : *call.args[0].value);
                 std::vector<Expr*> written;
@@ -960,6 +1232,7 @@ class Codegen {
                     for (auto& a : call.args) written.push_back(a.value.get());
                     callee = call.callee.get();
                 }
+                if (callee->kind == ExprKind::TypeExpr && static_cast<TypeExprExpr&>(*callee).typeExpr->kind == TypeKind::Handle) return emitMake(e, *callee, written, e.span);
                 if (callee->kind == ExprKind::TypeExpr) return emitConversion(*callee, arg, e.span);
                 if (isLen(*callee)) return emitLen(arg);
                 return emitArguments(static_cast<IdentifierExpr&>(*callee).decl, written, pipe.inputs);
@@ -982,12 +1255,13 @@ class Codegen {
         }
     }
 
-    // one entry per scope a yield could target, mirroring sema's yield-target stack: where the scope continues, and where its value goes
+    // one entry per scope a yield could target, mirroring sema's yield-target stack: where the scope continues, where its value goes, and how many frames of temporaries were open outside it, which a yield to it leaves
     struct Exit {
         TargetKind kind;
         std::optional<std::string_view> label;
         llvm::BasicBlock* end;
         llvm::AllocaInst* result;
+        size_t frames;
     };
     std::vector<Exit> exits;
 
@@ -1034,8 +1308,9 @@ class Codegen {
         return slot;
     }
 
-    // the global for every top-level binding, which the init function fills in before start runs
+    // the global for every top-level binding, which the init function fills in before start runs, and the ones that own something, in the order they're made, which the fini function frees last made first
     std::unordered_map<Symbol*, llvm::GlobalVariable*> globals;
+    std::vector<Symbol*> owningGlobals;
 
     // finds where a symbol's value lives: a stack slot for locals and parameters, or a global for top-level bindings
     llvm::Value* addressOf(Symbol* symbol) {
@@ -1051,12 +1326,21 @@ class Codegen {
         llvm::Type* type = lower(symbol->type);
         auto* global = new llvm::GlobalVariable(*module, type, false, llvm::GlobalValue::InternalLinkage, llvm::Constant::getNullValue(type), symbolPrefix + "." + std::string(symbol->name));
         globals[symbol] = global;
+        if (owns(symbol->type) && std::find(owningGlobals.begin(), owningGlobals.end(), symbol) == owningGlobals.end()) owningGlobals.insert(owningGlobals.begin(), symbol);
         if (debug) debug->declareGlobal(global, *symbol);
         return global;
     }
 
-    // emits one statement into the current block
+    // emits one statement into the current block, with a frame for the temporaries it makes, which are freed once it's done, unless it left by a yield, which freed them on its way out
     void emitStmt(Stmt& s) {
+        temporaries.emplace_back();
+        emitStatement(s);
+        if (!irbuilder.GetInsertBlock()->getTerminator()) dropTemporaries(temporaries.size() - 1);
+        temporaries.pop_back();
+    }
+
+    // emits what one statement does
+    void emitStatement(Stmt& s) {
         Located located(irbuilder, debug.get(), s.span);
         switch (s.kind) {
             // a yield to the function returns, and a yield to anything else stores its value in the target's result and jumps to its end
@@ -1066,6 +1350,9 @@ class Codegen {
                 // the value itself can end in a yield elsewhere, like a match whose arms all leave, and then there's nothing left to do
                 if (irbuilder.GetInsertBlock()->getTerminator()) break;
                 Exit& exit = resolveExit(yield);
+                // leaving frees the temporaries of every statement it leaves, and every binding sema found holding a value in the scopes it leaves
+                dropTemporaries(exit.frames);
+                dropAll(sema.dropsAt(&yield));
                 if (exit.kind == TargetKind::Function) {
                     if (value) {
                         irbuilder.CreateRet(value);
@@ -1092,6 +1379,8 @@ class Codegen {
                     llvm::GlobalVariable* global = makeGlobal(symbol);
                     if (let.init->kind == ExprKind::Wildcard) break;
                     llvm::Value* value = emitExpr(*let.init);
+                    // a top-level loop can run a let more than once, so a global frees what it held first, which starts out as zero, and zero frees nothing
+                    if (owns(symbol->type)) drop(irbuilder.CreateLoad(lower(symbol->type), global), symbol->type);
                     auto* constant = llvm::dyn_cast<llvm::Constant>(value);
                     if (constant && !symbol->isMutable()) {
                         global->setInitializer(constant);
@@ -1127,6 +1416,8 @@ class Codegen {
                     value = op == TokenKind::CaretCaret ? exclusiveOr(current, value, type)
                         : arithmetic(op, current, value, type, Span{assign.place->span.start, assign.value->span.end});
                 }
+                // what an owning place held is freed before the new value goes in: an element or a pointer's value always holds something, and a binding does unless it moved
+                if (owns(type) && (assign.place->kind == ExprKind::Index || sema.isReplacing(&assign))) drop(irbuilder.CreateLoad(lower(type), address), type);
                 irbuilder.CreateStore(value, address);
                 break;
             }
@@ -1140,7 +1431,7 @@ class Codegen {
             // an attribute's target is an ordinary statement
             case StmtKind::Attr: {
                 auto& attr = static_cast<AttrStmt&>(s);
-                if (attr.target) emitStmt(*attr.target);
+                if (attr.target) emitStatement(*attr.target);
                 break;
             }
             // wit obligations are for the verifier, and never run
@@ -1173,7 +1464,7 @@ class Codegen {
         TokenKind equality = match.equality && match.equality->kind == TokenKind::Eq ? TokenKind::Eq : TokenKind::EqEq;
         llvm::BasicBlock* end = llvm::BasicBlock::Create(context, "match.end", f);
         llvm::AllocaInst* result = carriesValue(match.type) ? makeAlloca(lower(match.type), "result") : nullptr;
-        exits.push_back(Exit{TargetKind::Match, labelOf(match.name), end, result});
+        exits.push_back(Exit{TargetKind::Match, labelOf(match.name), end, result, temporaries.size()});
         for (auto& arm : match.arms) {
             llvm::BasicBlock* body = llvm::BasicBlock::Create(context, "match.arm", f);
             llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "match.next", f);
@@ -1190,7 +1481,7 @@ class Codegen {
                     break;
                 }
                 case PatternKind::Guard: {
-                    llvm::Value* cond = emitExpr(*static_cast<GuardPattern&>(*arm.pattern).cond);
+                    llvm::Value* cond = withTemporaries([&] { return emitExpr(*static_cast<GuardPattern&>(*arm.pattern).cond); });
                     irbuilder.CreateCondBr(cond, body, next);
                     break;
                 }
@@ -1201,8 +1492,9 @@ class Codegen {
             irbuilder.SetInsertPoint(body);
             if (debug) debug->enterScope(arm.body->span);
             if (arm.pattern->kind == PatternKind::Binder) irbuilder.CreateStore(subject, makeSlot(static_cast<BinderPattern&>(*arm.pattern).decl));
-            exits.push_back(Exit{TargetKind::Arm, std::nullopt, end, result});
+            exits.push_back(Exit{TargetKind::Arm, std::nullopt, end, result, temporaries.size()});
             emitStmts(arm.body->stmts);
+            if (!irbuilder.GetInsertBlock()->getTerminator()) dropAll(sema.dropsAt(&arm.body->stmts));
             exits.pop_back();
             if (debug) debug->leaveScope();
             if (!irbuilder.GetInsertBlock()->getTerminator()) irbuilder.CreateBr(end);
@@ -1214,6 +1506,7 @@ class Codegen {
         if (carriesValue(match.type)) {
             irbuilder.CreateUnreachable();
         } else {
+            dropAll(sema.dropsAt(&match));
             irbuilder.CreateBr(end);
         }
         irbuilder.SetInsertPoint(end);
@@ -1227,16 +1520,22 @@ class Codegen {
         llvm::BasicBlock* end = llvm::BasicBlock::Create(context, "repeat.end", f);
         llvm::BasicBlock* header = repeat.cond ? llvm::BasicBlock::Create(context, "repeat.header", f) : body;
         irbuilder.CreateBr(header);
+        // a failed condition leaves the loop, freeing what sema found has to be freed there, and the condition's temporaries are freed before it decides
         if (repeat.cond) {
             irbuilder.SetInsertPoint(header);
-            irbuilder.CreateCondBr(emitExpr(*repeat.cond), body, end);
+            llvm::BasicBlock* leave = llvm::BasicBlock::Create(context, "repeat.leave", f);
+            irbuilder.CreateCondBr(withTemporaries([&] { return emitExpr(*repeat.cond); }), body, leave);
+            irbuilder.SetInsertPoint(leave);
+            dropAll(sema.dropsAt(&repeat));
+            irbuilder.CreateBr(end);
         }
         // only an infinite loop can yield a value, so only it needs somewhere to put one
         llvm::AllocaInst* result = carriesValue(repeat.type) ? makeAlloca(lower(repeat.type), "result") : nullptr;
-        exits.push_back(Exit{TargetKind::Loop, labelOf(repeat.name), end, result});
+        exits.push_back(Exit{TargetKind::Loop, labelOf(repeat.name), end, result, temporaries.size()});
         irbuilder.SetInsertPoint(body);
         if (debug) debug->enterScope(repeat.body->span);
         emitStmts(repeat.body->stmts);
+        if (!irbuilder.GetInsertBlock()->getTerminator()) dropAll(sema.dropsAt(&repeat.body->stmts));
         if (debug) debug->leaveScope();
         exits.pop_back();
         if (!irbuilder.GetInsertBlock()->getTerminator()) irbuilder.CreateBr(header);
@@ -1249,9 +1548,10 @@ class Codegen {
         llvm::Function* f = irbuilder.GetInsertBlock()->getParent();
         llvm::BasicBlock* end = llvm::BasicBlock::Create(context, kind == TargetKind::Chunk ? "chunk.end" : "block.end", f);
         llvm::AllocaInst* result = carriesValue(type) ? makeAlloca(lower(type), "result") : nullptr;
-        exits.push_back(Exit{kind, labelOf(name), end, result});
+        exits.push_back(Exit{kind, labelOf(name), end, result, temporaries.size()});
         if (debug) debug->enterScope(span);
         emitStmts(stmts);
+        if (!irbuilder.GetInsertBlock()->getTerminator()) dropAll(sema.dropsAt(&stmts));
         if (debug) debug->leaveScope();
         exits.pop_back();
         if (!irbuilder.GetInsertBlock()->getTerminator()) irbuilder.CreateBr(end);
@@ -1270,7 +1570,7 @@ class Codegen {
             (f->args().begin() + i)->setName(symbol->name);
             irbuilder.CreateStore(f->args().begin() + i, makeSlot(symbol, i + 1));
         }
-        llvm::Value* value = emitExpr(*fn.inputs[index].fallback);
+        llvm::Value* value = withTemporaries([&] { return emitExpr(*fn.inputs[index].fallback); });
         // the return is at the default, so even a constant default has an instruction with a line, which a debugger needs before it shows the function's inputs
         Located located(irbuilder, debug.get(), fn.inputs[index].fallback->span);
         // a default that never finishes, like one that traps, leaves nothing to return
@@ -1297,9 +1597,10 @@ class Codegen {
             irbuilder.CreateStore(f->args().begin() + i, makeSlot(symbol, i + 1));
         }
         // the body is the function's own scope, so a yield at its top level returns
-        exits.push_back(Exit{TargetKind::Function, fn.name.text, nullptr, nullptr});
+        exits.push_back(Exit{TargetKind::Function, fn.name.text, nullptr, nullptr, temporaries.size()});
         emitStmts(fn.body->stmts);
         exits.pop_back();
+        if (!irbuilder.GetInsertBlock()->getTerminator()) dropAll(sema.dropsAt(&fn.body->stmts));
         // falling off the end happens at the closing brace, so an empty function still has an instruction with a line
         Located located(irbuilder, debug.get(), Span{fn.body->span.end - 1, fn.body->span.end});
         // a void function can fall off its end, and anything else ending here is a block nothing reaches, like the end of a scope every path left
@@ -1314,7 +1615,7 @@ class Codegen {
     }
 public:
     // name is the module's name, the source file's stem, the source manager is only read, for trap messages and debug info, and the debug options say how much debug info to write
-    Codegen(std::string_view name, SourceManager& m, DebugOptions debugOptions = {}) : module(std::make_unique<llvm::Module>(name, context)), irbuilder(context), symbolPrefix("cheri." + std::string(name)), manager(m) {
+    Codegen(std::string_view name, SourceManager& m, const Sema& checked, DebugOptions debugOptions = {}) : module(std::make_unique<llvm::Module>(name, context)), irbuilder(context), symbolPrefix("cheri." + std::string(name)), manager(m), sema(checked) {
         if (debugOptions.level != DebugLevel::None) debug = std::make_unique<DebugInfo>(*module, manager.text(), std::move(debugOptions));
     }
     // makes cheri_run_test, which the test runtime calls with a test's number, its place among the tests, and which calls that test and returns, where a number that's no test's does nothing
@@ -1347,6 +1648,14 @@ public:
         irbuilder.CreateRetVoid();
         endFunction();
         llvm::GlobalAlias::create("cheri_init", init);
+        // what the top-level bindings own is freed in cheri.module.fini, which the runtime calls once start or a test returns, so a program ends with nothing left on the heap
+        llvm::Function* fini = llvm::Function::Create(llvm::FunctionType::get(irbuilder.getVoidTy(), false), llvm::Function::ExternalLinkage, symbolPrefix + ".fini", *module);
+        irbuilder.SetInsertPoint(llvm::BasicBlock::Create(context, "definition", fini));
+        beginFunction(fini, nullptr, {}, Span{0, 0}, true);
+        for (Symbol* symbol : owningGlobals) drop(irbuilder.CreateLoad(lower(symbol->type), globals.at(symbol)), symbol->type);
+        irbuilder.CreateRetVoid();
+        endFunction();
+        llvm::GlobalAlias::create("cheri_fini", fini);
         // externs have no body, so they stay declarations for the linker to fill in
         for (FnDecl* fn : functions) {
             if (fn->body) define(*fn);

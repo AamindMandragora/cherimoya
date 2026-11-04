@@ -5,8 +5,14 @@ set -uo pipefail
 CHERI="$1"
 TEST="$2"
 
+# each test runs under valgrind when it's installed, so a leak, a double free, or a read of memory that was never written fails it too, where only memory nothing points to anymore counts as a leak, since a trap aborts with everything still in place
+RUNNER=()
+if command -v valgrind > /dev/null; then
+    RUNNER=(--runner "valgrind --leak-check=full --errors-for-leak-kinds=definite --error-exitcode=213 -q")
+fi
+
 for LEVEL in -O0 -O3; do
-    if ! "$CHERI" test "$TEST" "$LEVEL"; then
+    if ! "$CHERI" test "$TEST" "$LEVEL" "${RUNNER[@]}"; then
         echo "$TEST: some tests didn't pass at $LEVEL"
         exit 1
     fi

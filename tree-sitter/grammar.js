@@ -134,11 +134,11 @@ const BUILTIN_TYPES = [
   'bool', 'int', 'float', 'char', 'rune', 'boolf',
 ];
 
-// cheri's parser reads an expression differently depending on where it sits, which the grammar can only follow by keeping a copy of the expression rules for each place: go is a nested expression, where <- after a value is construction, stop is the top of a statement, a pattern, or a comprehension clause, where cheri's arrowStops makes <- end the expression and keeps ( ) -> from being a closure, lead is the start of a statement, which can't begin with a scope since a scope there is a statement of its own, and argument is a generic argument, which cheri reads as a type whenever it starts like one
+// cheri's parser reads an expression differently depending on where it sits, which the grammar can only follow by keeping a copy of the expression rules for each place: go is a nested expression, where <- after a value is construction, stop is the top of a statement, a pattern, or a comprehension clause, where cheri's arrowStops makes <- end the expression and keeps ( ) -> from being a closure, lead is the start of a statement, which can't begin with a scope since a scope there is a statement of its own, and argument is a generic argument, which cheri reads as a type whenever it starts like one, unless it's a type spelling called on something, which is a conversion
 const FAMILIES = [
-  {name: 'go', base: 'go', isStop: false, excluded: []},
-  {name: 'stop', base: 'stop', isStop: true, excluded: ['plainClosure']},
-  {name: 'lead', base: 'stop', isStop: true, excluded: ['plainClosure', 'scope']},
+  {name: 'go', base: 'go', isStop: false, excluded: ['conversion', 'calledPath']},
+  {name: 'stop', base: 'stop', isStop: true, excluded: ['plainClosure', 'conversion', 'calledPath']},
+  {name: 'lead', base: 'stop', isStop: true, excluded: ['plainClosure', 'scope', 'conversion', 'calledPath']},
   {name: 'argument', base: 'go', isStop: false, excluded: ['type', 'bracket']},
 ];
 
@@ -150,6 +150,8 @@ const atoms = ($) => [
   ['plainClosure', alias($._plainClosure, $.closure)],
   ['bracket', $.pack], ['bracket', $.range], ['bracket', $.comprehension], ['bracket', alias($._captureClosure, $.closure)],
   ['type', $.typeExpression],
+  ['conversion', alias($._conversion, $.callExpression)],
+  ['calledPath', alias($._calledPath, $.callExpression)],
   ['scope', $.block], ['scope', $.matchExpression], ['scope', $.repeatExpression], ['scope', $.chunkExpression],
 ];
 
@@ -317,6 +319,8 @@ module.exports = grammar({
     [$.pack, $.packPattern, $.tupleType],
     // a lone name, a mode, or a type spelling where a generic argument goes is a type or a value, which cheri reads as a type, and a type definition's right side reads like a type until a | makes it a sum's first variant
     [$._argumentAtom, $._bareNamedType],
+    // a dotted path in a generic argument is a type until a ( after it makes it a call
+    [$._calledPathMember, $._pathNamedType],
     [$.modeType, $._valueModeType],
     [$.typeExpression, $._unrefinedType],
     [$.variant, $._genericArgument],
@@ -645,6 +649,14 @@ module.exports = grammar({
 
     // pattern <- source
     membershipClause: ($) => prec.dynamic(1, seq(field('pattern', $._pattern), '<-', field('source', $._goLevel11))),
+
+    // a type spelling called on something in a generic argument, which cheri reads as a conversion, a value, rather than a type, like the i64u(n) in arr[i64u(n)] int(0), where the other families read it as a type in value position followed by a call
+    _conversion: ($) => seq(field('callee', alias($._conversionType, $.typeExpression)), field('arguments', $.argumentList)),
+    _conversionType: ($) => field('type', alias($._builtinNamedType, $.namedType)),
+
+    // a dotted path called on something in a generic argument, which cheri reads as a call or a method call, a value, rather than a type, like the xs.len() in arr[xs.len() + 1] int(0), since a type is never called there
+    _calledPath: ($) => seq(field('callee', alias($._calledPathMember, $.memberExpression)), field('arguments', $.argumentList)),
+    _calledPathMember: ($) => seq(field('object', choice($.identifier, alias($._calledPathMember, $.memberExpression))), '.', field('field', $.identifier)),
 
     // a type in value position, which gets called to convert or allocate: the i32 in i32(x), the arr mut T in arr mut T(n)
     typeExpression: ($) => field('type', choice(

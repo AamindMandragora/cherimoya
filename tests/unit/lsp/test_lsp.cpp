@@ -130,6 +130,12 @@ TEST_CASE("LSP: hover, definition, and references", "[lsp]") {
     CHECK(references(document, offsetOf(text, "add(1"), true).size() == 3);
     CHECK(references(document, offsetOf(text, "add(1"), false).size() == 2);
     CHECK(references(document, offsetOf(text, "x <-"), true).size() == 4);
+    // an input that takes over what it's given says it's unscoped, and its output doesn't
+    std::string owning = "let (xs :: unscoped arr int) -> keep -> (r :: arr int) { xs -| }";
+    Document taken("file:///t.moya", owning);
+    auto onTaken = [&](size_t offset) { return stringOf(*hover(taken, offset).getAsObject()->get("contents"), "value"); };
+    CHECK(onTaken(offsetOf(owning, "xs -|")) == "```cherimoya\nxs :: unscoped arr int\n```");
+    CHECK(onTaken(offsetOf(owning, "keep")) == "```cherimoya\nlet (xs :: unscoped arr int) -> keep -> (r :: arr int)\n```");
 }
 
 // checks that a declaration's documentation is the comments right above it and the one at the end of its line, and that hover, completion, and signature help show it
