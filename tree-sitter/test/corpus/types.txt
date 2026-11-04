@@ -731,3 +731,77 @@ x <- mut;
     place: (identifier)
     value: (typeExpression
       type: (qualifiedType))))
+
+================================================================================
+a conversion in a handle's brackets is a value
+================================================================================
+
+x <- arr[i64u(n) + 1] mut int(0);
+y <- arr[int] T;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (assignmentStatement
+    place: (identifier)
+    value: (callExpression
+      callee: (typeExpression
+        type: (handleType
+          argument: (binaryExpression
+            left: (callExpression
+              callee: (typeExpression
+                type: (namedType
+                  name: (builtinType)))
+              arguments: (argumentList
+                (identifier)))
+            right: (integer))
+          type: (qualifiedType
+            type: (namedType
+              name: (builtinType)))))
+      arguments: (argumentList
+        (integer))))
+  (assignmentStatement
+    place: (identifier)
+    value: (typeExpression
+      type: (handleType
+        argument: (namedType
+          name: (builtinType))
+        type: (namedType
+          name: (identifier))))))
+
+================================================================================
+a called path in a handle's brackets is a value, and a plain path is a type
+================================================================================
+
+x <- arr[xs.len() + 1] int(0);
+y <- arr[std.mem.A] T;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (assignmentStatement
+    place: (identifier)
+    value: (callExpression
+      callee: (typeExpression
+        type: (handleType
+          argument: (binaryExpression
+            left: (callExpression
+              callee: (memberExpression
+                object: (identifier)
+                field: (identifier))
+              arguments: (argumentList))
+            right: (integer))
+          type: (namedType
+            name: (builtinType))))
+      arguments: (argumentList
+        (integer))))
+  (assignmentStatement
+    place: (identifier)
+    value: (typeExpression
+      type: (handleType
+        argument: (namedType
+          module: (identifier)
+          module: (identifier)
+          name: (identifier))
+        type: (namedType
+          name: (identifier))))))

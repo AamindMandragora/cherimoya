@@ -58,6 +58,7 @@ Cherimoya is early. What works today:
 - **Name resolution and type checking**: functions (nested, and in any order), bindings, operators, calls and pipes with named arguments and defaults, blocks, `match`, loops, yields and their labels, mutability, discards, and the entry point, `start`, which a program defines the way C's runtime calls `main`.
 - **Characters**: `char`, one ASCII character, and `rune`, one Unicode scalar value, with escapes like `'\n'`, `'\x41'`, and `'\u{1F600}'`, comparisons, `match`, and conversions to and from integers, plus annotations, `(5 :: i8)`, which give a value a type without converting it.
 - **Fixed arrays**: `arr[N] T`, held inline, written as `[1, 2, 3]`, with sizes known when the program compiles, from a literal or a constant like `let N <- 4;`, indexing by unsigned integers that traps past the end, `xs.len()`, the method arrays have as `Sized`, which a pipe reaches as `xs |> .len` or `.len <| xs`, `=` and `==` on whole arrays, and `mut` on the elements, `arr[N] mut T`, or in front, to replace the whole array.
+- **Arrays on the heap and pointers**: `arr T` and `ptr T`, made with `arr[n] mut T()`, `arr[n] mut T(fill)`, `arr[n] mut T(_)`, `arr T(xs)`, and `ptr T(v)`, where a length known when the program compiles makes a fixed array instead, indexed and dereferenced, `p[]`, with checks at run time, and owned: each is freed exactly once at the end of its owner's scope, moving one hands it on, using one after it moved is an error, inputs borrow, an `unscoped` input takes it over, and outputs move out, which the test suite checks under valgrind.
 - **Fuzzy booleans**: `boolf`, a truth value from 0 to 1 held in a byte, where `&&` is the minimum, `||` the maximum, `*` the product, and `!x` is 1 - x, with conversions to and from floats, its raw byte, and `bool`, and a cutoff like `x > 0.5` to turn one back into a `bool`.
 - **The numeric model**: every integer from 8 to 128 bits, signed or unsigned, trapping or wrapping, and every float from `f16` to `f128`, including bfloat16, NaN-free or NaN-carrying, and both FP8 encodings, stored as bytes and computed in f32. Literals take the type their context wants, and conversions go between any two numbers.
 - **Code generation through LLVM** for all of that, with optimization, native object files, cross-compilation, and linking with a small runtime. Overflow, division by zero, out-of-range shifts, a NaN made in or converted into a NaN-free float, an `f8` that overflows, a conversion into a trapping integer, a character, or a boolf that doesn't hold the value, and a failed `assert` trap with their line.
@@ -66,7 +67,7 @@ Cherimoya is early. What works today:
 
 - **A language server**, `cheri lsp`, with extensions for VS Code, Emacs, and Zed, where Zed reads programs with a tree-sitter grammar that follows cheri's parser exactly: diagnostics as you type, highlighting by meaning, hover with the documentation your comments give a name, go to definition, references, rename, an outline, completion ranked by the type a position expects, signature help, quick fixes for the mistakes that have one, which `cheri check --fix` applies from the command line too, and inlay hints: the types cherimoya inferred, the input each argument goes to, the defaults a call leaves out, the type of each step of a pipe spread over lines, and the name of a long function at its closing brace, along with a Run test lens above every test in a `.toya` file.
 
-Not yet: strings, packs of different types, ranges, comprehensions, and folds, for-each loops, arrays on the heap and pointers, records, sums, protocols, generics, closures and functions as values, operator overloading and the extra operators, modules, ownership checking, and verification with Z3.
+Not yet: strings, packs of different types, ranges, comprehensions, and folds, for-each loops, records, sums, protocols, generics, closures and functions as values, operator overloading and the extra operators, modules, views and the rest of the ownership modes, and verification with Z3.
 
 ## Building
 
@@ -140,7 +141,7 @@ math.toya
 2 passed, 0 failed
 ```
 
-A `.toya` file stands alone until modules can import, so it holds the code it tests, and it has no `start`, since `cheri test` runs its tests instead. Tests build like `cheri build`, at `-O3` unless an `-O` says otherwise, and with `-g`, a failing test can be run under a debugger.
+A `.toya` file stands alone until modules can import, so it holds the code it tests, and it has no `start`, since `cheri test` runs its tests instead. Tests build like `cheri build`, at `-O3` unless an `-O` says otherwise, and with `-g`, a failing test can be run under a debugger. `--runner` runs each test binary under a command, split at its spaces, like `cheri test tests/ --runner 'valgrind -q'`.
 
 ## Debugging
 
@@ -189,11 +190,11 @@ Then set `cherimoya.compilerPath` to your `build/cheri`, unless `cheri` is on yo
 ```json
 {
   "languages": { "Cherimoya": { "semantic_tokens": "combined" } },
-  "lsp": { "cheri": { "binary": { "path": "/path/to/cherimoya/build/cheri" } } }
+  "lsp": { "cheri": { "binary": { "path": "/path/to/cherimoya/build/cheri", "arguments": ["lsp"] } } }
 }
 ```
 
-where the `lsp` part is only needed when `cheri` isn't on your path.
+where the `lsp` part is only needed when `cheri` isn't on your path, and needs its arguments, since Zed starts a binary its settings name with exactly the arguments they give.
 
 Any other editor that speaks the Language Server Protocol can start `cheri lsp` the same way.
 
@@ -221,7 +222,7 @@ Any other editor that speaks the Language Server Protocol can start `cheri lsp` 
 
 ## Tests
 
-The tests come in three tiers. The unit tests, in C++ under `tests/unit/`, check the lexer, parser, sema, runtime, and language server. The runtime basics check what everything else leans on, as `.moya` programs in `tests/run/` and as the check of `cheri test` itself in `tests/test/`. Every feature of the language is then tested in `tests/features/`, once the first two tiers pass, since a feature test checks itself with `assert` and runs under `cheri test`, so a broken basic would make its results mean nothing, and ctest leaves the feature tests unrun when any test in the first two tiers fails.
+The tests come in three tiers. The unit tests, in C++ under `tests/unit/`, check the lexer, parser, sema, runtime, and language server. The runtime basics check what everything else leans on, as `.moya` programs in `tests/run/` and as the check of `cheri test` itself in `tests/test/`. Every feature of the language is then tested in `tests/features/`, once the first two tiers pass, since a feature test checks itself with `assert` and runs under `cheri test`, so a broken basic would make its results mean nothing, and ctest leaves the feature tests unrun when any test in the first two tiers fails. When valgrind is installed, every program and every feature test runs under it, so a leak or a double free fails the test too.
 
 The programs in `tests/run/` check what only a whole program can: `start` and its exit code, the top level running first, and an assert and a trap seen from outside. Each one is a `.moya` file whose first line is the exit code it should produce, and the test suite builds it with `cheri` at `-O0` and at `-O3`, runs it, and compares. A program that should trap names the trap on a `# trap:` line, and its stderr has to contain it.
 

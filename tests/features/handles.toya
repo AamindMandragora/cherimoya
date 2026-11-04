@@ -1,0 +1,217 @@
+# checks arrays on the heap and pointers: every way to make one, and that a length known when the program compiles makes a fixed array, indexing, len, dereferencing and writing through them, = and == on them, deep copies of a fill, moving them in and out of functions, freeing what a binding held when it's replaced, in a match, and in a loop, temporaries, a global, and the traps for an index past the end and for running out of memory
+# lengths the program only knows at run time, since a length it knows when it compiles makes a fixed array
+let two :: mut i64u <- 2;
+let three :: mut i64u <- 3;
+let four :: mut i64u <- 4;
+let table <- arr[four] mut int(7);
+let (xs :: arr int) -> total -> (r :: int) {
+    let sum :: mut <- 0;
+    let i :: mut i64u <- 0;
+    repeat (i < xs.len()) {
+        sum +<- xs[i];
+        i +<- 1;
+    }
+    sum -|
+}
+let (xs :: unscoped arr mut int) -> grow -> (r :: arr mut int) {
+    let given <- xs;
+    let bigger <- arr[given.len() + 1] mut int(0);
+    let i :: mut i64u <- 0;
+    repeat (i < given.len()) {
+        bigger[i] <- given[i];
+        i +<- 1;
+    }
+    bigger -|
+}
+let (xs :: arr mut int) -> double -> () {
+    let i :: mut i64u <- 0;
+    repeat (i < xs.len()) {
+        xs[i] *<- 2;
+        i +<- 1;
+    }
+}
+let (n :: i64u) -> zeros -> (r :: arr int) { arr[n] int() -| }
+
+@test
+let () -> defaults -> () {
+    let xs <- arr[three] mut int();
+    assert (xs.len() = 3);
+    assert (total(xs) = 0);
+    let flags <- arr[two] bool();
+    assert (!flags[0] && !flags[1]);
+    let none :: mut i64u <- 0;
+    let empty <- arr[none] int();
+    assert (empty.len() = 0);
+}
+
+@test
+let () -> constantLengthIsFixed -> () {
+    let xs <- arr[3] int(7);
+    assert (xs = [7, 7, 7]);
+    let ys <- arr[2] mut int(_);
+    ys[0] <- 1;
+    ys[1] <- 2;
+    assert (ys == [1, 2]);
+    let zs <- arr[2] arr int(arr int([1]));
+    assert (zs[0] == zs[1] && !(zs[0] = zs[1]));
+}
+
+@test
+let () -> filled -> () {
+    let xs <- arr[four] int(5);
+    assert (total(xs) = 20);
+}
+
+@test
+let () -> fromFixed -> () {
+    let xs <- arr int([1, 2, 3]);
+    assert (xs.len() = 3);
+    assert (xs[2] = 3);
+}
+
+@test
+let () -> uninitializedFilledByIndex -> () {
+    let xs <- arr[three] mut int(_);
+    xs[0] <- 1;
+    xs[1] <- 2;
+    xs[2] <- 3;
+    assert (total(xs) = 6);
+}
+
+@test
+let () -> madeThroughPipe -> () {
+    let xs <- [1, 2, 3] |> arr int;
+    assert (xs.len() = 3);
+}
+
+@test
+let () -> writeInPlace -> () {
+    let xs <- arr mut int([1, 2, 3]);
+    double(xs);
+    assert (total(xs) = 12);
+}
+
+@test
+let () -> pointers -> () {
+    let p <- ptr mut int(5);
+    p[] +<- 1;
+    assert (p[] = 6);
+    let q :: mut <- ptr int(1);
+    q <- ptr int(2);
+    assert (q[] = 2);
+}
+
+@test
+let () -> equality -> () {
+    let a <- arr int([1, 2]);
+    let b <- arr int([1, 2]);
+    let c <- arr int([1, 3]);
+    let d <- arr int([1]);
+    assert (a == b && !(a = b));
+    assert (a !== c && a !== d);
+    let p <- ptr int(4);
+    let q <- ptr int(4);
+    assert (p == q && p != q);
+}
+
+@test
+let () -> deepCopiedFill -> () {
+    let row <- arr int([1, 2]);
+    let grid <- arr[three] mut arr int(row);
+    assert (grid.len() = 3);
+    assert (grid[0] == grid[2] && !(grid[0] = grid[2]));
+    assert (total(row) = 3);
+    let ps <- arr[two] ptr int(ptr int(8));
+    assert (ps[0][] + ps[1][] = 16);
+}
+
+@test
+let () -> nested -> () {
+    let q <- ptr arr int(arr int([9, 1]));
+    assert (total(q[]) = 10);
+    let grid <- arr[two] mut arr mut int(arr[two] mut int(1));
+    grid[1][0] <- 5;
+    assert (total(grid[1]) = 6);
+    grid[0] <- arr mut int([4]);
+    assert (total(grid[0]) = 4);
+}
+
+@test
+let () -> movedThroughUnscoped -> () {
+    let xs :: mut <- arr mut int([1, 2, 3]);
+    xs <- grow(xs);
+    assert (xs.len() = 4);
+    assert (total(xs) = 6);
+}
+
+@test
+let () -> returned -> () {
+    let xs <- zeros(5);
+    assert (xs.len() = 5);
+}
+
+@test
+let () -> temporaries -> () {
+    assert (total(zeros(3)) = 0);
+    assert (arr[four] int(1).len() = 4);
+    _ <- arr[two] int();
+}
+
+@test
+let () -> movedInSomeArms -> () {
+    let xs <- arr int([1, 2]);
+    let n <- 3;
+    match (n > 2) {
+        true -> { let kept <- xs; }
+        false -> { }
+    }
+    match (n < 2) {
+        true -> { -| match }
+        false -> { }
+    }
+}
+
+@test
+let () -> replacedInLoop -> () {
+    let xs :: mut <- arr mut int([1]);
+    let i :: mut <- 0;
+    repeat (i < 3) {
+        xs <- grow(xs);
+        i +<- 1;
+    }
+    assert (xs.len() = 4);
+}
+
+@test
+let () -> leavesEarly -> () {
+    let xs <- arr int([1, 2]);
+    let i :: mut <- 0;
+    repeat {
+        let ys <- arr[two] int();
+        i +<- 1;
+        match (i = 3) {
+            true -> { -| repeat }
+            false -> { }
+        }
+    }
+    assert (i = 3 && xs.len() = 2);
+}
+
+@test
+let () -> global -> () {
+    table[0] <- 1;
+    assert (total(table) = 22);
+}
+
+@test(traps <- "index 3 is past the end of 'xs', which holds 3")
+let () -> indexPastEnd -> () {
+    let xs <- arr[three] int();
+    let i :: mut i64u <- 3;
+    _ <- xs[i];
+}
+
+@test(traps <- "out of memory making 'arr[n] int()'")
+let () -> outOfMemory -> () {
+    let n :: mut i64u <- 2305843009213693952;
+    _ <- arr[n] int();
+}

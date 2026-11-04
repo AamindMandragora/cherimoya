@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <deque>
+#include <unordered_set>
 #include "context.hpp"
+#include "operators.hpp"
 #include "scope.hpp"
 #include "target.hpp"
 #include "ast.hpp"
@@ -92,6 +94,27 @@ class Sema {
     // the value of every immutable binding whose initializer folds to an integer, which array sizes and constant indices can use
     std::unordered_map<const Symbol*, uint64_t> constants;
     std::vector<std::string_view> enclosing;
+    // ownership, worked out as each function is checked in order: the owned bindings that hold nothing right now, whether control can reach this point at all, each open scope's owned bindings, innermost last, the unscoped inputs of the function being checked, which it has to move before it ends, and the owning values made in the statements being checked that nothing has moved yet
+    Moved moved;
+    bool isReachable = true;
+    std::vector<std::vector<Symbol*>> owners;
+    std::vector<Symbol*> takenOver;
+    std::vector<Expr*> fresh;
+    // what codegen reads: the bindings to free wherever control leaves a scope, keyed by the yield, the statements whose end it reaches, the match no arm of which matched, or the loop whose condition failed, every owning value nothing moved, which is freed once its statement is done with it, and every assignment that frees what its binding held
+    std::unordered_map<const void*, std::vector<Symbol*>> drops;
+    std::unordered_set<const Expr*> temporaries;
+    std::unordered_set<const AssignStmt*> replaces;
+    // whether an input's type is being resolved, which is the one place unscoped can go
+    bool isResolvingInput = false;
+    // what can go on the stack instead of the heap: every binding in a function made straight from a handle of a size known when the program compiles, with what made it, the bindings that moved or were replaced, which can't, and what's left of the first once the whole file is checked, along with the temporaries of a known size, each within stackLimit bytes
+    std::unordered_map<Symbol*, Expr*> stackCandidates;
+    std::unordered_set<const Symbol*> escaped;
+    std::unordered_map<const Expr*, uint64_t> stackMade;
+    std::unordered_set<const Symbol*> stackOwners;
+    static constexpr uint64_t stackLimit = 4096;
+    // the length every arr[n] T(...) is made with, keyed by its callee, where a lone name in the brackets reaches sema as a type, so sema makes the name it stands for and keeps it here
+    std::unordered_map<const Expr*, Expr*> lengths;
+    std::deque<std::unique_ptr<Expr>> madeNames;
 
     // reports something sema doesn't check yet, and poisons the result
     SemaType* unsupported(std::string_view what, Span span) {
@@ -111,8 +134,8 @@ class Sema {
     }
 
     // makes a symbol that lives as long as sema does
-    Symbol* makeSymbol(std::string_view name, SymbolKind kind, SemaType* type, std::vector<bool> mutability, Span span) {
-        symbols.push_back(Symbol{name, kind, type, std::move(mutability), span, owner, {}, nullptr});
+    Symbol* makeSymbol(std::string_view name, SymbolKind kind, SemaType* type, std::vector<bool> mutability, Span span, bool isOwned = true) {
+        symbols.push_back(Symbol{name, kind, type, std::move(mutability), isOwned, span, owner, {}, nullptr});
         uses.push_back({span, &symbols.back(), true});
         return &symbols.back();
     }
@@ -123,9 +146,137 @@ class Sema {
         Scope inner(scope, engine, span);
         Scope* saved = scope;
         scope = &inner;
+        owners.emplace_back();
         body();
+        owners.pop_back();
         scope = saved;
     }
+
+    // the owned bindings of every scope open from depth in that still hold a value, last declared first, which is the order they're freed in
+    std::vector<Symbol*> liveOwners(size_t depth) {
+        std::vector<Symbol*> live;
+        for (size_t i = owners.size(); i-- > depth;) {
+            for (size_t j = owners[i].size(); j-- > 0;) {
+                if (!moved.count(owners[i][j])) live.push_back(owners[i][j]);
+            }
+        }
+        return live;
+    }
+
+    // the line a span starts on, which an error about a move points back to
+    std::string lineOf(Span span) {
+        return std::to_string(engine.getManager().getLineCol(span.start).line);
+    }
+
+    // reports an unscoped input still holding its value where control leaves the function, since letting it go would free what the function took over without handing it on
+    void unmoved(const Symbol& input, Span span) {
+        std::string name(input.name);
+        engine.printError("cherimoya requires '" + name + "' to be moved before '" + std::string(enclosing.back()) + "' ends, please yield it or pass it to an unscoped input", span, {{"'" + name + "' is declared here", input.span}});
+    }
+
+    // records one way control leaves a construct to carry on after it, when control can get there at all
+    void flowOut(Target& target, const void* site, Span span) {
+        if (isReachable) target.flows.push_back({site, moved, span});
+    }
+
+    // works out what's moved after a construct from every way control left it: anything moved on one of them is moved after, so each of the others frees it there, where an unscoped input that one of them moved is an error on the others, since it can't just be freed, and a construct nothing leaves to carry on after leaves the rest unreachable
+    void join(const Target& target, bool entered) {
+        Moved after;
+        for (auto& flow : target.flows) {
+            for (auto& [symbol, span] : flow.moved) after.emplace(symbol, span);
+        }
+        // only what's still in scope matters after it, the owned bindings of the scopes outside it and the unscoped inputs
+        auto isOuter = [&](const Symbol* symbol) {
+            for (size_t i = 0; i < target.owners && i < owners.size(); i++) {
+                if (std::find(owners[i].begin(), owners[i].end(), symbol) != owners[i].end()) return true;
+            }
+            return std::find(takenOver.begin(), takenOver.end(), symbol) != takenOver.end();
+        };
+        for (auto it = after.begin(); it != after.end();) it = isOuter(it->first) ? std::next(it) : after.erase(it);
+        for (auto& flow : target.flows) {
+            for (auto& [symbol, span] : after) {
+                if (flow.moved.count(symbol)) continue;
+                auto owned = const_cast<Symbol*>(symbol);
+                if (std::find(takenOver.begin(), takenOver.end(), symbol) != takenOver.end()) {
+                    unmoved(*owned, flow.span);
+                } else {
+                    drops[flow.site].push_back(owned);
+                }
+            }
+        }
+        isReachable = entered && !target.flows.empty();
+        moved = std::move(after);
+    }
+
+    // hands an owning value on to whatever takes it: a binding, a yield, a pack, a handle being made, or an unscoped input, so a binding holds nothing after it moves, and a value just made is no longer the statement's to free, where a top-level binding, a borrowed input or binder, and an element can't be moved
+    void consume(Expr& e) {
+        if (e.type == nullptr || !owns(e.type)) return;
+        if (e.kind == ExprKind::Ann) return consume(*static_cast<AnnExpr&>(e).expr);
+        if (e.kind == ExprKind::Index) {
+            std::string what = static_cast<IndexExpr&>(e).args.empty() ? "a pointer" : "an element";
+            engine.printError("cherimoya doesn't support moving out of " + what + " yet, which take will do", e.span);
+            return;
+        }
+        if (e.kind != ExprKind::Identifier) {
+            fresh.erase(std::remove(fresh.begin(), fresh.end(), &e), fresh.end());
+            return;
+        }
+        Symbol* symbol = static_cast<IdentifierExpr&>(e).decl;
+        if (symbol == nullptr) return;
+        std::string name(symbol->name);
+        // a value read twice before either read moves it, like [a, a], moves twice, which is a use after the first move
+        if (auto found = moved.find(symbol); found != moved.end()) {
+            engine.printError("cherimoya requires '" + name + "' to hold a value to use it, please assign it again after moving it on line " + lineOf(found->second), e.span, {{"'" + name + "' moved here", found->second}});
+            return;
+        }
+        if (symbol->owner == 0) {
+            engine.printError("cherimoya requires '" + name + "' to be owned by a function to move it, please use it in place, since every function can use it", e.span, {{"'" + name + "' is declared here", symbol->span}});
+        } else if (!symbol->isOwned) {
+            std::string fix = symbol->kind == SymbolKind::Param ? "please declare it 'unscoped' to take it over" : "please move what it matched instead";
+            engine.printError("cherimoya requires '" + name + "' to be owned to move it, " + fix, e.span, {{"'" + name + "' is declared here", symbol->span}});
+        } else {
+            moved[symbol] = e.span;
+            escaped.insert(symbol);
+        }
+    }
+
+    // how many bytes a value of a type takes, which is what decides whether a handle fits on the stack, where a bool takes a byte the way it's stored
+    uint64_t byteSize(SemaType* type) {
+        if (IntSemaType* integer = asInt(type)) return integer->bits / 8;
+        if (FloatSemaType* floating = asFloat(type)) {
+            switch (floating->format) {
+                case FloatFormat::E4M3: case FloatFormat::E5M2: return 1;
+                case FloatFormat::Half: case FloatFormat::BFloat: return 2;
+                case FloatFormat::Single: return 4;
+                case FloatFormat::Double: return 8;
+                case FloatFormat::Quad: return 16;
+            }
+        }
+        if (ArraySemaType* array = asArray(type)) return array->size * byteSize(array->element);
+        if (asHeapArray(type)) return 16;
+        if (asPointer(type)) return 8;
+        if (type == context.semaRune) return 4;
+        return 1;
+    }
+
+    // how many elements a handle made by calling its type holds, when the program knows when it compiles: a pointer's one value, a fixed array's elements, or n for an n that folds, or nothing for any other expression
+    std::optional<uint64_t> madeCount(const Expr& e) {
+        if (!madeAs(e) || !asHandle(e.type)) return std::nullopt;
+        auto& handle = *asHandle(e.type);
+        const Expr* first = nullptr;
+        if (e.kind == ExprKind::Call) {
+            auto& call = static_cast<const CallExpr&>(e);
+            if (call.args.empty()) return std::nullopt;
+            first = call.args[0].value.get();
+        } else {
+            auto& pipe = static_cast<const PipeExpr&>(e);
+            first = pipe.op.kind == TokenKind::PipeFwd ? pipe.lhs.get() : pipe.rhs.get();
+        }
+        if (handle.handle == HandleKind::Pointer) return 1;
+        if (ArraySemaType* fixed = asArray(first->type)) return fixed->size;
+        return std::nullopt;
+    }
+
 
     // checks whether a type is mutable as a whole value: mut int, mut arr[3] int, which can be replaced, or mut with the type left to inference
     bool isMut(const Type& t) {
@@ -134,11 +285,12 @@ class Sema {
         return static_cast<const QualifiedType&>(t).position != QualPosition::Elements;
     }
 
-    // what a binding of a type can write, the binding itself first and then each level of an array's elements, outermost first, from where mut sits: mut arr[2] arr[3] int replaces the whole, arr[2] mut arr[3] int writes the outer level, and a bare mut on a type left to inference writes everything
+    // what a binding of a type can write, the binding itself first and then each level in, an array's elements or a pointer's value, outermost first, from where mut sits: mut arr[2] arr[3] int replaces the whole, arr[2] mut arr[3] int writes the outer level, ptr mut int writes the value, and a bare mut on a type left to inference writes everything, where an input's unscoped comes before all of it
     std::vector<bool> mutabilityOf(const Type* t, SemaType* type) {
         size_t depth = 0;
-        for (auto array = asArray(type); array; array = asArray(array->element)) depth++;
+        for (auto inner = elementOf(type); inner; inner = elementOf(inner)) depth++;
         std::vector<bool> levels(depth + 1, false);
+        if (t && t->kind == TypeKind::Mode) t = static_cast<const ModeType&>(*t).inner.get();
         if (t) levels[0] = isMut(*t);
         while (t && t->kind == TypeKind::Refined) t = static_cast<const RefinedType&>(*t).inner.get();
         if (t && t->kind == TypeKind::Qualified) {
@@ -215,6 +367,9 @@ class Sema {
 
     // turns a parsed type into a sema type, or null when the type is left to inference (let x :: mut <- 5), where refinements resolve to their base type and their predicates are checked once the subject is in scope
     SemaType* resolveType(const Type& t) {
+        // only an input's own type can be unscoped, not anything inside it
+        bool isInput = isResolvingInput;
+        isResolvingInput = false;
         switch (t.kind) {
             case TypeKind::Named: {
                 auto& named = static_cast<const NamedType&>(t);
@@ -238,18 +393,33 @@ class Sema {
             }
             case TypeKind::Refined:
                 return resolveType(*static_cast<const RefinedType&>(t).inner);
-            // arr[N] T is a fixed array, and a handle without a size, or a ptr, holds memory that has to be freed
+            // arr[N] T is a fixed array, and arr T without a size, or ptr T, is a handle to memory on the heap, where what's in brackets on a handle names an allocator, which come later
             case TypeKind::Handle: {
                 auto& handle = static_cast<const HandleType&>(t);
-                if (handle.handle.kind == TokenKind::KwPtr) return unsupported("pointers", t.span);
-                if (!handle.arg) return unsupported("arrays without a fixed size", t.span);
-                auto size = arraySize(*handle.arg, handle.arg->value ? handle.arg->value->span : handle.arg->type->span);
+                bool isPointer = handle.handle.kind == TokenKind::KwPtr;
+                if (isPointer && handle.arg) return unsupported("allocators", t.span);
+                std::optional<uint64_t> size;
+                if (handle.arg) {
+                    size = arraySize(*handle.arg, handle.arg->value ? handle.arg->value->span : handle.arg->type->span);
+                    if (!size) return context.semaError;
+                }
                 SemaType* element = handle.inner ? resolveType(*handle.inner) : nullptr;
-                if (!size || element == nullptr || isPoisoned(element)) return context.semaError;
-                return context.arrayType(element, *size);
+                if (element == nullptr || isPoisoned(element)) return context.semaError;
+                if (size) return context.arrayType(element, *size);
+                return context.handleType(isPointer ? HandleKind::Pointer : HandleKind::Array, element);
             }
-            case TypeKind::Mode:
-                return unsupported("'" + std::string(static_cast<const ModeType&>(t).mode.text) + "'", t.span);
+            // an input can be unscoped, which takes over what it's given, and everything else waits for ownership's modes
+            case TypeKind::Mode: {
+                auto& mode = static_cast<const ModeType&>(t);
+                if (mode.mode.kind == TokenKind::KwUnscoped && !isInput) return unsupported("'unscoped' on anything but an input", t.span);
+                if (mode.mode.kind != TokenKind::KwUnscoped) return unsupported("'" + std::string(mode.mode.text) + "'", t.span);
+                SemaType* inner = mode.inner ? resolveType(*mode.inner) : nullptr;
+                if (inner && !isPoisoned(inner) && !owns(inner)) {
+                    engine.printError("cherimoya requires an unscoped input to hold an array or a pointer, please remove 'unscoped'", tokSpan(mode.mode));
+                    return context.semaError;
+                }
+                return inner;
+            }
             case TypeKind::Tuple:
                 return unsupported("tuple types", t.span);
             case TypeKind::Record:
@@ -366,7 +536,9 @@ class Sema {
             if (!fn.generics.empty()) unsupported("generic functions", fn.span);
             std::vector<SemaType*> signature;
             for (auto& p : fn.inputs) {
+                isResolvingInput = true;
                 auto type = p.type ? resolveType(*p.type) : nullptr;
+                isResolvingInput = false;
                 if (type == nullptr) {
                     engine.printError("cherimoya requires every parameter to have a type, please write '" + std::string(p.name.text) + " :: int'", tokSpan(p.name));
                     type = context.semaError;
@@ -458,7 +630,12 @@ class Sema {
         if (isValid) tests.push_back(test);
     }
 
-    // the last pass for a function: its parameters, their defaults, and their refinements, its obligations, then its body in a scope of its own
+    // checks whether an input is unscoped, which takes over what it's given
+    bool isUnscoped(const Param& p) {
+        return p.type && p.type->kind == TypeKind::Mode && static_cast<const ModeType&>(*p.type).mode.kind == TokenKind::KwUnscoped;
+    }
+
+    // the last pass for a function: its parameters, their defaults, and their refinements, its obligations, then its body in a scope of its own, where it starts with nothing moved, since it runs on its own, and puts back what the code around it had once it's done
     void checkFn(FnDecl& fn) {
         if (fn.name.kind != TokenKind::Identifier) return;
         // the signature was resolved when the function was hoisted, so its parameters and outputs are only ever reported once
@@ -466,12 +643,22 @@ class Sema {
         size_t saved = owner;
         owner = ++functions;
         bodies.push_back({fn.span, owner});
+        auto savedMoved = std::move(moved);
+        auto savedTakenOver = std::move(takenOver);
+        auto savedFresh = std::move(fresh);
+        bool savedReachable = isReachable;
+        moved.clear();
+        takenOver.clear();
+        fresh.clear();
+        isReachable = true;
         if (fn.body) labels.push_back({fn.body->span, fn.name.text});
         inScope(fn.span, [&] {
             for (size_t i = 0; i < fn.inputs.size(); i++) {
                 auto& p = fn.inputs[i];
                 if (p.fallback) checkDefault(*p.fallback, signature->params[i]);
-                auto param = makeSymbol(p.name.text, SymbolKind::Param, signature->params[i], mutabilityOf(p.type.get(), signature->params[i]), tokSpan(p.name));
+                bool isTakenOver = isUnscoped(p) && owns(signature->params[i]);
+                auto param = makeSymbol(p.name.text, SymbolKind::Param, signature->params[i], mutabilityOf(p.type.get(), signature->params[i]), tokSpan(p.name), isTakenOver);
+                if (isTakenOver) takenOver.push_back(param);
                 p.decl = param;
                 scope->insert(param);
                 if (p.type) checkRefinements(*p.type, param);
@@ -484,7 +671,7 @@ class Sema {
                         engine.printError("cherimoya requires defaults to be on a function's inputs, please remove '<- " + textOf(o.fallback->span) + "'", o.fallback->span, {}, {{"Remove the default", {{{from, o.fallback->span.end}, ""}}}});
                     }
                     auto type = fn.outputs.size() == 1 ? signature->returns : context.semaError;
-                    auto output = makeSymbol(o.name.text, SymbolKind::Param, type, {false}, tokSpan(o.name));
+                    auto output = makeSymbol(o.name.text, SymbolKind::Param, type, {false}, tokSpan(o.name), false);
                     scope->insert(output);
                     if (o.type) checkRefinements(*o.type, output);
                 }
@@ -494,9 +681,18 @@ class Sema {
             if (fn.body) {
                 auto output = signature->returns;
                 auto name = tokSpan(fn.name);
-                targets.push_back(Target{TargetKind::Function, fn.name.text, output, nullptr, {}, false, name});
+                targets.push_back(Target{TargetKind::Function, fn.name.text, output, nullptr, {}, false, name, owners.size(), {}});
+                // the body's bindings go in the same scope as the inputs, which is the one open outside the function's target
+                targets.back().owners--;
                 enclosing.push_back(fn.name.text);
                 bool completes = checkStmts(fn.body->stmts);
+                // reaching the closing brace frees the body's bindings, and an unscoped input still holding its value there is one the function let go
+                if (isReachable) {
+                    drops[&fn.body->stmts] = liveOwners(owners.size() - 1);
+                    for (Symbol* input : takenOver) {
+                        if (!moved.count(input)) unmoved(*input, Span{fn.body->span.end - 1, fn.body->span.end});
+                    }
+                }
                 enclosing.pop_back();
                 targets.pop_back();
                 fn.body->type = output;
@@ -507,6 +703,10 @@ class Sema {
             }
         });
         owner = saved;
+        moved = std::move(savedMoved);
+        takenOver = std::move(savedTakenOver);
+        fresh = std::move(savedFresh);
+        isReachable = savedReachable;
     }
 
     // a let binds one name for now, typed by its annotation, its initializer, or both when they agree
@@ -517,6 +717,9 @@ class Sema {
             if (declared == nullptr) {
                 engine.printError("cherimoya requires an uninitialized binding to have a type, please write 'let x :: mut int <- _;'", let.span);
                 type = context.semaError;
+            } else if (owns(declared)) {
+                // nothing can prove an uninitialized handle is written before it's freed until contracts arrive
+                engine.printError("cherimoya requires an uninitialized binding to own nothing, please give it a value", let.span);
             } else if (!isPoisoned(declared)) {
                 // an array whose elements can be written can start out uninitialized too, since that's how it gets its values
                 auto levels = mutabilityOf(let.type.get(), declared);
@@ -541,9 +744,21 @@ class Sema {
             return;
         }
         auto& binder = static_cast<BinderPattern&>(*let.pattern);
+        // the binding takes what it's given, where let _ <- value binds nothing, so the value is freed with its statement, like any it discards
+        if (let.init->kind != ExprKind::Wildcard) consume(*let.init);
         auto symbol = makeSymbol(binder.name.text, SymbolKind::Binding, type, mutabilityOf(let.type.get(), type), binder.span);
+        // a binding left to inference can write what the handle it's made from says it can, so the mut in let b <- arr mut int(n, 0) means something
+        if (!let.type) {
+            if (const Type* made = madeAs(*let.init)) {
+                auto levels = mutabilityOf(made, type);
+                for (size_t i = 1; i < levels.size(); i++) symbol->mutability[i] = levels[i];
+            }
+        }
         binder.decl = symbol;
         scope->insert(symbol);
+        // a binding in a function frees what it owns when its scope ends, while a top-level one is a global, freed when the program ends
+        if (owner != 0 && owns(type) && !owners.empty()) owners.back().push_back(symbol);
+        if (owner != 0 && asHandle(type) && let.init->kind != ExprKind::Wildcard) stackCandidates[symbol] = let.init.get();
         if (let.type) checkRefinements(*let.type, symbol);
         if (!symbol->isMutable() && let.init->kind != ExprKind::Wildcard) {
             if (auto value = fold(*let.init)) constants[symbol] = *value;
@@ -586,7 +801,11 @@ class Sema {
                 engine.printWarning("cherimoya never runs this statement, since every path before it yields", s->span, {}, {fix});
                 warned = true;
             }
+            // whatever owning value the statement made and didn't move is its temporary, freed once the statement is done with it
+            size_t mark = fresh.size();
             if (checkStmt(*s)) completes = false;
+            for (size_t j = mark; j < fresh.size(); j++) temporaries.insert(fresh[j]);
+            fresh.resize(std::min(mark, fresh.size()));
         }
         for (auto& s : stmts) {
             if (auto fn = fnOf(s.get())) checkFn(*fn);
@@ -596,12 +815,25 @@ class Sema {
 
     // checks statements as a scope a yield can target, in a new lexical scope, and gives the type of what reaches its end, where what names the scope for diagnostics
     SemaType* checkScope(std::vector<std::unique_ptr<Stmt>>& stmts, TargetKind kind, const std::optional<Token>& name, Span span, std::string_view what) {
-        targets.push_back(Target{kind, labelOf(name), nullptr, nullptr, {}, false, span});
+        targets.push_back(Target{kind, labelOf(name), nullptr, nullptr, {}, false, span, owners.size(), {}});
         if (name) labels.push_back({span, name->text});
         bool completes = true;
-        inScope(span, [&] { completes = checkStmts(stmts); });
+        bool entered = isReachable;
+        inScope(span, [&] {
+            completes = checkStmts(stmts);
+            // reaching the closing brace frees the scope's bindings, and carries on after it
+            if (isReachable) drops[&stmts] = liveOwners(owners.size() - 1);
+            flowOut(targets.back(), &stmts, Span{span.end - 1, span.end});
+        });
         auto target = targets.back();
         targets.pop_back();
+        // an arm carries on after its whole match, so its ways out are the match's, and the next arm starts over from where the match did
+        if (kind == TargetKind::Arm) {
+            for (auto& flow : target.flows) targets.back().flows.push_back(flow);
+            isReachable = entered;
+        } else {
+            join(target, entered);
+        }
         return finish(target, completes, what);
     }
 
@@ -642,8 +874,21 @@ class Sema {
         if (target) wanted = target->kind == TargetKind::Function ? target->expected : target->yielded;
         auto value = y.value ? checkExpr(*y.value, wanted) : context.semaVoid;
         auto span = y.value ? y.value->span : y.span;
+        if (y.value) consume(*y.value);
         // the value can hold scopes that push targets of their own, which can move the stack, so the target is found again instead of kept
         target = resolveTarget(y);
+        // leaving frees the bindings of every scope the yield leaves, where leaving the function also leaves its unscoped inputs, which have to be moved by then, and control doesn't go on past it
+        if (target && isReachable) {
+            drops[&y] = liveOwners(target->owners);
+            if (target->kind == TargetKind::Function) {
+                for (Symbol* input : takenOver) {
+                    if (!moved.count(input)) unmoved(*input, y.span);
+                }
+            } else {
+                flowOut(*target, &y, y.span);
+            }
+        }
+        isReachable = false;
         if (target == nullptr) {
             if (!y.target) {
                 engine.printError("cherimoya requires a yield to be inside a function or scope, please move it into one", y.span);
@@ -689,7 +934,8 @@ class Sema {
                 return true;
             case PatternKind::Binder: {
                 auto& binder = static_cast<BinderPattern&>(p);
-                binder.decl = makeSymbol(binder.name.text, SymbolKind::Binding, subject, {false}, binder.span);
+                // a binder borrows the subject, which whoever holds it still frees
+                binder.decl = makeSymbol(binder.name.text, SymbolKind::Binding, subject, {false}, binder.span, false);
                 scope->insert(binder.decl);
                 return true;
             }
@@ -723,8 +969,11 @@ class Sema {
     // checks a match: each arm is a target of its own whose value goes to the match, and the arms have to cover every value that the match needs, which for now means a catch-all, or both true and false on a bool
     SemaType* checkMatch(MatchExpr& m) {
         auto subject = m.subject ? checkExpr(*m.subject) : nullptr;
-        targets.push_back(Target{TargetKind::Match, labelOf(m.name), nullptr, nullptr, {}, false, m.span});
+        targets.push_back(Target{TargetKind::Match, labelOf(m.name), nullptr, nullptr, {}, false, m.span, owners.size(), {}});
         if (m.name) labels.push_back({m.span, m.name->text});
+        // every arm starts from what was moved before the match, since only one of them runs
+        Moved before = moved;
+        bool entered = isReachable;
         bool covered = false;
         bool seenTrue = false;
         bool seenFalse = false;
@@ -742,6 +991,8 @@ class Sema {
                 warned = true;
             }
             SemaType* type = nullptr;
+            moved = before;
+            isReachable = entered;
             inScope(arm.span, [&] {
                 bool all = checkPattern(*arm.pattern, subject ? subject : context.semaError);
                 if (all && !covered) catchAll = &arm;
@@ -754,8 +1005,15 @@ class Sema {
             });
             contribute(targets.back(), type, arm.body->span);
         }
+        // a match no arm of which matched carries on after it too, with nothing moved by the arms
+        if (!covered) {
+            moved = before;
+            isReachable = entered;
+            flowOut(targets.back(), &m, Span{m.span.end - 1, m.span.end});
+        }
         auto target = targets.back();
         targets.pop_back();
+        join(target, entered);
         if (covered || (subject && isPoisoned(subject))) return finish(target, false, "this match");
         bool yieldsValue = target.yielded != nullptr && target.yielded != context.semaVoid && !isPoisoned(target.yielded);
         if (isNumeric(subject) || isCharacter(subject) || subject == context.semaBoolf || yieldsValue) {
@@ -771,11 +1029,44 @@ class Sema {
         if (r.binder) return unsupported("for-each loops", r.binder->span);
         if (r.cond) expectBool(*r.cond, "a loop's condition");
         if (r.invariant) expectBool(*r.invariant, "a loop's invariant");
-        targets.push_back(Target{TargetKind::Loop, labelOf(r.name), nullptr, nullptr, {}, r.cond == nullptr, r.span});
+        targets.push_back(Target{TargetKind::Loop, labelOf(r.name), nullptr, nullptr, {}, r.cond == nullptr, r.span, owners.size(), {}});
         if (r.name) labels.push_back({r.span, r.name->text});
-        inScope(r.span, [&] { checkStmts(r.body->stmts); });
+        // every iteration starts from what was moved before the loop, so each has to end the same way: a binding from outside moved in the body has to be assigned again by its end, and one the body assigns that was moved before is freed at its end
+        Moved before = moved;
+        bool entered = isReachable;
+        inScope(r.span, [&] {
+            checkStmts(r.body->stmts);
+            if (!isReachable) return;
+            auto& ends = drops[&r.body->stmts];
+            ends = liveOwners(owners.size() - 1);
+            for (size_t i = 0; i + 1 < owners.size(); i++) {
+                for (Symbol* symbol : owners[i]) {
+                    bool wasMoved = before.count(symbol);
+                    auto now = moved.find(symbol);
+                    if (!wasMoved && now != moved.end()) {
+                        std::string name(symbol->name);
+                        engine.printError("cherimoya requires '" + name + "' to hold a value at the end of every iteration, please assign it again after moving it on line " + lineOf(now->second), now->second, {{"'" + name + "' is declared here, outside the loop", symbol->span}});
+                        moved.erase(now);
+                    } else if (wasMoved && now == moved.end()) {
+                        ends.push_back(symbol);
+                    }
+                }
+            }
+            for (Symbol* input : takenOver) {
+                auto now = moved.find(input);
+                if (!before.count(input) && now != moved.end()) {
+                    std::string name(input->name);
+                    engine.printError("cherimoya requires '" + name + "' to hold a value at the end of every iteration, please assign it again after moving it on line " + lineOf(now->second), now->second, {{"'" + name + "' is declared here, outside the loop", input->span}});
+                }
+            }
+        });
+        // the loop carries on after it when its condition fails, which is where every iteration started from, and wherever a yield leaves it
+        moved = before;
+        isReachable = entered;
+        if (r.cond) flowOut(targets.back(), &r, r.span);
         auto target = targets.back();
         targets.pop_back();
+        join(target, entered);
         r.body->type = context.semaVoid;
         if (r.cond) return target.yielded == context.semaError ? static_cast<SemaType*>(context.semaError) : context.semaVoid;
         return target.yielded ? target.yielded : context.semaNever;
@@ -805,6 +1096,20 @@ class Sema {
                 // the place is checked first, so the value can take its type: x <- 5 and x +<- 1 both make the literal x's type
                 auto place = checkPlace(*assign.place);
                 auto value = checkExpr(*assign.value, place);
+                consume(*assign.value);
+                // a binding that owns what it holds frees it first, unless it moved, and holds a value again after, where a borrowed one can't, since its owner frees what it holds
+                if (assign.place->kind == ExprKind::Identifier && !assign.op && owns(place)) {
+                    Symbol* symbol = static_cast<IdentifierExpr&>(*assign.place).decl;
+                    if (symbol && !symbol->isOwned) {
+                        std::string name(symbol->name);
+                        std::string fix = symbol->kind == SymbolKind::Param ? "please declare it 'unscoped' to take it over" : "please assign what it matched instead";
+                        engine.printError("cherimoya requires '" + name + "' to be owned to replace it, " + fix, assign.place->span, {{"'" + name + "' is declared here", symbol->span}});
+                    } else if (symbol) {
+                        if (!moved.count(symbol)) replaces.insert(&assign);
+                        moved.erase(symbol);
+                        escaped.insert(symbol);
+                    }
+                }
                 // place op<- value is place <- place op value, which has to give back the place's type
                 if (assign.op && assign.op->op->base->category == OpCategory::Extra) {
                     unsupported("extra operators", Span{assign.op->loc, assign.op->loc + assign.op->text.length()});
@@ -884,12 +1189,12 @@ class Sema {
         return symbol->type;
     }
 
-    // the type an array's elements have to be written as so a level of them can be written: arr[2] arr[3] int at level 1 is arr[2] arr[3] mut int
+    // the type a level of what a type holds has to be written as so it can be written: arr[2] arr[3] int at level 1 is arr[2] arr[3] mut int, and ptr int at level 0 is ptr mut int
     std::string writableAt(SemaType* type, size_t level) {
-        auto array = asArray(type);
-        if (!array) return type->toString();
-        std::string head = "arr[" + std::to_string(array->size) + "] ";
-        return head + (level == 0 ? "mut " + array->element->toString() : writableAt(array->element, level - 1));
+        SemaType* element = elementOf(type);
+        if (!element) return type->toString();
+        std::string head = asArray(type) ? "arr[" + std::to_string(asArray(type)->size) + "] " : asPointer(type) ? "ptr " : "arr ";
+        return head + (level == 0 ? "mut " + element->toString() : writableAt(element, level - 1));
     }
 
     // checks an element as the left side of an assignment, xs[i] or m[i][j], where the array has to be a binding whose elements at that depth can be written
@@ -909,7 +1214,11 @@ class Sema {
         auto& levels = symbol->mutability;
         if (isPoisoned(type) || (depth < levels.size() && levels[depth])) return type;
         std::string name(symbol->name);
-        engine.printError("cherimoya requires the elements of '" + name + "' to be mutable to assign to them, please declare it as '" + writableAt(symbol->type, depth - 1) + "'",
+        // what holds the place, depth - 1 levels in, says whether it's elements or a pointer's value
+        SemaType* holder = symbol->type;
+        for (size_t i = 1; i < depth && holder; i++) holder = elementOf(holder);
+        std::string what = asPointer(holder) ? "the value of '" + name + "' to be mutable to assign to it" : "the elements of '" + name + "' to be mutable to assign to them";
+        engine.printError("cherimoya requires " + what + ", please declare it as '" + writableAt(symbol->type, depth - 1) + "'",
             place.span, {{"'" + name + "' is declared here", symbol->span}}, mutability(*symbol, true));
         return type;
     }
@@ -1194,8 +1503,13 @@ class Sema {
 
     // checks a conversion, a type called on one value: i32(x) converts any number or character to i32, f32(x) any number or boolf to f32, rune(x) any integer or character to rune, and boolf(x) a float, a byte, or a bool to boolf, where codegen checks the ones that can lose the value
     SemaType* checkConversion(TypeExprExpr& callee, const std::vector<Argument>& args, Span span) {
+        if (callee.typeExpr->kind == TypeKind::Handle) {
+            auto& handle = static_cast<const HandleType&>(*callee.typeExpr);
+            if (handle.handle.kind == TokenKind::KwArr && handle.arg) return checkSizedMake(callee, handle, args, span);
+        }
         auto target = resolveType(*callee.typeExpr);
         callee.type = target;
+        if (asHandle(target)) return checkMake(callee, *asHandle(target), args, span);
         for (auto& arg : args) {
             checkExpr(*arg.value);
             if (arg.name) engine.printError("cherimoya requires a conversion's value to be unnamed, please remove '" + std::string(arg.name->text) + " <-'", tokSpan(*arg.name), {}, {{"Remove '" + std::string(arg.name->text) + " <-'", {{{arg.name->loc, arg.value->span.start}, ""}}}});
@@ -1221,6 +1535,143 @@ class Sema {
             return context.semaError;
         }
         return callee.type;
+    }
+
+    // the type a handle is made as, when an expression makes one by calling its type, arr mut int(n) or n |> arr mut int, or null for anything else
+    const Type* madeAs(const Expr& e) {
+        const Expr* callee = nullptr;
+        if (e.kind == ExprKind::Call) callee = static_cast<const CallExpr&>(e).callee.get();
+        if (e.kind == ExprKind::Pipe) {
+            auto& pipe = static_cast<const PipeExpr&>(e);
+            callee = pipe.op.kind == TokenKind::PipeFwd ? pipe.rhs.get() : pipe.lhs.get();
+            if (callee->kind == ExprKind::Call) callee = static_cast<const CallExpr&>(*callee).callee.get();
+        }
+        if (callee == nullptr || callee->kind != ExprKind::TypeExpr) return nullptr;
+        const Type* type = static_cast<const TypeExprExpr&>(*callee).typeExpr.get();
+        return type->kind == TypeKind::Handle ? type : nullptr;
+    }
+
+    // checks whether a type has a default, which arr mut T(n) fills with: every type but a pointer's, which is never null, and anything holding one
+    bool hasDefault(SemaType* type) {
+        if (asPointer(type)) return false;
+        if (ArraySemaType* array = asArray(type)) return hasDefault(array->element);
+        return true;
+    }
+
+    // checks making an array of a length in brackets, arr[n] T(...): n of T's default, n deep copies of a fill, or n uninitialized elements, where n is any unsigned integer, which makes a fixed array when the program knows it when it compiles, and one on the heap when it doesn't, and the fill is borrowed
+    SemaType* checkSizedMake(TypeExprExpr& callee, const HandleType& handle, const std::vector<Argument>& args, Span span) {
+        for (auto& arg : args) {
+            if (arg.name) engine.printError("cherimoya requires a conversion's value to be unnamed, please remove '" + std::string(arg.name->text) + " <-'", tokSpan(*arg.name), {}, {{"Remove '" + std::string(arg.name->text) + " <-'", {{{arg.name->loc, arg.value->span.start}, ""}}}});
+        }
+        SemaType* element = handle.inner ? resolveType(*handle.inner) : nullptr;
+        // a lone name in the brackets is a name like any other, so sema reads it as one
+        Expr* length = handle.arg->value.get();
+        if (!length && handle.arg->type && handle.arg->type->kind == TypeKind::Named && static_cast<const NamedType&>(*handle.arg->type).path.size() == 1) {
+            auto& name = static_cast<const NamedType&>(*handle.arg->type).path[0];
+            madeNames.push_back(std::make_unique<IdentifierExpr>(name.text, tokSpan(name)));
+            length = madeNames.back().get();
+        }
+        if (!length) {
+            for (auto& arg : args) checkExpr(*arg.value);
+            return unsupported("allocators", handle.arg->type->span);
+        }
+        auto count = checkExpr(*length, context.intType("i64u"));
+        for (auto& arg : args) {
+            if (arg.value->kind != ExprKind::Wildcard) checkExpr(*arg.value, element);
+        }
+        if (element == nullptr || isPoisoned(element) || isPoisoned(count)) return context.semaError;
+        std::string made = "arr[" + textOf(length->span) + "] " + element->toString();
+        // a length the program knows when it compiles is a size, which any integer that folds can be, like a fixed array's, and a run-time one has to be unsigned, like an index
+        auto size = fold(*length);
+        auto integer = asInt(count);
+        if (!integer) {
+            engine.printError("cherimoya expected an unsigned integer as an array's length, got '" + count->toString() + "' instead", length->span);
+            return context.semaError;
+        }
+        if (integer->isSigned && !size) {
+            engine.printError("cherimoya requires an array's length to be unsigned, please convert it, like 'i64u(" + textOf(length->span) + ")'", length->span, {},
+                {{"Convert it with 'i64u(...)'", {insertion(length->span.start, "i64u("), insertion(length->span.end, ")")}}});
+            return context.semaError;
+        }
+        if (args.size() > 1) {
+            engine.printError("cherimoya expected 0 or 1 values in the call to '" + made + "', got " + std::to_string(args.size()) + " instead", span);
+            return context.semaError;
+        }
+        lengths[&callee] = length;
+        SemaType* result = size ? static_cast<SemaType*>(context.arrayType(element, *size)) : context.handleType(HandleKind::Array, element);
+        callee.type = result;
+        if (args.empty()) {
+            if (!hasDefault(element)) {
+                engine.printError("cherimoya requires the elements of '" + textOf(span) + "' to have a default, please give it a fill, like '" + textOf(callee.span) + "(fill)'", span);
+                return context.semaError;
+            }
+            return result;
+        }
+        Expr& fill = *args[0].value;
+        // _ leaves the elements uninitialized, which only works when they own nothing and can be written, since that's how they get their values
+        if (fill.kind == ExprKind::Wildcard) {
+            fill.type = element;
+            bool isWritable = handle.inner && handle.inner->kind == TypeKind::Qualified && static_cast<const QualifiedType&>(*handle.inner).position == QualPosition::Elements;
+            if (owns(element)) {
+                engine.printError("cherimoya requires an uninitialized array's elements to own nothing, please give it a fill", fill.span);
+            } else if (!isWritable) {
+                engine.printError("cherimoya requires an uninitialized array's elements to be mutable, please write 'arr[" + textOf(length->span) + "] mut " + element->toString() + "(_)'", span);
+            }
+            return result;
+        }
+        if (!isCompatible(element, fill.type)) mismatch(element, fill.type, fill.span);
+        return result;
+    }
+
+    // checks making a handle by calling its type: ptr T(v) puts v on the heap, and arr T(xs) puts a fixed array's elements there, where what either is made from moves into it, and a length goes in brackets, arr[n] T(fill)
+    SemaType* checkMake(TypeExprExpr& callee, HandleSemaType& handle, const std::vector<Argument>& args, Span span) {
+        for (auto& arg : args) {
+            if (arg.name) engine.printError("cherimoya requires a conversion's value to be unnamed, please remove '" + std::string(arg.name->text) + " <-'", tokSpan(*arg.name), {}, {{"Remove '" + std::string(arg.name->text) + " <-'", {{{arg.name->loc, arg.value->span.start}, ""}}}});
+        }
+        std::string made = handle.toString();
+        bool isPointer = handle.handle == HandleKind::Pointer;
+        size_t most = isPointer ? 1 : 2;
+        if (args.empty() || args.size() > most) {
+            for (auto& arg : args) checkExpr(*arg.value);
+            engine.printError("cherimoya expected " + std::string(isPointer ? "1 value" : "1 or 2 values") + " in the call to '" + made + "', got " + std::to_string(args.size()) + " instead", span);
+            return context.semaError;
+        }
+        Expr& first = *args[0].value;
+        if (isPointer) {
+            auto value = checkExpr(first, handle.element);
+            if (!isCompatible(handle.element, value)) mismatch(handle.element, value, first.span);
+            consume(first);
+            return &handle;
+        }
+        // a pack takes the elements' type, and anything else is checked for what it is, where a literal that's a length, which goes in brackets, is an i64u so the fix reads right
+        auto expected = first.kind == ExprKind::Pack ? static_cast<SemaType*>(context.arrayType(handle.element, static_cast<PackExpr&>(first).elems.size())) : context.intType("i64u");
+        auto source = checkExpr(first, expected);
+        if (isPoisoned(source)) return context.semaError;
+        if (asArray(source)) {
+            if (args.size() == 2) checkExpr(*args[1].value);
+            if (asArray(source)->element != handle.element) {
+                mismatch(context.arrayType(handle.element, asArray(source)->size), source, first.span);
+                return context.semaError;
+            }
+            if (args.size() == 2) {
+                engine.printError("cherimoya expected 1 value in the call to '" + made + "' from a fixed array, got 2 instead", span);
+                return context.semaError;
+            }
+            consume(first);
+            return &handle;
+        }
+        // a length goes in brackets, so the fix moves it there, along with what's after it
+        if (asInt(source)) {
+            auto& type = static_cast<const HandleType&>(*callee.typeExpr);
+            size_t after = type.handle.loc + type.handle.text.size();
+            size_t end = args.size() == 2 ? args[1].value->span.start : first.span.end;
+            engine.printError("cherimoya uses brackets for an array's length instead of an argument as follows: 'arr[" + textOf(first.span) + "] " + handle.element->toString() + "(fill)'", first.span, {},
+                {{"Move the length into brackets", {insertion(after, "[" + textOf(first.span) + "]"), {{first.span.start, end}, ""}}}});
+            return context.semaError;
+        }
+        if (args.size() == 2) checkExpr(*args[1].value);
+        engine.printError("cherimoya expected a fixed array in the call to '" + made + "', got '" + source->toString() + "' instead", first.span);
+        return context.semaError;
     }
 
     // checks an annotation, (value :: T), which checks the value against T and never converts it, so a literal takes T's type
@@ -1305,7 +1756,7 @@ class Sema {
 
     // checks whether a type has a method by a protocol it implements, where the only protocol so far is the built-in Sized, whose len every array has, until protocols can be written
     bool hasMethod(SemaType* type, std::string_view name) {
-        return asArray(type) != nullptr && name == "len";
+        return (asArray(type) != nullptr || asHeapArray(type) != nullptr) && name == "len";
     }
 
     // reports a method with no object, .len, anywhere but a pipe, which is what gives it one
@@ -1380,19 +1831,29 @@ class Sema {
             return context.semaError;
         }
         if (isPoisoned(element)) return element;
+        // a pack of handles holds them, so each one moves into it
+        for (auto& e : pack.elems) consume(*e.value);
         return isNever ? static_cast<SemaType*>(context.semaNever) : context.arrayType(element, pack.elems.size());
     }
 
-    // checks indexing an array, xs[i], by one unsigned integer, where a literal index is an i64u, and one known when the program compiles has to be below the array's length, and gives the element's type
+    // checks indexing an array, xs[i], by one unsigned integer, where a literal index is an i64u, and one into a fixed array known when the program compiles has to be below its length, and gives the element's type, or dereferencing a pointer, p[], which gives its value
     SemaType* checkIndex(IndexExpr& index) {
-        if (index.args.empty()) return unsupported("dereferencing", index.span);
         if (index.args.size() == 1 && index.args[0]->kind == ExprKind::Range) return unsupported("slicing", index.span);
         auto object = checkExpr(*index.object);
+        if (index.args.empty()) {
+            if (isPoisoned(object)) return object;
+            if (!asPointer(object)) {
+                engine.printError("cherimoya expected a pointer before '[]', got '" + object->toString() + "' instead", index.object->span);
+                return context.semaError;
+            }
+            return asPointer(object)->element;
+        }
         std::vector<SemaType*> positions;
         for (auto& arg : index.args) positions.push_back(checkExpr(*arg, context.intType("i64u")));
         if (isPoisoned(object)) return object;
         auto array = asArray(object);
-        if (!array) {
+        auto heap = asHeapArray(object);
+        if (!array && !heap) {
             engine.printError("cherimoya expected an array before '[...]', got '" + object->toString() + "' instead", index.object->span);
             return context.semaError;
         }
@@ -1413,6 +1874,7 @@ class Sema {
                 {{"Convert it with 'i64u(...)'", {insertion(at.span.start, "i64u("), insertion(at.span.end, ")")}}});
             return context.semaError;
         }
+        if (!array) return heap->element;
         if (auto value = fold(at); value && *value >= array->size) {
             engine.printError("cherimoya expected an index below " + std::to_string(array->size) + " into '" + textOf(index.object->span) + "', got " + std::to_string(*value) + " instead", at.span);
             return context.semaError;
@@ -1460,6 +1922,10 @@ class Sema {
             actual.push_back(args[i].value->type ? args[i].value->type : checkExpr(*args[i].value, parameter));
             if (parameter && !isCompatible(parameter, actual.back())) mismatch(parameter, actual.back(), args[i].value->span);
         }
+        // an unscoped input takes over what it's given, which moves once every argument is evaluated, so another argument can still read it first
+        for (size_t i = 0; i < args.size(); i++) {
+            if (slots[i] && isUnscoped(function->function->inputs[*slots[i]])) consume(*args[i].value);
+        }
         if (type == context.semaError) return context.semaError;
         if (type->kind != SemaTypeKind::Function) {
             engine.printError("cherimoya requires a call's callee to be a function, please call a function by name", callee.span);
@@ -1489,6 +1955,9 @@ class Sema {
     SemaType* checkExpr(Expr& e, SemaType* expected = nullptr) {
         if (expected) expectations.push_back({e.span, expected});
         e.type = typeOf(e, expected);
+        // an owning value made here, by a call, a pack, or a scope's yield, is the statement's to free unless something takes it
+        bool isMade = e.kind == ExprKind::Call || e.kind == ExprKind::Pipe || e.kind == ExprKind::Pack || e.kind == ExprKind::Block || e.kind == ExprKind::Match || e.kind == ExprKind::Repeat || e.kind == ExprKind::Chunk;
+        if (isMade && owns(e.type) && !isPoisoned(e.type)) fresh.push_back(&e);
         return e.type;
     }
 
@@ -1517,8 +1986,18 @@ class Sema {
                 return charLiteral(static_cast<CharLiteralExpr&>(e), expected);
             case ExprKind::Ann:
                 return checkAnnotation(static_cast<AnnExpr&>(e));
-            case ExprKind::Identifier:
-                return checkIdentifier(static_cast<IdentifierExpr&>(e), false);
+            // a binding that moved holds nothing to read until it's assigned again, which is reported once, so the uses after it don't report too
+            case ExprKind::Identifier: {
+                auto type = checkIdentifier(static_cast<IdentifierExpr&>(e), false);
+                Symbol* symbol = static_cast<IdentifierExpr&>(e).decl;
+                auto found = symbol ? moved.find(symbol) : moved.end();
+                if (found != moved.end() && isReachable) {
+                    std::string name(symbol->name);
+                    engine.printError("cherimoya requires '" + name + "' to hold a value to use it, please assign it again after moving it on line " + lineOf(found->second), e.span, {{"'" + name + "' moved here", found->second}});
+                    moved.erase(found);
+                }
+                return type;
+            }
             case ExprKind::Wildcard:
                 engine.printError("cherimoya requires '_' to be a place or an initializer, please use a value here", e.span);
                 return context.semaError;
@@ -1652,6 +2131,20 @@ public:
         scope = &global;
         checkStmts(program);
         if (role == Role::Program) checkStart(global);
+        // a handle of a known size that never leaves its binding's scope, or a temporary of one, can live on the stack, since nothing outlives the function that made it
+        auto fits = [&](const Expr* e) {
+            auto count = madeCount(*e);
+            uint64_t element = count ? byteSize(asHandle(e->type)->element) : 0;
+            return count && (element == 0 || *count <= stackLimit / element);
+        };
+        for (auto& [symbol, made] : stackCandidates) {
+            if (escaped.count(symbol) || !fits(made)) continue;
+            stackOwners.insert(symbol);
+            stackMade[made] = *madeCount(*made);
+        }
+        for (const Expr* temporary : temporaries) {
+            if (asHandle(temporary->type) && fits(temporary)) stackMade[temporary] = *madeCount(*temporary);
+        }
         if (role == Role::Tests) {
             if (Symbol* entry = global.lookup("start")) {
                 engine.printError("cherimoya requires a .toya file to have no 'start', since cheri test runs its tests instead, please rename it", entry->span);
@@ -1662,6 +2155,27 @@ public:
         }
         scope = nullptr;
     }
+
+    // the bindings to free wherever control leaves a scope there: at a yield, at the end of a list of statements, past a match no arm of which matched, or where a loop's condition fails, last declared first
+    const std::vector<Symbol*>& dropsAt(const void* site) const {
+        static const std::vector<Symbol*> none;
+        auto found = drops.find(site);
+        return found == drops.end() ? none : found->second;
+    }
+
+    // whether an expression makes an owning value that nothing moves, which its statement frees once it's done with it
+    bool isTemporary(const Expr* e) const { return temporaries.count(e) > 0; }
+
+    // whether a handle is made on the stack, which codegen puts in the function's frame instead of allocating, with as many elements as sema folded, and whether a binding holds one, which frees what its elements own but not the handle's own memory
+    bool isOnStack(const Expr* e) const { return stackMade.count(e) > 0; }
+    uint64_t stackCount(const Expr* e) const { return stackMade.at(e); }
+
+    // the length an arr[n] T(...) is made with, by its callee
+    Expr* lengthOf(const Expr* callee) const { return lengths.at(callee); }
+    bool isOnStack(const Symbol* symbol) const { return stackOwners.count(symbol) > 0; }
+
+    // whether an assignment frees what its binding held before it stores the new value
+    bool isReplacing(const AssignStmt* assign) const { return replaces.count(assign) > 0; }
 
     // every test the file holds, in the order sema found them
     const std::vector<Test>& allTests() const { return tests; }

@@ -20,8 +20,10 @@ struct Symbol {
     std::string_view name;
     SymbolKind kind;
     SemaType* type;
-    // what of it can be written, the binding itself first and then each level of an array's elements, outermost first, so replacing it checks mutability[0], and writing an element d levels in checks mutability[d]
+    // what of it can be written, the binding itself first and then each level in, an array's elements or a pointer's value, outermost first, so replacing it checks mutability[0], and writing an element d levels in checks mutability[d]
     std::vector<bool> mutability;
+    // whether it frees what it holds, when that owns memory: a binding does, and so does an unscoped input, while any other input and a match's binder borrow, so whatever they were given is freed by whoever gave it
+    bool isOwned;
     Span span;
     size_t owner;
     // the span of the lexical scope it's declared in, which is where it can be named, for anything but a function only after its declaration

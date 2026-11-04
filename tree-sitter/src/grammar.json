@@ -8228,6 +8228,24 @@
           "value": "closure"
         },
         {
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_conversion"
+          },
+          "named": true,
+          "value": "callExpression"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_calledPath"
+          },
+          "named": true,
+          "value": "callExpression"
+        },
+        {
           "type": "SYMBOL",
           "name": "block"
         },
@@ -12367,6 +12385,110 @@
         ]
       }
     },
+    "_conversion": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "callee",
+          "content": {
+            "type": "ALIAS",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_conversionType"
+            },
+            "named": true,
+            "value": "typeExpression"
+          }
+        },
+        {
+          "type": "FIELD",
+          "name": "arguments",
+          "content": {
+            "type": "SYMBOL",
+            "name": "argumentList"
+          }
+        }
+      ]
+    },
+    "_conversionType": {
+      "type": "FIELD",
+      "name": "type",
+      "content": {
+        "type": "ALIAS",
+        "content": {
+          "type": "SYMBOL",
+          "name": "_builtinNamedType"
+        },
+        "named": true,
+        "value": "namedType"
+      }
+    },
+    "_calledPath": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "callee",
+          "content": {
+            "type": "ALIAS",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_calledPathMember"
+            },
+            "named": true,
+            "value": "memberExpression"
+          }
+        },
+        {
+          "type": "FIELD",
+          "name": "arguments",
+          "content": {
+            "type": "SYMBOL",
+            "name": "argumentList"
+          }
+        }
+      ]
+    },
+    "_calledPathMember": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "object",
+          "content": {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "identifier"
+              },
+              {
+                "type": "ALIAS",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "_calledPathMember"
+                },
+                "named": true,
+                "value": "memberExpression"
+              }
+            ]
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "."
+        },
+        {
+          "type": "FIELD",
+          "name": "field",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        }
+      ]
+    },
     "typeExpression": {
       "type": "FIELD",
       "name": "type",
@@ -14588,6 +14710,10 @@
     [
       "_argumentAtom",
       "_bareNamedType"
+    ],
+    [
+      "_calledPathMember",
+      "_pathNamedType"
     ],
     [
       "modeType",

@@ -1,9 +1,12 @@
-// the entry module's init and start, which codegen exports under these plain C names, since every symbol cherimoya defines has a dot in it and these don't
+// the entry module's init, start, and fini, which codegen exports under these plain C names, since every symbol cherimoya defines has a dot in it and these don't
 void cheri_init(void);
 long long cheri_start(void);
+void cheri_fini(void);
 
-// the C entry point of a program runs the init, then the program's start, and hands its result back as the exit code
+// the C entry point of a program runs the init, then the program's start, then the fini, which frees what the top-level bindings hold, and hands start's result back as the exit code
 int main(void) {
     cheri_init();
-    return (int)cheri_start();
+    int code = (int)cheri_start();
+    cheri_fini();
+    return code;
 }

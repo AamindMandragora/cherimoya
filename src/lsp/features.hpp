@@ -75,10 +75,11 @@ inline std::string excerpt(const Document& document, Span span) {
     return newline == std::string_view::npos ? std::string(text) : std::string(text.substr(0, newline)) + " ...";
 }
 
-// how one of a function's inputs is written in its signature, n :: int, with its default after it, b :: int <- 1
+// how one of a function's inputs is written in its signature, n :: int, with unscoped when it takes over what it's given, and its default after it, b :: int <- 1
 inline std::string inputText(const Document& document, const Symbol& function, size_t i) {
     auto& input = function.function->inputs[i];
-    std::string text = std::string(input.name.text) + " :: " + static_cast<const FunctionSemaType&>(*function.type).params[i]->toString();
+    std::string mode = input.decl && input.decl->isOwned ? "unscoped " : "";
+    std::string text = std::string(input.name.text) + " :: " + mode + static_cast<const FunctionSemaType&>(*function.type).params[i]->toString();
     return input.fallback ? text + " <- " + excerpt(document, input.fallback->span) : text;
 }
 
@@ -97,7 +98,9 @@ inline std::string defaultOf(const Document& document, const Symbol& param) {
 inline std::string render(const Document& document, const Symbol& symbol) {
     std::string name(symbol.name);
     std::string mut = symbol.isMutable() ? "mut " : "";
-    if (symbol.kind == SymbolKind::Param) return std::string(symbol.name) + " :: " + mut + symbol.type->toString() + defaultOf(document, symbol);
+    // an input that takes over what it's given says so
+    std::string mode = symbol.kind == SymbolKind::Param && symbol.isOwned ? "unscoped " : "";
+    if (symbol.kind == SymbolKind::Param) return std::string(symbol.name) + " :: " + mode + mut + symbol.type->toString() + defaultOf(document, symbol);
     if (symbol.kind == SymbolKind::Binding) return "let " + std::string(symbol.name) + " :: " + mut + symbol.type->toString();
     auto& fn = *symbol.function;
     auto& type = static_cast<const FunctionSemaType&>(*symbol.type);
@@ -308,11 +311,11 @@ inline std::string keywordHelp(std::string_view keyword) {
         {"match", "Picks the first arm whose pattern matches its subject, `match (x) { 0 -> { ... } _ -> { ... } }`, or, with no subject, the first arm whose guard holds."},
         {"repeat", "A loop: `repeat (cond) { ... }` runs while `cond` holds, and `repeat { ... }` runs until a yield leaves it."},
         {"chunk", "A scope that runs like a block, and will get its own allocator."},
-        {"unscoped", "Owns heap memory that has to be handed off before its scope ends, by yielding it, storing it somewhere that lives longer, or passing it to something that takes ownership. cheri doesn't support it yet."},
+        {"unscoped", "Owns heap memory that has to be moved before its scope ends: yielded, bound somewhere else, or passed to another unscoped input. An input declared `(xs :: unscoped arr int)` takes over what it's given, so `xs <- grow(xs);` hands an array to a function and gets it back. Only inputs can be unscoped so far."},
         {"peek", "A non-owning view, which never frees memory and can't escape. cheri doesn't support it yet."},
         {"mut", "Makes a binding or parameter assignable: `let x :: mut <- 0;`. Before a handle it lets the handle be rebound, and after one, `arr mut T`, it makes the elements mutable."},
-        {"ptr", "An owning handle to one object, `ptr T(value)`. cheri doesn't support handles yet."},
-        {"arr", "An array: `arr[N] T` holds N values of type T inline, like `[1, 2, 3]`, indexed from 0 by an unsigned integer as `xs[i]`, and `xs.len()` gives N. `arr[N] mut T` lets its elements be written. A handle to an array on the heap, `arr mut T(n)`, isn't supported yet."},
+        {"ptr", "A handle to one value on the heap, `ptr T(value)`, never null. `p[]` reads it, `p[] <- v` writes it when it's `ptr mut T`, and `=` asks whether two are the same memory while `==` compares their values. Freed at the end of its owner's scope."},
+        {"arr", "An array: `arr[N] T` holds N values of type T inline, like `[1, 2, 3]`, indexed from 0 by an unsigned integer as `xs[i]`, and `xs.len()` gives N. `arr[N] mut T` lets its elements be written. `arr[n] mut T(fill)` makes n copies of fill, `arr[n] mut T()` n defaults, and `arr[n] mut T(_)` leaves them uninitialized, as a fixed array when n is known when the program compiles, and otherwise as `arr T`, an array on the heap, freed at the end of its owner's scope, which `arr T(xs)` also makes from a fixed array."},
         {"take", "`take(slot)` moves the value out of a place and returns it, leaving the place to be reassigned. cheri doesn't support it yet."},
         {"swap", "`swap(a, b);` exchanges the values in two places. cheri doesn't support it yet."},
         {"replace", "`replace(slot, new)` stores `new` in a place and returns what was there. cheri doesn't support it yet."},

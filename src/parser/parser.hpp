@@ -443,8 +443,16 @@ class Parser {
         if (nameOnly) {
             auto next = peekAt(1).kind;
             nameOnly = next == TokenKind::Comma || next == TokenKind::RBracket || next == TokenKind::LBracket || next == TokenKind::Dot;
+            // a dotted path called on something is a call or a method call, a value, like the xs.len() in arr[xs.len() + 1] int(0), since a type is never called there
+            if (next == TokenKind::Dot) {
+                size_t at = 1;
+                while (peekAt(at).kind == TokenKind::Dot && peekAt(at + 1).kind == TokenKind::Identifier) at += 2;
+                if (peekAt(at).kind == TokenKind::LParen) nameOnly = false;
+            }
         }
-        if (nameOnly || (startsType(peek()) && peek().kind != TokenKind::Identifier)) {
+        // a type spelling called on something is a conversion, a value, like the i64u(n) in arr[i64u(n)] int(0)
+        bool isConversion = peek().kind == TokenKind::TypeName && peekAt(1).kind == TokenKind::LParen;
+        if (nameOnly || (startsType(peek()) && peek().kind != TokenKind::Identifier && !isConversion)) {
             return {parseType(), nullptr};
         }
         return {nullptr, parseNested()};

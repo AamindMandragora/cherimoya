@@ -848,6 +848,10 @@ TEST_CASE("Parser: types", "[parser][type]") {
     CHECK(typeDump("arr[A] T") == "(arr [A] T)");
     CHECK(typeDump("arr[Chunk] mut T") == "(arr [Chunk] (mut@elems T))");
     CHECK(typeDump("arr[N * 2] T") == "(arr [(* N 2)] T)");
+    // a type spelling called on something in brackets is a conversion, a value
+    CHECK(typeDump("arr[i64u(n)] T") == "(arr [(call (type i64u) n)] T)");
+    CHECK(typeDump("arr[xs.len()] T").find("call") != std::string::npos);
+    CHECK(typeDump("arr[std.mem.A] T").find("call") == std::string::npos);
     CHECK(typeDump("[int, f64]") == "(tuple int f64)");
     CHECK(typeDump("[x :: f64, y :: f64]") == "(record x:f64 y:f64)");
     CHECK(typeDump("[data :: arr[A] mut T, count :: i64u]") == "(record data:(arr [A] (mut@elems T)) count:i64u)");

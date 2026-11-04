@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string_view>
 #include <thread>
 #ifdef _WIN32
@@ -117,6 +118,8 @@ struct Options {
     // which tests cheri test runs: the ones whose names hold the filter, or only the one named it exactly
     std::string filter;
     bool isExact = false;
+    // the command cheri test puts in front of each test binary, split at its spaces, like valgrind or qemu, or nothing to run it as it is
+    std::vector<std::string> runner;
 };
 
 // prints every command and option
@@ -130,6 +133,7 @@ static void usage(std::ostream& out) {
            "  run                   build the program, run it, and exit with its exit code\n"
            "  test <path> [name]    run the tests in a .toya file, or in every one under a directory, or only those whose names hold name\n"
            "  test ... --exact      run only the test named exactly name\n"
+           "  test ... --runner <command>  run each test binary under command, like 'valgrind -q', split at its spaces\n"
            "  lsp                   run the language server, which an editor starts and talks to over stdin and stdout\n"
            "  help                  print this message\n"
            "\n"
@@ -230,6 +234,11 @@ static bool parseOptions(int argc, char** argv, Options& options) {
             options.isFixing = true;
         } else if (arg == "--exact") {
             options.isExact = true;
+        } else if (arg == "--runner") {
+            std::string runner;
+            if (!value(runner)) return false;
+            std::istringstream words(runner);
+            for (std::string word; words >> word;) options.runner.push_back(word);
         } else if (arg.size() > 1 && arg[0] == '-') {
             fail("unknown option '" + std::string(arg) + "'");
             return false;
@@ -257,6 +266,10 @@ static bool parseOptions(int argc, char** argv, Options& options) {
     }
     if (options.isExact && options.command != "test") {
         fail("'--exact' only goes with 'test', since it picks which tests run");
+        return false;
+    }
+    if (!options.runner.empty() && options.command != "test") {
+        fail("'--runner' only goes with 'test', since it runs each test binary");
         return false;
     }
     // a .toya file holds tests, which only test runs, and test only runs those
@@ -384,7 +397,7 @@ static std::optional<Built> buildModule(const Options& options, Checked& checked
     DebugOptions debugOptions{options.debug, options.input, options.level != '0', triple.isWindowsMSVCEnvironment(), triple.isOSBinFormatELF()};
     Built built;
     // the module is named after the file, so prog.moya defines cheri.prog.start
-    built.codegen = std::make_unique<Codegen>(stem, checked.manager, debugOptions);
+    built.codegen = std::make_unique<Codegen>(stem, checked.manager, *checked.sema, debugOptions);
     built.module = built.codegen->generate(checked.program, tests);
     // broken IR is a codegen bug, so it's printed along with what's wrong with it before anything else touches it
     if (llvm::verifyModule(*built.module, &llvm::errs())) {
@@ -445,12 +458,22 @@ struct Outcome {
 };
 
 // runs one test in a process of its own, the test binary given its number, and judges it: a test passes by finishing, or, when it's expected to trap, by trapping with that text in the message, which the runtime prints to stderr before it aborts, where a test with a timeout is polled and killed once it runs past it, since LLVM's own timeout is one alarm for the whole process, which tests running at once can't share
-static Outcome runTest(const std::string& binary, size_t index, const Test& test) {
+static Outcome runTest(const std::string& binary, size_t index, const Test& test, const std::vector<std::string>& runner) {
     std::string log = binary + "." + std::to_string(index) + ".stderr";
     std::string number = std::to_string(index);
     std::optional<llvm::StringRef> redirects[] = {llvm::StringRef(""), llvm::StringRef(""), llvm::StringRef(log)};
     std::string error;
-    llvm::sys::ProcessInfo process = llvm::sys::ExecuteNoWait(binary, {binary, number}, std::nullopt, redirects, 0, &error);
+    // a runner goes in front, found on the path, with the binary and its test's number after its own arguments
+    std::vector<llvm::StringRef> args(runner.begin(), runner.end());
+    args.push_back(binary);
+    args.push_back(number);
+    std::string program = binary;
+    if (!runner.empty()) {
+        auto found = llvm::sys::findProgramByName(runner[0]);
+        if (!found) return {Outcome::Failed, "couldn't find the runner '" + runner[0] + "'"};
+        program = *found;
+    }
+    llvm::sys::ProcessInfo process = llvm::sys::ExecuteNoWait(program, args, std::nullopt, redirects, 0, &error);
     if (process.Pid == llvm::sys::ProcessInfo::InvalidPid) return {Outcome::Failed, "couldn't run: " + error};
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(test.timeout.value_or(0));
     llvm::sys::ProcessInfo finished;
@@ -522,7 +545,7 @@ static void testFile(const Options& options, const std::string& path, Tally& tal
     auto work = [&] {
         for (size_t i = next++; i < picked.size(); i = next++) {
             size_t index = std::find_if(every.begin(), every.end(), [&](const Test& t) { return t.fn == picked[i].fn; }) - every.begin();
-            outcomes[i] = runTest(binary, index, picked[i]);
+            outcomes[i] = runTest(binary, index, picked[i], options.runner);
         }
     };
     std::vector<std::thread> workers;

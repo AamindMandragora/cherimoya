@@ -1,7 +1,8 @@
 # the gdb pretty-printers a debug build embeds, for the values gdb would print wrong, found by each type's name: the floats DWARF can't
 # describe, FP8, bfloat16, and f128, which the debug info holds as their raw bits, the 1-byte integers, which gdb would print as C chars,
-# alone or in an array, which it would print as a C string, and runes, which it would print as hex escapes, where CMake puts this file's
-# text in printers.hpp, so it can't hold the raw string's closing delimiter, a ) then py then a quote
+# alone or in an array, which it would print as a C string, runes, which it would print as hex escapes, and arrays on the heap, which it
+# would print as an address and a length, where CMake puts this file's text in printers.hpp, so it can't hold the raw string's closing
+# delimiter, a ) then py then a quote
 import gdb
 from decimal import Decimal, localcontext
 from fractions import Fraction
@@ -90,6 +91,26 @@ class ByteArrayPrinter:
         for i in range(low, high + 1):
             yield "[%d]" % i, int(self.value[i])
 
+# an array on the heap, a structure of its elements' address and how many there are, as its elements, the way a fixed array prints,
+# where 1-byte elements print as their numbers too
+class HeapArrayPrinter:
+    def __init__(self, value, name):
+        self.value = value
+        self.name = name
+
+    def to_string(self):
+        return "%s of %d" % (self.name, int(self.value["len"]))
+
+    def display_hint(self):
+        return "array"
+
+    def children(self):
+        data = self.value["data"]
+        isByte = data.type.target().strip_typedefs().unqualified().name in BYTES
+        for i in range(int(self.value["len"])):
+            element = (data + i).dereference()
+            yield "[%d]" % i, int(element) if isByte else element
+
 # finds the printer for a value, by its type's name without const, or none for every type gdb already prints right
 def lookup(value):
     name = value.type.strip_typedefs().unqualified().name
@@ -99,7 +120,10 @@ def lookup(value):
         return BytePrinter(value)
     if name == "rune":
         return RunePrinter(value)
-    stripped = value.type.strip_typedefs()
+    # a structure is named by its tag, the way C names it
+    stripped = value.type.strip_typedefs().unqualified()
+    if stripped.code == gdb.TYPE_CODE_STRUCT and (stripped.tag or "").startswith("arr "):
+        return HeapArrayPrinter(value, stripped.tag)
     if stripped.code == gdb.TYPE_CODE_ARRAY and stripped.target().strip_typedefs().unqualified().name in BYTES:
         return ByteArrayPrinter(value)
     return None

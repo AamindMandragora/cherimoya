@@ -5,3 +5,4 @@ editors/vscode/dist/
 editors/vscode/*.vsix
 .cache/
 .vscode/
+.clangd
