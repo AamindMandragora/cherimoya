@@ -378,6 +378,51 @@ TEST_CASE("Sema: handles", "[sema]") {
     CHECK(semaErrors(K + "let ps :: arr[2] mut ptr int <- _;") == 1);
 }
 
+// checks strings: a literal is its UTF-8 bytes as a fixed array, any fixed array is lent to an input that borrows an arr T, arrays compare across lengths, and a match compares a string by its bytes
+TEST_CASE("Sema: strings", "[sema]") {
+    // a literal is chars when it's ASCII, bytes when it isn't, and whatever kind of string its context wants
+    CHECK(symbolType("let s <- \"hello\";", "s") == "arr[5] char");
+    CHECK(symbolType("let s <- \"h\u{E9}\";", "s") == "arr[3] i8u");
+    CHECK(symbolType("let s <- \"\";", "s") == "arr[0] char");
+    CHECK(symbolType("let s <- \"ab\"; let c <- s[1];", "c") == "char");
+    CHECK(symbolType("let s :: arr[2] i8u <- \"ab\";", "s") == "arr[2] i8u");
+    CHECK(symbolType("let s :: arr[5] rune <- \"h\u{E9}llo\";", "s") == "arr[5] rune");
+    CHECK(semaErrors("let s :: arr[6] i8u <- \"h\u{E9}llo\";") == 0);
+    CHECK(semaErrors("let s :: arr[5] char <- \"h\u{E9}llo\";") == 1);
+    // chars are bytes already, so they widen into bytes, but nothing else widens
+    CHECK(semaErrors("let c <- \"ab\"; let b :: arr[2] i8u <- c;") == 0);
+    CHECK(semaErrors("let b :: arr[2] i8u <- \"ab\"; let c :: arr[2] char <- b;") == 1);
+    CHECK(semaErrors("let b :: arr[2] rune <- \"ab\"; let c :: arr[2] i8u <- b;") == 1);
+    CHECK(semaErrors("let c <- \"ab\"; let b :: arr[2] i8u <- \"ab\"; let same <- c == b;") == 0);
+    CHECK(semaErrors("let (s :: arr i8u) -> f -> () { } let () -> g -> () { f(\"ab\"); let c <- \"cd\"; f(c); }") == 0);
+    CHECK(semaErrors("let (s :: arr mut i8u) -> f -> () { } let () -> g -> () { let c :: arr[2] mut char <- \"cd\"; f(c); }") == 1);
+    // the written conversions between kinds of string
+    CHECK(symbolType("let s <- \"h\u{E9}\"; let r <- arr rune(s);", "r") == "arr rune");
+    CHECK(symbolType("let r :: arr[2] rune <- \"h\u{E9}\"; let b <- arr i8u(r);", "b") == "arr i8u");
+    CHECK(symbolType("let b :: arr[2] i8u <- \"hi\"; let c <- arr char(b);", "c") == "arr char");
+    CHECK(symbolType("let c <- \"hi\"; let b <- arr i8u(c);", "b") == "arr i8u");
+    CHECK(semaErrors("let c <- \"hi\"; let r <- arr rune(c, 1);") == 1);
+    CHECK(semaErrors("let n <- [1, 2]; let r <- arr rune(n);") == 1);
+    CHECK(symbolType("let s <- \"ab\"; let n <- s.len();", "n") == "i64u");
+    // lending a fixed array to an input that borrows an arr T, and not to one that takes it over
+    const std::string count = "let (s :: arr i8u) -> count -> (r :: i64u) { s.len() -| } ";
+    CHECK(semaErrors(count + "let n <- count(\"hi\");") == 0);
+    CHECK(semaErrors(count + "let w <- \"hi\"; let n <- w |> count;") == 0);
+    CHECK(semaErrors("let (xs :: arr i8) -> f -> () { } let () -> g -> () { f([1, 2]); }") == 0);
+    CHECK(semaErrors("let (xs :: arr int) -> f -> () { } let () -> g -> () { f(\"hi\"); }") == 1);
+    CHECK(semaErrors("let (xs :: arr rune) -> f -> () { } let () -> g -> () { f(\"h\u{E9}\"); }") == 0);
+    CHECK(semaErrors("let (xs :: unscoped arr i8u) -> f -> () { let t <- xs; } let () -> g -> () { f(\"hi\"); }") == 1);
+    // arrays compare across lengths, a heap one with a fixed one
+    CHECK(semaErrors("let k :: mut i64u <- 2; let a <- arr[k] i8u(); let b <- a == \"go\"; let c <- \"go\" = a;") == 0);
+    CHECK(semaErrors("let b <- \"go\" == \"stop\";") == 1);
+    CHECK(semaErrors("let b <- \"go\" < \"stop\";") == 1);
+    // string patterns, which need a catch-all, and never match a fixed subject of another length
+    const std::string code = "let (cmd :: arr i8u) -> code -> (r :: int) { match (cmd) { \"go\" -> { 1 -| code } _ -> { 0 -| code } } } ";
+    CHECK(semaErrors(code) == 0);
+    CHECK(semaErrors("let (cmd :: arr i8u) -> code -> () { match (cmd) { \"go\" -> { } } }") == 1);
+    CHECK(semaWarnings("let w <- \"abc\"; match (w) { \"go\" -> { } _ -> { } }") == 1);
+}
+
 // checks which handles go on the stack: a binding in a function made with a size the program knows, up to 4 KiB, that never moves or is replaced
 TEST_CASE("Sema: handles on the stack", "[sema]") {
     auto isStacked = [](const std::string& input, std::string_view name) {
@@ -451,7 +496,6 @@ TEST_CASE("Sema: unsupported forms", "[sema]") {
     CHECK(semaErrors("import [List] <- list;") == 1);
     CHECK(semaErrors("let [a, b] <- p;") == 2);
     CHECK(semaErrors("let x :: Id <- 5; let y <- x; let z <- y;") == 1);
-    CHECK(semaErrors("let s <- \"hi\";") == 1);
     CHECK(semaErrors("let p <- [x <- 1, y <- 2];") == 1);
     CHECK(semaErrors("let x <- 0; repeat (i) <- x { }") == 1);
     CHECK(semaErrors("let (a :: int, b :: int) -> + -> (r :: int) { a -| }") == 1);

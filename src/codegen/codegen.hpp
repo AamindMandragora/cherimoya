@@ -482,6 +482,46 @@ class Codegen {
         return result;
     }
 
+    // compares two values of the types sema let a comparison have: the same type, chars against bytes, or an array on the heap and a fixed one of the same elements, which compare by length and then each element with the same operator, where the fixed one is looked at in a slot of its own, and two fixed arrays of different lengths, which only a match's string pattern can compare, never match
+    llvm::Value* compareAny(TokenKind op, llvm::Value* lhs, SemaType* lhsType, llvm::Value* rhs, SemaType* rhsType) {
+        if (lhsType == rhsType) return compare(op, lhs, rhs, lhsType);
+        bool isNegated = op == TokenKind::Ne || op == TokenKind::NeEq;
+        // chars and bytes are the same bytes, so arrays of the same size compare as one of them, and arrays of different sizes never match
+        if (asArray(lhsType) && asArray(rhsType)) {
+            if (asArray(lhsType)->size == asArray(rhsType)->size) return compare(op, lhs, rhs, lhsType);
+            return irbuilder.getInt1(isNegated);
+        }
+        HandleSemaType* heap = asHeapArray(lhsType) ? asHeapArray(lhsType) : asHeapArray(rhsType);
+        bool isLeftHeap = asHeapArray(lhsType) != nullptr;
+        llvm::Value* fixed = isLeftHeap ? rhs : lhs;
+        auto& array = *asArray(isLeftHeap ? rhsType : lhsType);
+        llvm::AllocaInst* slot = makeAlloca(lower(&array), "compared");
+        irbuilder.CreateStore(fixed, slot);
+        llvm::Value* view = heapArray(lower(heap), slot, irbuilder.getInt64(array.size));
+        TokenKind same = op == TokenKind::Eq || op == TokenKind::Ne ? TokenKind::Eq : TokenKind::EqEq;
+        llvm::Value* onHeap = isLeftHeap ? lhs : rhs;
+        llvm::Value* result = compareHeapArrays(same, isLeftHeap ? onHeap : view, isLeftHeap ? view : onHeap, *heap);
+        return isNegated ? irbuilder.CreateNot(result) : result;
+    }
+
+    // lends a fixed array to an input that borrows an arr T, as an array on the heap's handle to where its elements already are, a binding's or an element's, or a slot of their own for a value that isn't a place, where an input that can write the elements gets a copy unless the binding's elements can be written, so it never writes one that can't, like a string in read-only data
+    llvm::Value* lend(Expr& e, bool isWritten) {
+        auto& array = *asArray(e.type);
+        bool isPlace = e.kind == ExprKind::Identifier || e.kind == ExprKind::Index;
+        bool isWritable = e.kind == ExprKind::Identifier && static_cast<IdentifierExpr&>(e).decl->mutability.size() > 1 && static_cast<IdentifierExpr&>(e).decl->mutability[1];
+        llvm::Value* address;
+        if (isPlace && (!isWritten || isWritable)) {
+            address = placeAddress(e);
+        } else {
+            llvm::Value* value = emitExpr(e);
+            llvm::AllocaInst* slot = makeAlloca(lower(&array), "lent");
+            irbuilder.CreateStore(value, slot);
+            address = slot;
+        }
+        llvm::Type* handle = llvm::StructType::get(context, {irbuilder.getPtrTy(), irbuilder.getInt64Ty()});
+        return heapArray(handle, address, irbuilder.getInt64(array.size));
+    }
+
     // compares two handles: = asks whether they're the same memory, the same address, and for arrays the same length, and == compares what they hold, element by element or value against value, with ==
     llvm::Value* compareHandles(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, HandleSemaType& handle) {
         bool isNegated = op == TokenKind::Ne || op == TokenKind::NeEq;
@@ -1031,6 +1071,63 @@ class Codegen {
         return irbuilder.getInt64(asArray(array.type)->size);
     }
 
+    // the elements an array holds, fixed or on the heap, or null for anything else
+    SemaType* arrayElement(SemaType* type) {
+        if (ArraySemaType* fixed = asArray(type)) return fixed->element;
+        if (HandleSemaType* heap = asHeapArray(type)) return heap->element;
+        return nullptr;
+    }
+
+    // converts one kind of string into another on the heap, arr rune(s), arr i8u(r), or arr char(s), through the runtime, which traps on bytes that aren't valid UTF-8 or a character past ASCII, where chars become bytes by a copy, since they already are bytes, or returns null when the call isn't a conversion
+    llvm::Value* convertString(const std::vector<Expr*>& args, HandleSemaType& handle, Span span) {
+        if (args.size() != 1 || handle.handle != HandleKind::Array) return nullptr;
+        SemaType* from = arrayElement(args[0]->type);
+        auto isText = [&](SemaType* element) { return isCharacter(element) || element == sema.intType("i8u"); };
+        if (!from || from == handle.element || !isText(from) || !isText(handle.element)) return nullptr;
+        llvm::Value* value = emitExpr(*args[0]);
+        llvm::Value* data;
+        llvm::Value* length;
+        if (ArraySemaType* fixed = asArray(args[0]->type)) {
+            llvm::AllocaInst* slot = makeAlloca(lower(fixed), "converted");
+            irbuilder.CreateStore(value, slot);
+            data = slot;
+            length = irbuilder.getInt64(fixed->size);
+        } else {
+            data = irbuilder.CreateExtractValue(value, {0});
+            length = irbuilder.CreateExtractValue(value, {1});
+        }
+        llvm::Type* i64 = irbuilder.getInt64Ty();
+        llvm::Type* ptr = irbuilder.getPtrTy();
+        uint64_t line = manager.getLineCol(span.start).line;
+        llvm::Value* full = irbuilder.CreateGlobalString("out of memory making " + quoted(span));
+        bool isRunes = from == sema.runeType();
+        bool toRunes = handle.element == sema.runeType();
+        bool toChars = isCharacter(handle.element) && !toRunes;
+        // chars are already bytes, so they're copied as they are
+        if (!isRunes && !toRunes && !toChars) {
+            llvm::Value* memory = allocate(length, irbuilder.getInt8Ty(), false, span);
+            irbuilder.CreateMemCpy(memory, llvm::MaybeAlign(), data, llvm::MaybeAlign(), length);
+            return heapArray(lower(&handle), memory, length);
+        }
+        if (toChars) {
+            auto convert = module->getOrInsertFunction("cheri_to_ascii", llvm::FunctionType::get(ptr, {ptr, i64, i64, ptr, ptr, i64}, false));
+            llvm::Value* bad = irbuilder.CreateGlobalString(quoted(span) + " isn't ASCII");
+            llvm::Value* memory = irbuilder.CreateCall(convert, {data, length, irbuilder.getInt64(isRunes ? 4 : 1), full, bad, irbuilder.getInt64(line)});
+            return heapArray(lower(&handle), memory, length);
+        }
+        llvm::AllocaInst* count = makeAlloca(i64, "count");
+        llvm::Value* memory;
+        if (toRunes) {
+            auto decode = module->getOrInsertFunction("cheri_decode_utf8", llvm::FunctionType::get(ptr, {ptr, i64, ptr, ptr, ptr, i64}, false));
+            llvm::Value* bad = irbuilder.CreateGlobalString(quoted(span) + " isn't valid UTF-8");
+            memory = irbuilder.CreateCall(decode, {data, length, count, full, bad, irbuilder.getInt64(line)});
+        } else {
+            auto encode = module->getOrInsertFunction("cheri_encode_utf8", llvm::FunctionType::get(ptr, {ptr, i64, ptr, ptr, i64}, false));
+            memory = irbuilder.CreateCall(encode, {data, length, count, full, irbuilder.getInt64(line)});
+        }
+        return heapArray(lower(&handle), memory, irbuilder.CreateLoad(i64, count));
+    }
+
     // makes an array or a pointer by calling its type: ptr T(v) puts v in memory of its own, arr T(xs) puts a fixed array's elements there, and arr[n] T(...) makes n zeroed elements, which is every type's default, n uninitialized ones, or n deep copies of a fill, as a fixed array when sema folded n, and on the heap otherwise, where a handle sema found never outlives its function goes in the function's frame instead, as many elements as sema folded
     llvm::Value* emitMake(Expr& made, Expr& callee, const std::vector<Expr*>& args, Span span) {
         bool isOnStack = sema.isOnStack(&made);
@@ -1043,7 +1140,8 @@ class Codegen {
         // the length of an arr[n] T(...) on the heap, then its fill, in the order they're written, both before the memory they go in, the way a call's arguments are, where a fill that's a constant of all zero bits, like 0, 0.0, or false, is the same as the default, so the memory starts out zeroed and nothing has to fill it, and _ leaves it as it is
         llvm::Value* fill = nullptr;
         bool isZeroed = args.empty();
-        bool isSized = asArray(callee.type) || (asHeapArray(callee.type) && (args.empty() || !asArray(args[0]->type)));
+        auto& written = *static_cast<TypeExprExpr&>(callee).typeExpr;
+        bool isSized = written.kind == TypeKind::Handle && static_cast<const HandleType&>(written).arg.has_value();
         llvm::Value* length = isSized && !asArray(callee.type) ? irbuilder.CreateZExt(emitExpr(*sema.lengthOf(&callee)), irbuilder.getInt64Ty()) : nullptr;
         if (isSized && !args.empty() && args[0]->kind != ExprKind::Wildcard) {
             fill = emitExpr(*args[0]);
@@ -1064,6 +1162,7 @@ class Codegen {
         }
         auto& handle = *asHandle(callee.type);
         llvm::Type* element = lower(handle.element);
+        if (llvm::Value* converted = isSized ? nullptr : convertString(args, handle, span)) return converted;
         if (handle.handle == HandleKind::Pointer) {
             llvm::Value* value = emitExpr(*args[0]);
             llvm::Value* memory = memoryFor(element, irbuilder.getInt64(1), false);
@@ -1086,7 +1185,16 @@ class Codegen {
     llvm::Value* emitArguments(Symbol* function, std::vector<Expr*> written, const std::vector<Expr*>& inputs) {
         std::sort(written.begin(), written.end(), [](Expr* a, Expr* b) { return a->span.start < b->span.start; });
         std::unordered_map<Expr*, llvm::Value*> values;
-        for (Expr* arg : written) values[arg] = emitExpr(*arg);
+        for (Expr* arg : written) {
+            if (!sema.isLent(arg)) {
+                values[arg] = emitExpr(*arg);
+                continue;
+            }
+            // whether the input it's lent to can write its elements
+            size_t input = std::find(inputs.begin(), inputs.end(), arg) - inputs.begin();
+            auto& levels = function->function->inputs[input].decl->mutability;
+            values[arg] = lend(*arg, levels.size() > 1 && levels[1]);
+        }
         std::vector<llvm::Value*> args;
         for (size_t i = 0; i < inputs.size(); i++) {
             if (inputs[i]) {
@@ -1129,6 +1237,22 @@ class Codegen {
                 return irbuilder.getInt1(static_cast<BoolLiteralExpr&>(e).literal);
             case ExprKind::CharLiteral:
                 return llvm::ConstantInt::get(lower(e.type), charLiteralValue(static_cast<CharLiteralExpr&>(e).literal));
+            // a string is a constant array of its runes, when that's what sema made it, and otherwise of its UTF-8 bytes, which for an ASCII string of chars are its chars
+            case ExprKind::StringLiteral: {
+                auto& literal = static_cast<StringLiteralExpr&>(e);
+                if (asArray(e.type)->element == sema.runeType()) {
+                    std::vector<uint32_t> runes;
+                    std::string_view contents = literal.literal.substr(1, literal.literal.size() - 2);
+                    while (!contents.empty()) {
+                        Decoded character = decodeCharacter(contents);
+                        runes.push_back(character.value);
+                        contents.remove_prefix(character.length);
+                    }
+                    return llvm::ConstantDataArray::get(context, runes);
+                }
+                std::string bytes = stringLiteralValue(literal.literal);
+                return llvm::ConstantDataArray::get(context, llvm::ArrayRef<uint8_t>(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size()));
+            }
             // an annotation only told sema the value's type, so it's the value itself
             case ExprKind::Ann:
                 return emitExpr(*static_cast<AnnExpr&>(e).expr);
@@ -1178,7 +1302,7 @@ class Codegen {
                     case TokenKind::EqEq:
                     case TokenKind::Ne:
                     case TokenKind::NeEq:
-                        return compare(binary.op.kind, lhs, rhs, binary.lhs->type);
+                        return compareAny(binary.op.kind, lhs, binary.lhs->type, rhs, binary.rhs->type);
                     default:
                         llvm_unreachable("sema rejected every other binary operator");
                 }
@@ -1476,7 +1600,7 @@ class Codegen {
                     break;
                 case PatternKind::Literal: {
                     Expr& literal = *static_cast<LiteralPattern&>(*arm.pattern).literal;
-                    llvm::Value* matched = compare(equality, subject, emitExpr(literal), literal.type);
+                    llvm::Value* matched = compareAny(equality, subject, match.subject->type, emitExpr(literal), literal.type);
                     irbuilder.CreateCondBr(matched, body, next);
                     break;
                 }

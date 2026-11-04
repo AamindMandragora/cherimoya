@@ -216,6 +216,7 @@ In an expression, an infix `<-` is only ever construction, so it must be followe
 - **`=` and `!=` are shallow.** They compare the value a variable holds: handles compare by address (and, for arrays, length), floats compare bitwise, sums compare by tag plus shallow payload, and fixed arrays compare element by element with `=`.
 - **`==` and `!==` are deep.** They dereference recursively until no addresses remain, compare packs and records element by element, and compare arrays by length and then element by element, each element with `==`. Floats compare by value: IEEE equality for NaN-free floats, and the total order for NaN-carrying ones, so all NaNs are deep-equal to each other and `-0.0 == +0.0`.
 - **The orderings** `<` `<=` `>` `>=` compare values, so the "or equal" in `<=` is deep equality: `a <= b` is exactly `a < b || a == b`. Nothing orders arrays.
+- **Arrays across lengths:** an `arr T` on the heap compares with a fixed `arr[N] T` of the same elements by length and then each element, with the same operator, so `cmd == "go"` works on any `arr i8u`. Two fixed arrays of different lengths are different types, which don't compare.
 - **Characters and integers:** a value's bits are its value, so `==` agrees with `=`.
 - **Recursive types** (recursive through a pointer) don't get automatic deep equality. They define `-> == ->`, which is the `Eq` protocol.
 - **Shallow implies deep.** Equal bits always compare deep-equal. The reverse doesn't hold: `-0.0` and `+0.0` are deep-equal with different bits. There is no `===`.
@@ -323,7 +324,7 @@ let variance <- m[2] / m[0] - mean * mean;
 - **Slicing:** `xs[a, ..., <b]` costs O(1): one bounds check at creation, and the result is always a `peek` view. Strided slices produce a separate strided-view type.
 - **Dereference:** `p[]` reads the pointee, and `p[] <- v;` writes through the pointer, which needs `ptr mut T`. `p <- q;` rebinds the pointer itself, which needs `mut ptr T`.
 - **Field access through pointers** auto-dereferences: `p.x`.
-- **Address-of is type-directed.** Where a `peek T` is expected and a `T` place is supplied, a view is taken automatically, and a `ptr T` passed where a `peek T` is expected becomes a view. An `arr[N] T` converts to a `peek arr T` view for free. There is no address-of operator.
+- **Address-of is type-directed.** Where a `peek T` is expected and a `T` place is supplied, a view is taken automatically, and a `ptr T` passed where a `peek T` is expected becomes a view. An `arr[N] T` converts to a `peek arr T` view for free, and is lent the same way to an input that borrows an `arr T`, so `(s :: arr i8u)` takes a string of any length. There is no address-of operator.
 - **Raw pointers:** `Raw[T]` in `std.unsafe` is a non-owning pointer with no drop glue. The unsafe-tier intrinsics that convert between pointers and integer addresses (for MMIO and page tables) produce and consume `Raw[T]`, never an owning `ptr T`.
 
   > Open: how `Raw[T]` relates to `ptr void`, in FFI (11).
@@ -555,7 +556,7 @@ match {
 - inclusive, exclusive, and one-sided ranges
 - set-builder predicates such as `[x : x % 2 = 0]`, which subsume guard clauses
 
-Integers, floats, characters, runes, and `boolf`s are all valid subjects, with literal patterns that adapt to the subject's type.
+Integers, floats, characters, runes, and `boolf`s are all valid subjects, with literal patterns that adapt to the subject's type. An array of bytes is too, with string patterns, which match an array of the same length and bytes, whatever the subject's length, and need a catch-all like a number does. A string that can never match a fixed subject, since their lengths differ, is a warning.
 
 **Exhaustiveness.** An incomplete match is an error (a case goes unhandled), with a fix that adds `_ -> { }`: `cherimoya requires a match on 'int' to cover every value, please add a '_ -> { ... }' arm`.
 
@@ -1032,9 +1033,9 @@ A `char` is always a whole character: a byte above 7F is part of a longer UTF-8 
 
 ### 5.8 Strings
 
-Text is UTF-8, so a string is an array of `i8u` bytes, not of `char`s, since a `char` is ASCII only. String literals hold the same escapes as character literals and are checked the same way. The stdlib provides `string` (text with string functions) and `cstring` (null-terminated, for C interop).
+A string is an array of characters, of one of three kinds: `arr char`, ASCII, a byte each, `arr i8u`, UTF-8 bytes, which files, terminals, and C use, and `arr rune`, a whole character each. A literal is the kind its context wants, and otherwise chars when it's all ASCII and UTF-8 bytes when it isn't, and like any constant fixed array, an immutable one lives in read-only data. A string of chars widens into a string of bytes wherever bytes are wanted, without being written, since it already is one, except into something that could write bytes that aren't ASCII. Every other change of kind makes a new array, so it's written: `arr rune(s)` decodes, trapping on bytes that aren't valid UTF-8, `arr i8u(s)` encodes, and `arr char(s)` traps on a character past ASCII. String literals hold the same escapes as character literals and are checked the same way, so `\xHH` is at most `7F` and every literal is valid UTF-8. A string matches a literal pattern of the same bytes, whatever its length (3.6). The stdlib provides `string` (text with string functions) and `cstring` (null-terminated, for C interop).
 
-> Open: the exact type of a string literal (a read-only `arr[N] i8u`, a `peek arr i8u`, or `string`), and how `string` and `cstring` are defined.
+> Open: how `string` and `cstring` are defined.
 
 > Open: how strings concatenate. `+` on arrays is elementwise in stdcheri (8), which would make `"Fizz" + "Buzz"` elementwise addition rather than concatenation, and the concatenation operator's spelling is chosen with array math.
 

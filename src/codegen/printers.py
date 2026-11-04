@@ -1,8 +1,8 @@
 # the gdb pretty-printers a debug build embeds, for the values gdb would print wrong, found by each type's name: the floats DWARF can't
 # describe, FP8, bfloat16, and f128, which the debug info holds as their raw bits, the 1-byte integers, which gdb would print as C chars,
-# alone or in an array, which it would print as a C string, runes, which it would print as hex escapes, and arrays on the heap, which it
-# would print as an address and a length, where CMake puts this file's text in printers.hpp, so it can't hold the raw string's closing
-# delimiter, a ) then py then a quote
+# alone or in an array, which it would print as a C string, runes, which it would print as hex escapes, arrays on the heap, which it
+# would print as an address and a length, and strings, which it would print as their elements, where CMake puts this file's text in
+# printers.hpp, so it can't hold the raw string's closing delimiter, a ) then py then a quote
 import gdb
 from decimal import Decimal, localcontext
 from fractions import Fraction
@@ -75,6 +75,41 @@ class RunePrinter:
 
 BYTES = ("i8", "i8u", "i8w", "i8uw")
 
+# a string as cherimoya writes it, quoted with its escapes, by the kind of string its elements make: bytes as their numbers then the text
+# they spell when they're valid UTF-8, since bytes are also binary data, chars as their text, and runes as theirs after a U, or none when
+# the elements aren't a kind of string or don't spell text
+def stringText(values, name):
+    if name in ("i8u", "i8uw"):
+        try:
+            text = bytes(values).decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    elif name == "char":
+        text = "".join(chr(value) for value in values)
+    elif name == "rune":
+        if any(value > 0x10FFFF or 0xD800 <= value <= 0xDFFF for value in values):
+            return None
+        text = "".join(chr(value) for value in values)
+    else:
+        return None
+    escapes = {"\n": "\\n", "\t": "\\t", "\r": "\\r", "\0": "\\0", "\\": "\\\\", '"': '\\"'}
+    quoted = '"' + "".join(escapes.get(c, c if c.isprintable() else "\\u{%X}" % ord(c)) for c in text) + '"'
+    if name == "rune":
+        return "U" + quoted
+    if name == "char":
+        return quoted
+    return "{" + ", ".join(str(value) for value in values) + "} " + quoted
+
+STRINGS = ("i8u", "i8uw", "char", "rune")
+
+# a value gdb shows as one line of text, like a string's bytes and what they spell
+class TextPrinter:
+    def __init__(self, text):
+        self.text = text
+
+    def to_string(self):
+        return self.text
+
 # an array of 1-byte integers as its numbers, since gdb would print it as a C string
 class ByteArrayPrinter:
     def __init__(self, value):
@@ -123,9 +158,19 @@ def lookup(value):
     # a structure is named by its tag, the way C names it
     stripped = value.type.strip_typedefs().unqualified()
     if stripped.code == gdb.TYPE_CODE_STRUCT and (stripped.tag or "").startswith("arr "):
+        data = value["data"]
+        element = data.type.target().strip_typedefs().unqualified().name
+        text = element in STRINGS and stringText([int((data + i).dereference()) & 0xFFFFFFFF for i in range(int(value["len"]))], element)
+        if text:
+            return TextPrinter("%s of %d = %s" % (stripped.tag, int(value["len"]), text))
         return HeapArrayPrinter(value, stripped.tag)
-    if stripped.code == gdb.TYPE_CODE_ARRAY and stripped.target().strip_typedefs().unqualified().name in BYTES:
-        return ByteArrayPrinter(value)
+    if stripped.code == gdb.TYPE_CODE_ARRAY and stripped.target().strip_typedefs().unqualified().name in STRINGS + BYTES:
+        element = stripped.target().strip_typedefs().unqualified().name
+        low, high = stripped.range()
+        text = stringText([int(value[i]) & 0xFFFFFFFF for i in range(low, high + 1)], element)
+        if text:
+            return TextPrinter(text)
+        return ByteArrayPrinter(value) if element in BYTES else None
     return None
 
 objfile = gdb.current_objfile()

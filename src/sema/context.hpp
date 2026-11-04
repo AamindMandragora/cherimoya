@@ -77,7 +77,7 @@ public:
     ErrorSemaType* semaError = make<ErrorSemaType>();
 
     // finds the integer type written with this name, or null if it isn't one
-    IntSemaType* intType(std::string_view name) {
+    IntSemaType* intType(std::string_view name) const {
         auto it = ints.find(std::string(name));
         return it == ints.end() ? nullptr : it->second;
     }

@@ -14,5 +14,5 @@ languages = ["Cherimoya"]
 # the grammar is read from this repository at a commit, which has to be bumped whenever the grammar changes, since Zed builds it from git
 [grammars.cherimoya]
 repository = "https://github.com/AamindMandragora/cherimoya"
-rev = "2af0e8d50cb97c5b759b3de7df35cb5f5226dddb"
+rev = "a1f5529edb92a8a18a793beb2d8c16d59ae9de4c"
 path = "tree-sitter"

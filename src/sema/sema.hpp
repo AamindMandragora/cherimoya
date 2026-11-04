@@ -114,6 +114,8 @@ class Sema {
     static constexpr uint64_t stackLimit = 4096;
     // the length every arr[n] T(...) is made with, keyed by its callee, where a lone name in the brackets reaches sema as a type, so sema makes the name it stands for and keeps it here
     std::unordered_map<const Expr*, Expr*> lengths;
+    // every fixed array passed to an input that borrows an arr T, which lends it as one, its elements where they are and their count
+    std::unordered_set<const Expr*> lent;
     std::deque<std::unique_ptr<Expr>> madeNames;
 
     // reports something sema doesn't check yet, and poisons the result
@@ -273,7 +275,7 @@ class Sema {
             first = pipe.op.kind == TokenKind::PipeFwd ? pipe.lhs.get() : pipe.rhs.get();
         }
         if (handle.handle == HandleKind::Pointer) return 1;
-        if (ArraySemaType* fixed = asArray(first->type)) return fixed->size;
+        if (ArraySemaType* fixed = asArray(first->type); fixed && fixed->element == handle.element) return fixed->size;
         return std::nullopt;
     }
 
@@ -766,9 +768,28 @@ class Sema {
         if (!let.type && !isPoisoned(type)) inferred.push_back(symbol);
     }
 
+    // checks whether a value of type actual is a fixed array of the elements an array on the heap holds, which is lent as one
+    bool isLendable(SemaType* heap, SemaType* actual) {
+        return asHeapArray(heap) && asArray(actual) && isWidening(asHeapArray(heap)->element, asArray(actual)->element);
+    }
+
+    // checks whether two arrays compare across their lengths or their kinds of string: one on the heap and one fixed, of the same elements, or chars against bytes, which are the same bytes
+    bool isComparableArrays(SemaType* lhs, SemaType* rhs) {
+        return isLendable(lhs, rhs) || isLendable(rhs, lhs) || isWidening(lhs, rhs) || isWidening(rhs, lhs);
+    }
+
     // checks whether a value of type actual can go where expected is wanted, where errors and never fit anywhere
     bool isCompatible(SemaType* expected, SemaType* actual) {
-        return expected == actual || expected == context.semaError || actual == context.semaError || actual == context.semaNever;
+        return expected == actual || expected == context.semaError || actual == context.semaError || actual == context.semaNever || isWidening(expected, actual);
+    }
+
+    // checks whether a value of type actual already is one of type expected, bit for bit, which a string of chars is of a string of bytes, since ASCII is valid UTF-8, all the way through arrays and pointers of them, so nothing has to convert it
+    bool isWidening(SemaType* expected, SemaType* actual) {
+        if (expected == actual) return true;
+        if (expected == context.intType("i8u") && actual == context.semaChar) return true;
+        if (asArray(expected) && asArray(actual)) return asArray(expected)->size == asArray(actual)->size && isWidening(asArray(expected)->element, asArray(actual)->element);
+        if (asHandle(expected) && asHandle(actual)) return asHandle(expected)->handle == asHandle(actual)->handle && isWidening(asHandle(expected)->element, asHandle(actual)->element);
+        return false;
     }
 
     // reports a value of the wrong type
@@ -941,6 +962,12 @@ class Sema {
             }
             case PatternKind::Literal: {
                 auto type = checkExpr(*static_cast<LiteralPattern&>(p).literal, subject);
+                // a string matches an array of bytes of any length, which it does by length and then its bytes, where a fixed subject of another length never does
+                if (asArray(type) && asArray(subject) && asArray(type)->element == asArray(subject)->element && type != subject) {
+                    engine.printWarning("cherimoya never matches this arm, since the subject holds " + std::to_string(asArray(subject)->size) + " elements and this pattern " + std::to_string(asArray(type)->size), p.span);
+                    return false;
+                }
+                if (isComparableArrays(subject, type)) return false;
                 if (!isPoisoned(subject) && !isPoisoned(type) && type != subject) {
                     engine.printError("cherimoya expected a pattern of type '" + subject->toString() + "', got '" + type->toString() + "' instead", p.span);
                 }
@@ -1016,7 +1043,7 @@ class Sema {
         join(target, entered);
         if (covered || (subject && isPoisoned(subject))) return finish(target, false, "this match");
         bool yieldsValue = target.yielded != nullptr && target.yielded != context.semaVoid && !isPoisoned(target.yielded);
-        if (isNumeric(subject) || isCharacter(subject) || subject == context.semaBoolf || yieldsValue) {
+        if (isNumeric(subject) || isCharacter(subject) || subject == context.semaBoolf || asArray(subject) || asHeapArray(subject) || yieldsValue) {
             std::string what = subject ? "a match on '" + subject->toString() + "'" : "a match that yields a value";
             engine.printError("cherimoya requires " + what + " to cover every value, please add a '_ -> { ... }' arm", Span{m.span.start, m.span.start + 5}, {}, catchAllArm(m));
             return context.semaError;
@@ -1385,6 +1412,40 @@ class Sema {
         return value > 0x7F ? context.semaRune : context.semaChar;
     }
 
+    // the characters a string literal holds, each one's code point, once its escapes are read
+    std::vector<uint32_t> codePoints(std::string_view literal) {
+        std::string_view contents = literal.substr(1, literal.size() - 2);
+        std::vector<uint32_t> points;
+        while (!contents.empty()) {
+            Decoded character = decodeCharacter(contents);
+            points.push_back(character.value);
+            contents.remove_prefix(character.length);
+        }
+        return points;
+    }
+
+    // what kind of string a type holds, by its elements, a fixed array's or an array on the heap's: chars, UTF-8 bytes, or runes, or null for anything else
+    SemaType* stringElement(SemaType* type) {
+        SemaType* element = asArray(type) ? asArray(type)->element : asHeapArray(type) ? asHeapArray(type)->element : nullptr;
+        if (element == context.semaChar || element == context.semaRune || element == context.intType("i8u")) return element;
+        return nullptr;
+    }
+
+    // types a string literal as the kind of string the context wants, a fixed array of its chars, its UTF-8 bytes, or its runes, as many as that takes, and otherwise as chars when every character is ASCII and as bytes when one isn't, where chars can only hold ASCII
+    SemaType* stringLiteral(StringLiteralExpr& literal, SemaType* expected) {
+        auto points = codePoints(literal.literal);
+        bool isAscii = std::all_of(points.begin(), points.end(), [](uint32_t c) { return c <= 0x7F; });
+        SemaType* element = stringElement(expected);
+        if (!element) element = isAscii ? static_cast<SemaType*>(context.semaChar) : context.intType("i8u");
+        if (element == context.semaChar && !isAscii) {
+            engine.printError("cherimoya requires " + std::string(literal.literal) + " to be ASCII to be a string of chars, please make it 'arr i8u' or 'arr rune'", literal.span);
+            return context.semaError;
+        }
+        if (element == context.semaRune) return context.arrayType(element, points.size());
+        if (element == context.semaChar) return context.arrayType(element, points.size());
+        return context.arrayType(element, stringLiteralValue(literal.literal).size());
+    }
+
     // the literal an expression is, looking through a minus, or null if it isn't a number literal: -128 is the literal 128, negated
     const Expr* literalOf(const Expr& e) {
         const Expr* inner = &e;
@@ -1479,6 +1540,8 @@ class Sema {
             badOperand(wanted, left ? "on the left of" : "on the right of", op, left ? lhs : rhs, left ? lhsSpan : rhsSpan);
             return context.semaError;
         }
+        // an array on the heap compares with a fixed one by length and then each element, so cmd = "go" works
+        if (op.category == OpCategory::Equality && isComparableArrays(lhs, rhs)) return result;
         if (lhs != rhs) {
             engine.printError("cherimoya requires both sides of '" + op.spelling + "' to have the same type, please convert one of them", Span{lhsSpan.start, rhsSpan.end},
                 {{"this side is '" + lhs->toString() + "'", lhsSpan}, {"this side is '" + rhs->toString() + "'", rhsSpan}});
@@ -1644,9 +1707,20 @@ class Sema {
             return &handle;
         }
         // a pack takes the elements' type, and anything else is checked for what it is, where a literal that's a length, which goes in brackets, is an i64u so the fix reads right
-        auto expected = first.kind == ExprKind::Pack ? static_cast<SemaType*>(context.arrayType(handle.element, static_cast<PackExpr&>(first).elems.size())) : context.intType("i64u");
+        auto expected = first.kind == ExprKind::Pack ? static_cast<SemaType*>(context.arrayType(handle.element, static_cast<PackExpr&>(first).elems.size()))
+            : first.kind == ExprKind::StringLiteral ? static_cast<SemaType*>(&handle) : context.intType("i64u");
         auto source = checkExpr(first, expected);
         if (isPoisoned(source)) return context.semaError;
+        // one kind of string becomes another by a conversion into a new array: bytes or chars decode into runes, runes encode into bytes, and bytes or runes become chars when they're ASCII
+        SemaType* from = stringElement(source);
+        if (from && stringElement(&handle) && from != handle.element && (asArray(source) || asHeapArray(source))) {
+            if (args.size() == 2) {
+                checkExpr(*args[1].value);
+                engine.printError("cherimoya expected 1 value in the call to '" + made + "', got 2 instead", span);
+                return context.semaError;
+            }
+            return &handle;
+        }
         if (asArray(source)) {
             if (args.size() == 2) checkExpr(*args[1].value);
             if (asArray(source)->element != handle.element) {
@@ -1670,7 +1744,7 @@ class Sema {
             return context.semaError;
         }
         if (args.size() == 2) checkExpr(*args[1].value);
-        engine.printError("cherimoya expected a fixed array in the call to '" + made + "', got '" + source->toString() + "' instead", first.span);
+        engine.printError("cherimoya expected a fixed array or another kind of string in the call to '" + made + "', got '" + source->toString() + "' instead", first.span);
         return context.semaError;
     }
 
@@ -1803,8 +1877,8 @@ class Sema {
         for (auto& e : pack.elems) {
             if (e.name) return unsupported("named packs", tokSpan(*e.name));
         }
-        auto expectedArray = asArray(expected);
-        SemaType* element = expectedArray ? expectedArray->element : nullptr;
+        // an array on the heap expected where the pack goes, like a borrowed input it's lent to, says the elements' type too
+        SemaType* element = asArray(expected) ? asArray(expected)->element : asHeapArray(expected) ? asHeapArray(expected)->element : nullptr;
         bool isExpected = element != nullptr;
         if (pack.elems.empty()) {
             if (isExpected) return context.arrayType(element, 0);
@@ -1920,6 +1994,22 @@ class Sema {
             SemaType* parameter = slots[i] ? fnType->params[*slots[i]] : nullptr;
             // the first argument is already checked when the call was looked at as a method's first
             actual.push_back(args[i].value->type ? args[i].value->type : checkExpr(*args[i].value, parameter));
+            // chars only go where bytes are wanted when nothing can write them there, since bytes that aren't ASCII would break the chars, whether they're passed as they are or lent
+            if (parameter && parameter != actual.back()) {
+                bool isLentAcross = isLendable(parameter, actual.back()) && asArray(actual.back())->element != asHeapArray(parameter)->element;
+                auto& input = function->function->inputs[*slots[i]];
+                auto levels = mutabilityOf(input.type.get(), parameter);
+                bool writes = !isUnscoped(input) && std::find(levels.begin() + 1, levels.end(), true) != levels.end();
+                if (writes && (isWidening(parameter, actual.back()) || isLentAcross)) {
+                    mismatch(parameter, actual.back(), args[i].value->span);
+                    continue;
+                }
+            }
+            // a fixed array goes to an input that borrows an arr T of its elements by lending it, where it already is
+            if (parameter && isLendable(parameter, actual.back()) && !isUnscoped(function->function->inputs[*slots[i]])) {
+                lent.insert(args[i].value);
+                continue;
+            }
             if (parameter && !isCompatible(parameter, actual.back())) mismatch(parameter, actual.back(), args[i].value->span);
         }
         // an unscoped input takes over what it's given, which moves once every argument is evaluated, so another argument can still read it first
@@ -1938,7 +2028,6 @@ class Sema {
     // names the kinds of expression sema doesn't check yet, for their diagnostic
     std::string_view unsupportedName(const Expr& e) {
         switch (e.kind) {
-            case ExprKind::StringLiteral: return "strings";
             case ExprKind::OpRef: return "operators as values";
             case ExprKind::Old: return "'old'";
             case ExprKind::Construct: return "construction";
@@ -1984,6 +2073,8 @@ class Sema {
                 return expected == context.semaBoolf ? context.semaBoolf : context.semaBool;
             case ExprKind::CharLiteral:
                 return charLiteral(static_cast<CharLiteralExpr&>(e), expected);
+            case ExprKind::StringLiteral:
+                return stringLiteral(static_cast<StringLiteralExpr&>(e), expected);
             case ExprKind::Ann:
                 return checkAnnotation(static_cast<AnnExpr&>(e));
             // a binding that moved holds nothing to read until it's assigned again, which is reported once, so the uses after it don't report too
@@ -2169,6 +2260,15 @@ public:
     // whether a handle is made on the stack, which codegen puts in the function's frame instead of allocating, with as many elements as sema folded, and whether a binding holds one, which frees what its elements own but not the handle's own memory
     bool isOnStack(const Expr* e) const { return stackMade.count(e) > 0; }
     uint64_t stackCount(const Expr* e) const { return stackMade.at(e); }
+
+    // the rune type, which codegen tells string literals of runes by
+    SemaType* runeType() const { return context.semaRune; }
+
+    // an integer type by the name it's written with, which codegen tells a string of bytes by
+    SemaType* intType(std::string_view name) const { return context.intType(name); }
+
+    // whether a fixed array is lent to an input that borrows an arr T
+    bool isLent(const Expr* e) const { return lent.count(e) > 0; }
 
     // the length an arr[n] T(...) is made with, by its callee
     Expr* lengthOf(const Expr* callee) const { return lengths.at(callee); }
