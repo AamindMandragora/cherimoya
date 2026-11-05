@@ -10,6 +10,7 @@ enum class SemaTypeKind {
     Float,
     Array,
     Handle,
+    View,
     Function,
     Error
 };
@@ -164,6 +165,24 @@ inline bool owns(SemaType* type) {
     if (asHandle(type)) return true;
     if (ArraySemaType* array = asArray(type)) return owns(array->element);
     return false;
+}
+
+// a view of a place, which is how a function's signature says an input or its output is one, so it's passed as the place's address, where everywhere else a view has the type of what it views, since it reads and writes as that
+class ViewSemaType : public SemaType {
+public:
+    SemaType* viewed;
+    ViewSemaType(SemaType* v) : SemaType(SemaTypeKind::View), viewed(v) {}
+    std::string toString() const override {
+        return "peek " + viewed->toString();
+    }
+};
+
+// the view type a sema type is, or null if it isn't one, and the type of what a signature's input or output holds, looking through a view
+inline ViewSemaType* asView(SemaType* type) {
+    return type != nullptr && type->kind == SemaTypeKind::View ? static_cast<ViewSemaType*>(type) : nullptr;
+}
+inline SemaType* unview(SemaType* type) {
+    return asView(type) ? asView(type)->viewed : type;
 }
 
 // a function type is its parameters' types and the type it yields

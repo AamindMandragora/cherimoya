@@ -693,7 +693,7 @@ These are keywords written like calls, but they take **places, not values**, so 
 
 Anything else is a compile error: `cherimoya requires 'xs' to be moved before 'grow' ends, please yield it or pass it to an unscoped input`.
 
-**`peek`** is a non-owning view. It never frees memory and can't escape, except as 4.7 allows.
+**`peek`** is a non-owning view of a place. It never frees memory and can't escape, except as 4.7 allows.
 
 **Across modes:**
 
@@ -802,20 +802,17 @@ cherimoya requires 'a' to hold a value to use it, please assign it again after m
 
 **An input borrows.** `total(xs)` lends `xs` for the call, so the caller still owns and frees it, and the callee works on it in place: it can read it, write its elements when they're `mut`, and pass it on to another call. It can't keep it, so moving, rebinding, or yielding it is an error: `cherimoya requires 'xs' to be owned to move it, please declare it 'unscoped' to take it over`. A borrowed input follows the peek rules (4.7).
 
-> Open: whether a plain input is implicitly a `peek` once views exist, or `peek` is written on inputs that borrow.
-
 **An `unscoped` input takes ownership.** `(xs :: unscoped arr mut int)` owns what it's given, so a call moves the caller's argument in, without saying so, the way a binding moves, and the caller can't use it until it's assigned again. The callee must discharge it (4.1), and binding it is one way, so `let given <- xs;` makes the callee's own binding the owner, which frees it at the end of its scope. One moved in only some arms of a match is an error on the others, since freeing it there would be letting it go. That is how a function hands an array back changed: `xs <- grow(xs);`.
 
 **Outputs move out.** A function can yield a handle it owns, one it made or took over, and the caller owns it from then on.
 
 ### 4.7 Peek rules
 
-- **Escape ban:** a peek may not outlive the scope of any of its roots.
-- **Root sets.** Every projected peek (field, element, slice, returned projection) carries the set of roots it may derive from. Mutating any root in the set invalidates the peek, and using an invalidated peek is a compile error. This is intraprocedural dataflow over the lattice valid → invalidated.
-- **Return elision:** a function may return a peek (alone or inside a type such as `Option[peek T]` or `[peek A, peek B]`) when every view in it derives from peek inputs. There are no lifetime annotations:
-  - Each view position in the result is assigned the set of inputs it may derive from. `zip` returns `[peek A, peek B]` with position 0 from `xs` and position 1 from `ys`, and `longest(a, b)` returns a view from `{a, b}`.
-  - At the call site, the result is a projection of every argument in its set. It is invalidated when any of them is mutated, and it can't outlive the shortest-lived one.
-- **Call-site exclusivity:** a `peek mut` argument conflicts with every other live view of the same root, including views passed as other arguments of the same call. `pushAll(v, v[0, ..., <2])` is a compile error, since the callee could reallocate `v` while reading the slice.
+- **A view is transparent.** It reads and writes as the place it views, `peek T` for a place of any type, and holds that place's address, so `let v :: peek mut <- x; v <- 5;` writes `x`. It never owns or frees what it views, can't be rebound, and is made from a place, or from a call that yields a view of places. What it can write has to be writable where it comes from.
+- **Paths.** A view remembers exactly what it views: the binding at its base and every index and pointer after it, `grid[2][0]` or `p[]`. Two paths overlap when one runs into the other, an index known when the program compiles tells elements apart, and one known only at run time might be any element, until Z3 can prove two indices differ.
+- **Only memory going away matters.** Any number of views can read and write the same place, so aliasing writes are allowed. While a view is live, from where it's made to its last use, nothing it points into can be freed or moved: its root can't be moved, nothing its path runs through can be replaced, and nothing past where it points can be written over where what's written owns memory, including by an input that could do any of those. A view of a place itself survives that place being replaced, since it points at the place, which holds the new value. Each conflict is an error where it happens: `cherimoya requires 'grid' to stay where it is while 'e' views it, please use 'e' for the last time before this`.
+- **Return elision:** a function may yield a view, alone or inside a type such as `Option[peek T]` or `[peek A, peek B]`, when every view in it is of one of its inputs that are views. There are no lifetime annotations. At the call site, the result views every argument passed to an input that's a view, and a view of a value that isn't a place, which is gone once its statement ends, is an error.
+- **Inputs.** An input of an owning type is a view without saying so, and `peek` makes any input one, so `(n :: peek mut int)` writes its caller's `int`.
 - **Peek-like types:** a type with a peek field is itself peek-like, and so are packs containing views and closures with implicit captures. Values of peek-like types follow the same rules.
 
 ### 4.8 Uninitialized storage

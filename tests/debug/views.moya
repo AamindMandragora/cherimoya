@@ -1,0 +1,23 @@
+# dwarf: DW_TAG_reference_type
+# gdb: break bump
+# gdb: run
+# gdb: print n
+# gdb: print xs
+# gdb: up
+# gdb: print v
+# expect: $1 = (int &) @
+# expect: : 1
+# expect: (struct arr int &) @
+# expect: : arr int of 2 = {1, 2}
+# expect: : 2
+# checks that a view shows as a reference to what it views, which gdb follows, whether it's an input written as one, an input of an owning type, or a binding viewing an element
+let (n :: peek mut int, xs :: arr int) -> bump -> () {
+    n +<- int(xs.len());
+}
+let () -> start -> (code :: int) {
+    let x :: mut <- 1;
+    let ys <- arr int([1, 2]);
+    let v :: peek <- ys[1];
+    bump(x, ys);
+    x + v -|
+}

@@ -67,6 +67,9 @@ class DebugInfo {
             llvm::DIType* element = typeOf(array->element);
             auto subscripts = builder.getOrCreateArray({builder.getOrCreateSubrange(0, static_cast<int64_t>(array->size))});
             made = builder.createArrayType(array->size * element->getSizeInBits(), 0, element, subscripts);
+        } else if (auto view = asView(type)) {
+            // a view in a signature is the address of what it views
+            made = builder.createReferenceType(llvm::dwarf::DW_TAG_reference_type, typeOf(view->viewed), 64);
         } else if (auto handle = asHandle(type)) {
             // a pointer is a pointer to its value, named the way the source names it, and an array on the heap is a structure of its elements' address and how many there are, which the embedded printers show as its elements
             llvm::DIType* element = typeOf(handle->element);
@@ -111,6 +114,8 @@ class DebugInfo {
     // a symbol's debug type, const unless it's mut, the way the language treats it
     llvm::DIType* typeOf(const Symbol& symbol) {
         llvm::DIType* type = typeOf(symbol.type);
+        // a view's slot holds the address of what it views, which gdb follows as a reference, so it prints what the view views
+        if (symbol.isView) return builder.createReferenceType(llvm::dwarf::DW_TAG_reference_type, type, 64);
         return symbol.isMutable() ? type : builder.createQualifiedType(llvm::dwarf::DW_TAG_const_type, type);
     }
 

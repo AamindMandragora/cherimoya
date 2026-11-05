@@ -106,6 +106,9 @@ class Codegen {
                 auto& array = static_cast<ArraySemaType&>(*type);
                 return lowered[type] = llvm::ArrayType::get(lower(array.element), array.size);
             }
+            // a view in a signature is the address of what it views
+            case SemaTypeKind::View:
+                return lowered[type] = irbuilder.getPtrTy();
             case SemaTypeKind::Handle:
                 if (asPointer(type)) return lowered[type] = irbuilder.getPtrTy();
                 return lowered[type] = llvm::StructType::get(context, {irbuilder.getPtrTy(), irbuilder.getInt64Ty()});
@@ -423,8 +426,11 @@ class Codegen {
 
     // where a place's value lives: a binding's slot or global, or an element inside one, where a value that isn't a place, like a call's result, is put in a slot of its own first, so it can be indexed too
     llvm::Value* placeAddress(Expr& e) {
+        if (e.kind == ExprKind::Ann) return placeAddress(*static_cast<AnnExpr&>(e).expr);
         if (e.kind == ExprKind::Identifier) return addressOf(static_cast<IdentifierExpr&>(e).decl);
         if (e.kind == ExprKind::Index) return elementAddress(static_cast<IndexExpr&>(e));
+        // a call that yields a view yields the address of what it views, which is the place
+        if (Symbol* function = viewCallee(e)) return emitView(e, function);
         llvm::Value* value = emitExpr(e);
         llvm::AllocaInst* slot = makeAlloca(lower(e.type), "temporary");
         irbuilder.CreateStore(value, slot);
@@ -1181,19 +1187,67 @@ class Codegen {
         return heapArray(lower(&handle), memory, length);
     }
 
+    // the function a call or a pipe calls by name, when it yields a view, or null for anything else
+    Symbol* viewCallee(Expr& e) {
+        Expr* callee = nullptr;
+        if (e.kind == ExprKind::Call) callee = static_cast<CallExpr&>(e).callee.get();
+        if (e.kind == ExprKind::Pipe) {
+            auto& pipe = static_cast<PipeExpr&>(e);
+            callee = pipe.op.kind == TokenKind::PipeFwd ? pipe.rhs.get() : pipe.lhs.get();
+            if (callee->kind == ExprKind::Call) callee = static_cast<CallExpr&>(*callee).callee.get();
+        }
+        if (callee == nullptr || callee->kind != ExprKind::Identifier) return nullptr;
+        Symbol* function = static_cast<IdentifierExpr&>(*callee).decl;
+        if (function == nullptr || function->kind != SymbolKind::Function) return nullptr;
+        return asView(static_cast<FunctionSemaType*>(function->type)->returns) ? function : nullptr;
+    }
+
+    // a call's value when the function yields a view, which reads what it views, since a view reads as the thing it views, or the value it yields otherwise
+    llvm::Value* readView(Expr& e, llvm::Value* result) {
+        if (result == nullptr || !viewCallee(e)) return result;
+        return irbuilder.CreateLoad(lower(e.type), result);
+    }
+
+    // the address a call that yields a view yields, which is the place it views
+    llvm::Value* emitView(Expr& e, Symbol* function) {
+        std::vector<Expr*> written;
+        std::vector<Expr*>* inputs;
+        if (e.kind == ExprKind::Call) {
+            auto& call = static_cast<CallExpr&>(e);
+            for (auto& arg : call.args) written.push_back(arg.value.get());
+            inputs = &call.inputs;
+        } else {
+            auto& pipe = static_cast<PipeExpr&>(e);
+            bool isForward = pipe.op.kind == TokenKind::PipeFwd;
+            Expr* callee = isForward ? pipe.rhs.get() : pipe.lhs.get();
+            written.push_back(isForward ? pipe.lhs.get() : pipe.rhs.get());
+            if (callee->kind == ExprKind::Call) {
+                for (auto& arg : static_cast<CallExpr&>(*callee).args) written.push_back(arg.value.get());
+            }
+            inputs = &pipe.inputs;
+        }
+        Located located(irbuilder, debug.get(), e.span);
+        return emitArguments(function, written, *inputs);
+    }
+
     // calls a function by name: the arguments are evaluated in the order they're written, then each input that didn't get one takes its default, which is a call of its own on the inputs before it, in order
     llvm::Value* emitArguments(Symbol* function, std::vector<Expr*> written, const std::vector<Expr*>& inputs) {
         std::sort(written.begin(), written.end(), [](Expr* a, Expr* b) { return a->span.start < b->span.start; });
         std::unordered_map<Expr*, llvm::Value*> values;
+        auto& params = static_cast<FunctionSemaType*>(function->type)->params;
         for (Expr* arg : written) {
-            if (!sema.isLent(arg)) {
-                values[arg] = emitExpr(*arg);
+            // an input that's a view gets the address of the place it's given, or of a slot holding a value that isn't one
+            size_t slot = std::find(inputs.begin(), inputs.end(), arg) - inputs.begin();
+            // a fixed array lent as an array on the heap is a handle made for the call, which a view input gets the address of
+            if (sema.isLent(arg)) {
+                auto& levels = function->function->inputs[slot].decl->mutability;
+                llvm::Value* handle = lend(*arg, levels.size() > 1 && levels[1]);
+                llvm::AllocaInst* held = makeAlloca(handle->getType(), "lent");
+                irbuilder.CreateStore(handle, held);
+                values[arg] = held;
                 continue;
             }
-            // whether the input it's lent to can write its elements
-            size_t input = std::find(inputs.begin(), inputs.end(), arg) - inputs.begin();
-            auto& levels = function->function->inputs[input].decl->mutability;
-            values[arg] = lend(*arg, levels.size() > 1 && levels[1]);
+            values[arg] = slot < params.size() && asView(params[slot]) ? placeAddress(*arg) : emitExpr(*arg);
         }
         std::vector<llvm::Value*> args;
         for (size_t i = 0; i < inputs.size(); i++) {
@@ -1204,7 +1258,12 @@ class Codegen {
             // a default that owns something and goes to an input that borrows it is the call's temporary, freed with the rest of its statement's
             auto& input = function->function->inputs[i];
             args.push_back(emitCall(defaults[&input], args));
-            SemaType* type = static_cast<FunctionSemaType*>(function->type)->params[i];
+            SemaType* type = unview(params[i]);
+            if (asView(params[i])) {
+                llvm::AllocaInst* held = makeAlloca(lower(type), "default");
+                irbuilder.CreateStore(args.back(), held);
+                args.back() = held;
+            }
             if (owns(type) && !input.decl->isOwned && !temporaries.empty()) temporaries.back().push_back({args.back(), type, false});
         }
         return emitCall(functionOf(function), args);
@@ -1342,7 +1401,7 @@ class Codegen {
                 if (isLen(*call.callee)) return emitLen(call.callee->kind == ExprKind::Member ? *static_cast<MemberExpr&>(*call.callee).object : *call.args[0].value);
                 std::vector<Expr*> written;
                 for (auto& arg : call.args) written.push_back(arg.value.get());
-                return emitArguments(static_cast<IdentifierExpr&>(*call.callee).decl, written, call.inputs);
+                return readView(e, emitArguments(static_cast<IdentifierExpr&>(*call.callee).decl, written, call.inputs));
             }
             // x |> f and f <| x are both f(x), and x |> f(b <- 2) is f(x, b <- 2)
             case ExprKind::Pipe: {
@@ -1359,7 +1418,7 @@ class Codegen {
                 if (callee->kind == ExprKind::TypeExpr && static_cast<TypeExprExpr&>(*callee).typeExpr->kind == TypeKind::Handle) return emitMake(e, *callee, written, e.span);
                 if (callee->kind == ExprKind::TypeExpr) return emitConversion(*callee, arg, e.span);
                 if (isLen(*callee)) return emitLen(arg);
-                return emitArguments(static_cast<IdentifierExpr&>(*callee).decl, written, pipe.inputs);
+                return readView(e, emitArguments(static_cast<IdentifierExpr&>(*callee).decl, written, pipe.inputs));
             }
             case ExprKind::Block: {
                 auto& block = static_cast<BlockExpr&>(e);
@@ -1378,6 +1437,9 @@ class Codegen {
                 llvm_unreachable("sema rejected every other expression");
         }
     }
+
+    // whether the function being defined yields a view, so its yields to it yield addresses
+    bool returnsView = false;
 
     // one entry per scope a yield could target, mirroring sema's yield-target stack: where the scope continues, where its value goes, and how many frames of temporaries were open outside it, which a yield to it leaves
     struct Exit {
@@ -1427,7 +1489,7 @@ class Codegen {
 
     // makes a symbol's stack slot, named after it, and describes it to the debugger, where input is an input's number from 1, or 0 for a binding
     llvm::AllocaInst* makeSlot(Symbol* symbol, unsigned input = 0) {
-        llvm::AllocaInst* slot = locals[symbol] = makeAlloca(lower(symbol->type), symbol->name);
+        llvm::AllocaInst* slot = locals[symbol] = makeAlloca(slotType(symbol), symbol->name);
         if (debug) debug->declareVariable(slot, *symbol, input, irbuilder.GetInsertBlock());
         return slot;
     }
@@ -1436,21 +1498,28 @@ class Codegen {
     std::unordered_map<Symbol*, llvm::GlobalVariable*> globals;
     std::vector<Symbol*> owningGlobals;
 
-    // finds where a symbol's value lives: a stack slot for locals and parameters, or a global for top-level bindings
+    // what a symbol's slot or global holds: its value, or for a view, the address of what it views
+    llvm::Type* slotType(Symbol* symbol) {
+        return symbol->isView ? irbuilder.getPtrTy() : lower(symbol->type);
+    }
+
+    // finds where a symbol's value lives: a stack slot for locals and parameters, or a global for top-level bindings, where a view's value lives wherever what it views does, whose address its slot holds
     llvm::Value* addressOf(Symbol* symbol) {
+        llvm::Value* slot = nullptr;
         auto local = locals.find(symbol);
-        if (local != locals.end()) return local->second;
+        if (local != locals.end()) slot = local->second;
         auto global = globals.find(symbol);
-        if (global != globals.end()) return global->second;
-        llvm_unreachable("every name has a slot or a global");
+        if (global != globals.end()) slot = global->second;
+        if (slot == nullptr) llvm_unreachable("every name has a slot or a global");
+        return symbol->isView ? irbuilder.CreateLoad(irbuilder.getPtrTy(), slot) : slot;
     }
 
     // makes the global for a top-level binding, named like a function, cheri.module.name, and starting out as zero until the init function writes it
     llvm::GlobalVariable* makeGlobal(Symbol* symbol) {
-        llvm::Type* type = lower(symbol->type);
+        llvm::Type* type = slotType(symbol);
         auto* global = new llvm::GlobalVariable(*module, type, false, llvm::GlobalValue::InternalLinkage, llvm::Constant::getNullValue(type), symbolPrefix + "." + std::string(symbol->name));
         globals[symbol] = global;
-        if (owns(symbol->type) && std::find(owningGlobals.begin(), owningGlobals.end(), symbol) == owningGlobals.end()) owningGlobals.insert(owningGlobals.begin(), symbol);
+        if (owns(symbol->type) && !symbol->isView && std::find(owningGlobals.begin(), owningGlobals.end(), symbol) == owningGlobals.end()) owningGlobals.insert(owningGlobals.begin(), symbol);
         if (debug) debug->declareGlobal(global, *symbol);
         return global;
     }
@@ -1470,7 +1539,9 @@ class Codegen {
             // a yield to the function returns, and a yield to anything else stores its value in the target's result and jumps to its end
             case StmtKind::Yield: {
                 auto& yield = static_cast<YieldStmt&>(s);
-                llvm::Value* value = yield.value ? emitExpr(*yield.value) : nullptr;
+                // a function that yields a view yields the address of what it views
+                bool isView = resolveExit(yield).kind == TargetKind::Function && returnsView;
+                llvm::Value* value = yield.value ? (isView ? placeAddress(*yield.value) : emitExpr(*yield.value)) : nullptr;
                 // the value itself can end in a yield elsewhere, like a match whose arms all leave, and then there's nothing left to do
                 if (irbuilder.GetInsertBlock()->getTerminator()) break;
                 Exit& exit = resolveExit(yield);
@@ -1499,6 +1570,12 @@ class Codegen {
                 }
                 Symbol* symbol = static_cast<BinderPattern&>(*let.pattern).decl;
                 // a binding outside every function is a global, and an immutable one whose initializer folds to a constant needs no code at all, while anything else is stored each time its let runs, which a top-level loop can make more than once
+                // a view holds the address of the place it's made from
+                if (symbol->isView) {
+                    llvm::Value* address = placeAddress(*let.init);
+                    irbuilder.CreateStore(address, symbol->owner == 0 ? static_cast<llvm::Value*>(makeGlobal(symbol)) : makeSlot(symbol));
+                    break;
+                }
                 if (symbol->owner == 0) {
                     llvm::GlobalVariable* global = makeGlobal(symbol);
                     if (let.init->kind == ExprKind::Wildcard) break;
@@ -1715,6 +1792,7 @@ class Codegen {
         irbuilder.SetInsertPoint(definition);
         auto& signature = static_cast<FunctionSemaType&>(*fn.decl->type);
         beginFunction(f, signature.returns, signature.params, fn.span);
+        returnsView = asView(signature.returns) != nullptr;
         for (size_t i = 0; i < fn.inputs.size(); i++) {
             Symbol* symbol = fn.inputs[i].decl;
             (f->args().begin() + i)->setName(symbol->name);

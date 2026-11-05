@@ -1,4 +1,4 @@
-# checks strings: a literal is chars when it's ASCII, its UTF-8 bytes when it isn't, and whatever kind of string its context wants, chars widen into bytes, every other change of kind is a written conversion that traps on what it can't hold, any fixed array lent to an input that borrows an arr T without copying, and writing through one only when its elements can be written, arrays on the heap compared with fixed ones by length and then their elements, and a match on a string by its bytes
+# checks strings: a literal is chars when it's ASCII, its UTF-8 bytes when it isn't, and whatever kind of string its context wants, chars widen into bytes, every other change of kind is a written conversion that traps on what it can't hold, any fixed array lent to an input that borrows an arr T without copying, and writing through one, where a value that isn't a binding is written as a copy nothing else sees, arrays on the heap compared with fixed ones by length and then their elements, and a match on a string by its bytes
 let greeting <- "héllo";
 let (s :: arr i8u) -> count -> (r :: i64u) { s.len() -| }
 let (s :: arr mut i8u) -> shout -> () {
@@ -85,8 +85,7 @@ let () -> writtenThroughLending -> () {
 }
 
 @test
-let () -> readOnlyStaysUnchanged -> () {
-    shout(greeting);
+let () -> temporaryWritten -> () {
     shout("abc");
     assert (greeting == "héllo");
 }

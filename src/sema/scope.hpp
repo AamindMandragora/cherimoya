@@ -30,6 +30,8 @@ struct Symbol {
     Span scope;
     // the declaration a function symbol comes from, or null for anything else
     const FnDecl* function;
+    // whether it's a view, peek, which holds the address of what it views and reads and writes through it
+    bool isView = false;
 
     // checks whether the binding itself can be replaced
     bool isMutable() const { return mutability[0]; }

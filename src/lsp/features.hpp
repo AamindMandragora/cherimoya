@@ -101,7 +101,7 @@ inline std::string render(const Document& document, const Symbol& symbol) {
     // an input that takes over what it's given says so
     std::string mode = symbol.kind == SymbolKind::Param && symbol.isOwned ? "unscoped " : "";
     if (symbol.kind == SymbolKind::Param) return std::string(symbol.name) + " :: " + mode + mut + symbol.type->toString() + defaultOf(document, symbol);
-    if (symbol.kind == SymbolKind::Binding) return "let " + std::string(symbol.name) + " :: " + mut + symbol.type->toString();
+    if (symbol.kind == SymbolKind::Binding) return "let " + std::string(symbol.name) + " :: " + (symbol.isView ? "peek " : "") + mut + symbol.type->toString();
     auto& fn = *symbol.function;
     auto& type = static_cast<const FunctionSemaType&>(*symbol.type);
     std::string inputs;

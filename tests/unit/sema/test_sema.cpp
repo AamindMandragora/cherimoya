@@ -442,6 +442,10 @@ TEST_CASE("Sema: handles on the stack", "[sema]") {
     CHECK(!isStacked(body + "let xs :: mut <- arr int([1, 2]); xs <- arr int([3]); }", "xs"));
     CHECK(!isStacked("let () -> f -> (r :: arr int) { let xs <- arr int([1]); xs -| }", "xs"));
     CHECK(!isStacked("let xs <- arr int([1]);", "xs"));
+    // what a view can replace whole might be freed through it, so it stays on the heap
+    CHECK(!isStacked("let (r :: peek mut arr int) -> renew -> () { } " + body + "let xs :: mut <- arr int([1]); renew(xs); }", "xs"));
+    CHECK(!isStacked(body + "let xs :: mut <- arr int([1]); let v :: peek mut <- xs; }", "xs"));
+    CHECK(isStacked(body + "let xs <- arr int([1]); let v :: peek <- xs; }", "xs"));
 }
 
 // checks ownership: bindings own what they hold and moving hands it on, inputs borrow unless they're unscoped, which have to hand it on, and matches and loops agree on what moved
@@ -475,7 +479,7 @@ TEST_CASE("Sema: ownership", "[sema]") {
     CHECK(semaErrors(K + "let (n :: unscoped int) -> f -> () { }") == 1);
     CHECK(semaErrors(K + "let xs :: unscoped arr int <- arr[k] int();") == 1);
     CHECK(semaErrors(K + "let () -> make -> (r :: arr int) { arr[k] int() -| }") == 0);
-    CHECK(semaErrors(K + "let () -> make -> (r :: unscoped arr int) { arr[k] int() -| }") == 1);
+    CHECK(semaErrors(K + "let () -> make -> (r :: unscoped arr int) { arr[k] int() -| }") == 0);
     // a move in some arms of a match is a move after it, which an unscoped input can't have
     CHECK(semaErrors(K + "let (c :: bool) -> f -> () { let a <- arr[k] int(); match (c) { true -> { let b <- a; } false -> { } } }") == 0);
     CHECK(semaErrors(K + "let (c :: bool) -> f -> () { let a <- arr[k] int(); match (c) { true -> { let b <- a; } false -> { } } let n <- a.len(); }") == 1);
@@ -487,6 +491,57 @@ TEST_CASE("Sema: ownership", "[sema]") {
     CHECK(semaErrors(K + body + "let a <- arr[k] int(); repeat { let b <- a; -| repeat } }") == 0);
     // a binder borrows the subject
     CHECK(semaErrors(K + body + "let a <- arr[k] int(); match (a) { b -> { let c <- b; } } }") == 1);
+}
+
+// checks views: what they view, writing through them, the paths they keep in place while they're live, and returning them
+TEST_CASE("Sema: views", "[sema]") {
+    const std::string body = "let () -> f -> () { let k :: mut i64u <- 2; ";
+    // a view is of a place, writes only what that place lets it, and reads as what it views
+    CHECK(semaErrors(body + "let x :: mut <- 1; let v :: peek mut <- x; v <- v + 1; }") == 0);
+    CHECK(semaErrors(body + "let x <- 1; let v :: peek mut <- x; }") == 1);
+    CHECK(semaErrors(body + "let x <- 1; let v :: peek <- x; v <- 2; }") == 1);
+    CHECK(semaErrors(body + "let v :: peek <- 1 + 2; }") == 1);
+    CHECK(semaErrors(body + "let v :: peek int <- _; }") == 1);
+    CHECK(semaErrors(body + "let xs <- arr[k] int(); let v :: peek <- xs; let n <- v.len(); }") == 0);
+    CHECK(symbolType(body + "let xs <- arr[k] int(); let v :: peek <- xs[1]; }", "v") == "int");
+    CHECK(semaErrors(body + "let xs <- arr[k] int(); let v :: peek <- xs; let ys <- v; }") == 1);
+    // inputs that are views, written or of an owning type, and the mutability what's passed needs
+    const std::string bump = "let (n :: peek mut int) -> bump -> () { n +<- 1; } ";
+    CHECK(semaErrors(bump + body + "let x :: mut <- 1; bump(x); }") == 0);
+    CHECK(semaErrors(bump + body + "let x <- 1; bump(x); }") == 1);
+    CHECK(semaErrors(bump + body + "bump(1); }") == 0);
+    const std::string zero = "let (xs :: arr mut int) -> zero -> () { xs[0] <- 0; } ";
+    CHECK(semaErrors(zero + body + "let xs <- arr[k] mut int(); zero(xs); }") == 0);
+    CHECK(semaErrors(zero + body + "let xs <- arr[k] int(); zero(xs); }") == 1);
+    CHECK(semaErrors(zero + body + "zero(arr[k] int()); }") == 0);
+    // nothing a live view points into can be freed or moved, where only memory going away matters
+    const std::string grid = body + "let g <- arr[k] mut arr mut int(arr[k] mut int(1)); ";
+    CHECK(semaErrors(grid + "let row :: peek <- g[1]; let ys <- g; let n <- row.len(); }") == 1);
+    CHECK(semaErrors(grid + "let e :: peek <- g[1][0]; g[1] <- arr[k] mut int(2); let n <- e + 1; }") == 1);
+    CHECK(semaErrors(grid + "let e :: peek <- g[1][0]; g[0] <- arr[k] mut int(2); let n <- e + 1; }") == 0);
+    CHECK(semaErrors(grid + "let i :: mut i64u <- 0; let e :: peek <- g[i][0]; g[0] <- arr[k] mut int(2); let n <- e + 1; }") == 1);
+    // a view of the place itself follows whatever's put there, so replacing it is fine
+    CHECK(semaErrors(grid + "let row :: peek <- g[1]; g[1] <- arr[k] mut int(2); let n <- row.len(); }") == 0);
+    CHECK(semaErrors(grid + "let row :: peek mut <- g[1]; row[0] <- 5; g[1][0] <- 6; let n <- row.len(); }") == 0);
+    CHECK(semaErrors(grid + "let e :: peek <- g[1][0]; let n <- e + 1; g[1] <- arr[k] mut int(2); }") == 0);
+    CHECK(semaErrors(grid + "let whole :: peek <- g; g[1] <- arr[k] mut int(2); let n <- whole.len(); }") == 0);
+    CHECK(semaErrors(body + "let xs :: mut <- arr[k] int(); let v :: peek <- xs; xs <- arr[k] int(); let n <- v.len(); }") == 0);
+    CHECK(semaErrors(body + "let p :: mut <- ptr arr int(arr[k] int()); let v :: peek <- p[]; p <- ptr arr int(arr[k] int()); let n <- v.len(); }") == 1);
+    const std::string replace = "let (g :: arr mut arr int) -> renew -> () { } ";
+    CHECK(semaErrors(replace + grid + "let e :: peek <- g[1][0]; renew(g); let n <- e + 1; }") == 1);
+    CHECK(semaErrors(replace + grid + "let e :: peek <- g[1][0]; renew(g); }") == 0);
+    // a loop keeps a view from before it live all the way round
+    CHECK(semaErrors(grid + "let e :: peek <- g[1][0]; let i :: mut <- 0; repeat (i < 2) { let n <- e + 1; g[1] <- arr[k] mut int(2); i +<- 1; } }") == 1);
+    // a function yields a view of one of its inputs, which keeps the arguments in place at the call
+    const std::string longest = "let (a :: arr int, b :: arr int) -> longest -> (r :: peek arr int) { match (a.len() >= b.len()) { true -> { a -| longest } false -> { b -| longest } } } ";
+    CHECK(semaErrors(longest + body + "let a <- arr[k] int(); let b <- arr[k] int(); let l :: peek <- longest(a, b); let n <- l.len(); }") == 0);
+    CHECK(semaErrors(longest + body + "let a <- arr[k] int(); let b <- arr[k] int(); let l :: peek <- longest(a, b); let c <- b; let n <- l.len(); }") == 1);
+    CHECK(semaErrors(longest + body + "let a <- arr[k] int(); let l :: peek <- longest(a, arr[k] int()); }") == 1);
+    CHECK(semaErrors("let () -> own -> (r :: peek arr int) { let k :: mut i64u <- 2; let xs <- arr[k] int(); xs -| }") == 1);
+    // an unscoped binding has to be moved before its scope ends, and can't be at the top
+    CHECK(semaErrors(body + "let buf :: unscoped arr int <- arr[k] int(); let kept <- buf; }") == 0);
+    CHECK(semaErrors(body + "let buf :: unscoped arr int <- arr[k] int(); }") == 1);
+    CHECK(semaErrors(body + "let n :: unscoped int <- 1; }") == 1);
 }
 
 // checks that what sema can't check yet is reported once and poisons silently from there
