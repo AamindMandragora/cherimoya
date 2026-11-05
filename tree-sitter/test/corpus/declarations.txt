@@ -320,7 +320,7 @@ obligations, externs, and nested functions
 ================================================================================
 
 let (g :: peek mut Graph) -> grow -> () wit {node_count(g) >= node_count(old g)} { }
-let (fd :: i32, buf :: peek arr char, n :: i64u) -> write -> (r :: i64);
+let (fd :: i32, buf :: peek arr[char], n :: i64u) -> write -> (r :: i64);
 let (s :: peek Shape) -> area -> (a :: f64) { let (r :: f64) -> sq -> (o :: f64) { r * r -| } 0.0 -| }
 
 --------------------------------------------------------------------------------
@@ -416,7 +416,7 @@ type Shape <- Circle[f64] | Rect[f64, f64];
 type Dir <- N | E | S | W;
 type Option[T] <- Some[T] | None;
 type Flag <- int | bool;
-type Map[K :: Ord, V] <- [keys :: arr K, vals :: arr V];
+type Map[K :: Ord, V] <- [keys :: arr[K], vals :: arr[V]];
 
 --------------------------------------------------------------------------------
 
@@ -636,7 +636,7 @@ type Spaceship[T] <- [ let (a :: peek T, b :: peek T) -> <=> -> (r :: int) wit {
 a product with an invariant
 ================================================================================
 
-type List[T, A :: Allocator <- Global] <- [data :: arr[A] mut T, count :: i64u] {l : l.count <= len(l.data) && written(l.data) == [0, ..., <l.count]};
+type List[T, A :: Allocator <- Global] <- [data :: arr[A, mut T], count :: i64u] {l : l.count <= len(l.data) && written(l.data) == [0, ..., <l.count]};
 
 --------------------------------------------------------------------------------
 

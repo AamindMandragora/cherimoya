@@ -116,9 +116,9 @@ class Sema {
     std::unordered_map<const Expr*, uint64_t> stackMade;
     std::unordered_set<const Symbol*> stackOwners;
     static constexpr uint64_t stackLimit = 4096;
-    // the length every arr[n] T(...) is made with, keyed by its callee, where a lone name in the brackets reaches sema as a type, so sema makes the name it stands for and keeps it here
+    // the length every arr[n, T](...) is made with, keyed by its callee, where a lone name in the brackets reaches sema as a type, so sema makes the name it stands for and keeps it here
     std::unordered_map<const Expr*, Expr*> lengths;
-    // every fixed array passed to an input that borrows an arr T, which lends it as one, its elements where they are and their count
+    // every fixed array passed to an input that borrows an arr[T], which lends it as one, its elements where they are and their count
     std::unordered_set<const Expr*> lent;
     std::deque<std::unique_ptr<Expr>> madeNames;
 
@@ -221,14 +221,14 @@ class Sema {
     }
 
 
-    // checks whether a type is mutable as a whole value: mut int, mut arr[3] int, which can be replaced, or mut with the type left to inference
+    // checks whether a type is mutable as a whole value: mut int, mut arr[3, int], which can be replaced, or mut with the type left to inference
     bool isMut(const Type& t) {
         if (t.kind == TypeKind::Refined) return isMut(*static_cast<const RefinedType&>(t).inner);
         if (t.kind != TypeKind::Qualified) return false;
         return static_cast<const QualifiedType&>(t).position != QualPosition::Elements;
     }
 
-    // what a binding of a type can write, the binding itself first and then each level in, an array's elements or a pointer's value, outermost first, from where mut sits: mut arr[2] arr[3] int replaces the whole, arr[2] mut arr[3] int writes the outer level, ptr mut int writes the value, and a bare mut on a type left to inference writes everything, where an input's unscoped comes before all of it
+    // what a binding of a type can write, the binding itself first and then each level in, an array's elements or a pointer's value, outermost first, from where mut sits: mut arr[2, arr[3, int]] replaces the whole, arr[2, mut arr[3, int]] writes the outer level, ptr[mut int] writes the value, and a bare mut on a type left to inference writes everything, where an input's unscoped comes before all of it
     std::vector<bool> mutabilityOf(const Type* t, SemaType* type) {
         size_t depth = 0;
         for (auto inner = elementOf(type); inner; inner = elementOf(inner)) depth++;
@@ -291,7 +291,7 @@ class Sema {
         }
     }
 
-    // the N in arr[N] T, which has to be known when the program compiles: an integer literal, or an immutable binding whose initializer folds to one, where a bare name reaches sema as a type, since arr[A] T could name an allocator
+    // the N in arr[N, T], which has to be known when the program compiles: an integer literal, or an immutable binding whose initializer folds to one, where a bare name reaches sema as a type, since arr[A, T] could name an allocator
     std::optional<uint64_t> arraySize(const GenericArg& arg, Span span) {
         std::optional<uint64_t> size;
         if (arg.value) {
@@ -338,7 +338,7 @@ class Sema {
             }
             case TypeKind::Refined:
                 return resolveType(*static_cast<const RefinedType&>(t).inner);
-            // arr[N] T is a fixed array, and arr T without a size, or ptr T, is a handle to memory on the heap, where what's in brackets on a handle names an allocator, which come later
+            // arr[N, T] is a fixed array, and arr[T] without a size, or ptr[T], is a handle to memory on the heap, where what's in brackets on a handle names an allocator, which come later
             case TypeKind::Handle: {
                 auto& handle = static_cast<const HandleType&>(t);
                 bool isPointer = handle.handle.kind == TokenKind::KwPtr;
@@ -734,7 +734,7 @@ class Sema {
                 facts.mustMove.insert(symbol);
             }
         }
-        // a binding left to inference can write what the handle it's made from says it can, so the mut in let b <- arr[n] mut int(0) means something
+        // a binding left to inference can write what the handle it's made from says it can, so the mut in let b <- arr[n, mut int](0) means something
         if (!let.type) {
             if (const Type* made = madeAs(*let.init)) {
                 auto levels = mutabilityOf(made, type);
@@ -1190,12 +1190,12 @@ class Sema {
         return symbol->type;
     }
 
-    // the type a level of what a type holds has to be written as so it can be written: arr[2] arr[3] int at level 1 is arr[2] arr[3] mut int, and ptr int at level 0 is ptr mut int
+    // the type a level of what a type holds has to be written as so it can be written: arr[2, arr[3, int]] at level 1 is arr[2, arr[3, mut int]], and ptr[int] at level 0 is ptr[mut int]
     std::string writableAt(SemaType* type, size_t level) {
         SemaType* element = elementOf(type);
         if (!element) return type->toString();
-        std::string head = asArray(type) ? "arr[" + std::to_string(asArray(type)->size) + "] " : asPointer(type) ? "ptr " : "arr ";
-        return head + (level == 0 ? "mut " + element->toString() : writableAt(element, level - 1));
+        std::string head = asArray(type) ? "arr[" + std::to_string(asArray(type)->size) + ", " : asPointer(type) ? "ptr[" : "arr[";
+        return head + (level == 0 ? "mut " + element->toString() : writableAt(element, level - 1)) + "]";
     }
 
     // checks an element as the left side of an assignment, xs[i] or m[i][j], where the array has to be a binding whose elements at that depth can be written
@@ -1412,7 +1412,7 @@ class Sema {
         SemaType* element = stringElement(expected);
         if (!element) element = isAscii ? static_cast<SemaType*>(context.semaChar) : context.intType("i8u");
         if (element == context.semaChar && !isAscii) {
-            engine.printError("cherimoya requires " + std::string(literal.literal) + " to be ASCII to be a string of chars, please make it 'arr i8u' or 'arr rune'", literal.span);
+            engine.printError("cherimoya requires " + std::string(literal.literal) + " to be ASCII to be a string of chars, please make it 'arr[i8u]' or 'arr[rune]'", literal.span);
             return context.semaError;
         }
         if (element == context.semaRune) return context.arrayType(element, points.size());
@@ -1574,7 +1574,7 @@ class Sema {
         return callee.type;
     }
 
-    // the type a handle is made as, when an expression makes one by calling its type, arr mut int(n) or n |> arr mut int, or null for anything else
+    // the type a handle is made as, when an expression makes one by calling its type, arr[mut int](n) or n |> arr[mut int], or null for anything else
     const Type* madeAs(const Expr& e) {
         const Expr* callee = nullptr;
         if (e.kind == ExprKind::Call) callee = static_cast<const CallExpr&>(e).callee.get();
@@ -1588,14 +1588,14 @@ class Sema {
         return type->kind == TypeKind::Handle ? type : nullptr;
     }
 
-    // checks whether a type has a default, which arr mut T(n) fills with: every type but a pointer's, which is never null, and anything holding one
+    // checks whether a type has a default, which arr[mut T](n) fills with: every type but a pointer's, which is never null, and anything holding one
     bool hasDefault(SemaType* type) {
         if (asPointer(type)) return false;
         if (ArraySemaType* array = asArray(type)) return hasDefault(array->element);
         return true;
     }
 
-    // checks making an array of a length in brackets, arr[n] T(...): n of T's default, n deep copies of a fill, or n uninitialized elements, where n is any unsigned integer, which makes a fixed array when the program knows it when it compiles, and one on the heap when it doesn't, and the fill is borrowed
+    // checks making an array of a length in brackets, arr[n, T](...): n of T's default, n deep copies of a fill, or n uninitialized elements, where n is any unsigned integer, which makes a fixed array when the program knows it when it compiles, and one on the heap when it doesn't, and the fill is borrowed
     SemaType* checkSizedMake(TypeExprExpr& callee, const HandleType& handle, const std::vector<Argument>& args, Span span) {
         for (auto& arg : args) {
             if (arg.name) engine.printError("cherimoya requires a conversion's value to be unnamed, please remove '" + std::string(arg.name->text) + " <-'", tokSpan(*arg.name), {}, {{"Remove '" + std::string(arg.name->text) + " <-'", {{{arg.name->loc, arg.value->span.start}, ""}}}});
@@ -1617,7 +1617,7 @@ class Sema {
             if (arg.value->kind != ExprKind::Wildcard) checkExpr(*arg.value, element);
         }
         if (element == nullptr || isPoisoned(element) || isPoisoned(count)) return context.semaError;
-        std::string made = "arr[" + textOf(length->span) + "] " + element->toString();
+        std::string made = "arr[" + textOf(length->span) + ", " + element->toString() + "]";
         // a length the program knows when it compiles is a size, which any integer that folds can be, like a fixed array's, and a run-time one has to be unsigned, like an index
         auto size = fold(*length);
         auto integer = asInt(count);
@@ -1652,7 +1652,7 @@ class Sema {
             if (owns(element)) {
                 engine.printError("cherimoya requires an uninitialized array's elements to own nothing, please give it a fill", fill.span);
             } else if (!isWritable) {
-                engine.printError("cherimoya requires an uninitialized array's elements to be mutable, please write 'arr[" + textOf(length->span) + "] mut " + element->toString() + "(_)'", span);
+                engine.printError("cherimoya requires an uninitialized array's elements to be mutable, please write 'arr[" + textOf(length->span) + ", mut " + element->toString() + "](_)'", span);
             }
             return result;
         }
@@ -1660,7 +1660,7 @@ class Sema {
         return result;
     }
 
-    // checks making a handle by calling its type: ptr T(v) puts v on the heap, and arr T(xs) puts a fixed array's elements there, where what either is made from moves into it, and a length goes in brackets, arr[n] T(fill)
+    // checks making a handle by calling its type: ptr[T](v) puts v on the heap, and arr[T](xs) puts a fixed array's elements there, where what either is made from moves into it, and a length goes in brackets, arr[n, T](fill)
     SemaType* checkMake(TypeExprExpr& callee, HandleSemaType& handle, const std::vector<Argument>& args, Span span) {
         for (auto& arg : args) {
             if (arg.name) engine.printError("cherimoya requires a conversion's value to be unnamed, please remove '" + std::string(arg.name->text) + " <-'", tokSpan(*arg.name), {}, {{"Remove '" + std::string(arg.name->text) + " <-'", {{{arg.name->loc, arg.value->span.start}, ""}}}});
@@ -1711,10 +1711,10 @@ class Sema {
         // a length goes in brackets, so the fix moves it there, along with what's after it
         if (asInt(source)) {
             auto& type = static_cast<const HandleType&>(*callee.typeExpr);
-            size_t after = type.handle.loc + type.handle.text.size();
+            size_t after = type.handle.loc + type.handle.text.size() + 1;
             size_t end = args.size() == 2 ? args[1].value->span.start : first.span.end;
-            engine.printError("cherimoya uses brackets for an array's length instead of an argument as follows: 'arr[" + textOf(first.span) + "] " + handle.element->toString() + "(fill)'", first.span, {},
-                {{"Move the length into brackets", {insertion(after, "[" + textOf(first.span) + "]"), {{first.span.start, end}, ""}}}});
+            engine.printError("cherimoya uses brackets for an array's length instead of an argument as follows: 'arr[" + textOf(first.span) + ", " + handle.element->toString() + "](fill)'", first.span, {},
+                {{"Move the length into brackets", {insertion(after, textOf(first.span) + ", "), {{first.span.start, end}, ""}}}});
             return context.semaError;
         }
         if (args.size() == 2) checkExpr(*args[1].value);
@@ -1856,7 +1856,7 @@ class Sema {
         bool isExpected = element != nullptr;
         if (pack.elems.empty()) {
             if (isExpected) return context.arrayType(element, 0);
-            engine.printError("cherimoya requires an empty array's type to be known, please annotate it, like '([] :: arr[0] int)'", pack.span);
+            engine.printError("cherimoya requires an empty array's type to be known, please annotate it, like '([] :: arr[0, int])'", pack.span);
             return context.semaError;
         }
         for (auto& e : pack.elems) {
@@ -1979,7 +1979,7 @@ class Sema {
                     continue;
                 }
             }
-            // a fixed array goes to an input that borrows an arr T of its elements by lending it, where it already is
+            // a fixed array goes to an input that borrows an arr[T] of its elements by lending it, where it already is
             if (parameter && isLendable(parameter, actual.back()) && !isUnscoped(function->function->inputs[*slots[i]])) {
                 lent.insert(args[i].value);
                 continue;
@@ -2290,10 +2290,10 @@ public:
     // an integer type by the name it's written with, which codegen tells a string of bytes by
     SemaType* intType(std::string_view name) const { return context.intType(name); }
 
-    // whether a fixed array is lent to an input that borrows an arr T
+    // whether a fixed array is lent to an input that borrows an arr[T]
     bool isLent(const Expr* e) const { return lent.count(e) > 0; }
 
-    // the length an arr[n] T(...) is made with, by its callee
+    // the length an arr[n, T](...) is made with, by its callee
     Expr* lengthOf(const Expr* callee) const { return lengths.at(callee); }
     bool isOnStack(const Symbol* symbol) const { return stackOwners.count(symbol) > 0; }
 

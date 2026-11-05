@@ -1,6 +1,6 @@
 # checks fixed arrays: literals, nested ones, a size from a constant declared after the function using it, indexing, len every way it can be called, writing elements at each level, an uninitialized array filled by index, comparing whole arrays, passing and returning them as copies, and the trap past the end
 let primes <- [2, 3, 5, 7];
-let (xs :: arr[N] int) -> total -> (r :: int) {
+let (xs :: arr[N, int]) -> total -> (r :: int) {
     let sum :: mut <- 0;
     let i :: mut i64u <- 0;
     repeat (i < xs.len()) {
@@ -10,11 +10,11 @@ let (xs :: arr[N] int) -> total -> (r :: int) {
     sum -|
 }
 let N <- 2 + 1;
-let (xs :: arr[3] mut int) -> bumped -> (r :: arr[3] int) {
+let (xs :: arr[3, mut int]) -> bumped -> (r :: arr[3, int]) {
     xs[0] +<- 10;
     xs -|
 }
-let () -> squares -> (r :: arr[4] i8u) { [0, 1, 4, 9] -| }
+let () -> squares -> (r :: arr[4, i8u]) { [0, 1, 4, 9] -| }
 let (i :: i64u) -> pick -> (r :: int) {
     let xs <- [10, 20, 30];
     xs[i] -|
@@ -39,7 +39,7 @@ let () -> compoundAssignElement -> () {
 let () -> writeCopiedRow -> () {
     let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
     grid[1][2] <- 60;
-    let row :: arr[3] mut int <- grid[1];
+    let row :: arr[3, mut int] <- grid[1];
     row[0] <- primes[3];
     assert (row = [7, 5, 60]);
     assert (grid[1] = [4, 5, 60]);
@@ -55,7 +55,7 @@ let () -> sizeFromLaterConstant -> () {
     let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
     grid[1][2] <- 60;
     grid[0][0] +<- 9;
-    let row :: arr[3] mut int <- grid[1];
+    let row :: arr[3, mut int] <- grid[1];
     row[0] <- primes[3];
     assert (total(row) = 72);
     assert (total(grid[0]) = 15);
@@ -95,7 +95,7 @@ let () -> lenCombined -> () {
 let () -> uninitializedFilledByIndex -> () {
     let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
     grid[0][0] +<- 9;
-    let flags :: arr[2] mut bool <- _;
+    let flags :: arr[2, mut bool] <- _;
     flags[0] <- true;
     flags[1] <- grid[0] = [10, 2, 3];
     assert (flags[0]);

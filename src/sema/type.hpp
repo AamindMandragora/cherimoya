@@ -112,14 +112,14 @@ inline bool isBoolf(SemaType* type) {
     return type != nullptr && type->kind == SemaTypeKind::Primitive && static_cast<PrimitiveSemaType*>(type)->primitive == PrimitiveKind::Boolf;
 }
 
-// a fixed array type is its element type and how many it holds, held inline like any value, so arr[3] int is three ints side by side, where whether its elements can be written is the binding's business, not the type's
+// a fixed array type is its element type and how many it holds, held inline like any value, so arr[3, int] is three ints side by side, where whether its elements can be written is the binding's business, not the type's
 class ArraySemaType : public SemaType {
 public:
     SemaType* element;
     uint64_t size;
     ArraySemaType(SemaType* e, uint64_t n) : SemaType(SemaTypeKind::Array), element(e), size(n) {}
     std::string toString() const override {
-        return "arr[" + std::to_string(size) + "] " + element->toString();
+        return "arr[" + std::to_string(size) + ", " + element->toString() + "]";
     }
 };
 
@@ -128,7 +128,7 @@ inline ArraySemaType* asArray(SemaType* type) {
     return type != nullptr && type->kind == SemaTypeKind::Array ? static_cast<ArraySemaType*>(type) : nullptr;
 }
 
-// a handle owns memory on the heap: an array's elements, as many as it was made with, or a pointer's one value, so arr int is the elements' address and how many there are, and ptr int is one int's address, where like a fixed array's, whether what it holds can be written is the binding's business
+// a handle owns memory on the heap: an array's elements, as many as it was made with, or a pointer's one value, so arr[int] is the elements' address and how many there are, and ptr[int] is one int's address, where like a fixed array's, whether what it holds can be written is the binding's business
 enum class HandleKind { Array, Pointer };
 class HandleSemaType : public SemaType {
 public:
@@ -136,7 +136,7 @@ public:
     SemaType* element;
     HandleSemaType(HandleKind h, SemaType* e) : SemaType(SemaTypeKind::Handle), handle(h), element(e) {}
     std::string toString() const override {
-        return (handle == HandleKind::Array ? "arr " : "ptr ") + element->toString();
+        return (handle == HandleKind::Array ? "arr[" : "ptr[") + element->toString() + "]";
     }
 };
 

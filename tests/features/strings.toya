@@ -1,7 +1,7 @@
-# checks strings: a literal is chars when it's ASCII, its UTF-8 bytes when it isn't, and whatever kind of string its context wants, chars widen into bytes, every other change of kind is a written conversion that traps on what it can't hold, any fixed array lent to an input that borrows an arr T without copying, and writing through one, where a value that isn't a binding is written as a copy nothing else sees, arrays on the heap compared with fixed ones by length and then their elements, and a match on a string by its bytes
+# checks strings: a literal is chars when it's ASCII, its UTF-8 bytes when it isn't, and whatever kind of string its context wants, chars widen into bytes, every other change of kind is a written conversion that traps on what it can't hold, any fixed array lent to an input that borrows an arr[T] without copying, and writing through one, where a value that isn't a binding is written as a copy nothing else sees, arrays on the heap compared with fixed ones by length and then their elements, and a match on a string by its bytes
 let greeting <- "héllo";
-let (s :: arr i8u) -> count -> (r :: i64u) { s.len() -| }
-let (s :: arr mut i8u) -> shout -> () {
+let (s :: arr[i8u]) -> count -> (r :: i64u) { s.len() -| }
+let (s :: arr[mut i8u]) -> shout -> () {
     let i :: mut i64u <- 0;
     repeat (i < s.len()) {
         match (s[i] >= 97 && s[i] <= 122) {
@@ -11,14 +11,14 @@ let (s :: arr mut i8u) -> shout -> () {
         i +<- 1;
     }
 }
-let (cmd :: arr i8u) -> code -> (r :: int) {
+let (cmd :: arr[i8u]) -> code -> (r :: int) {
     match (cmd) {
         "go" -> { 1 -| code }
         "stop" -> { 2 -| code }
         _ -> { 0 -| code }
     }
 }
-let (xs :: arr int) -> total -> (r :: int) {
+let (xs :: arr[int]) -> total -> (r :: int) {
     let sum :: mut <- 0;
     let i :: mut i64u <- 0;
     repeat (i < xs.len()) {
@@ -38,13 +38,13 @@ let () -> chars -> () {
 
 @test
 let () -> bytes -> () {
-    let s :: arr[2] i8u <- "hi";
+    let s :: arr[2, i8u] <- "hi";
     assert (s[0] = 104 && s[1] = 105);
 }
 
 @test
 let () -> runes -> () {
-    let s :: arr[5] rune <- "héllo";
+    let s :: arr[5, rune] <- "héllo";
     assert (s.len() = 5);
     assert (s[1] = 'é');
 }
@@ -79,7 +79,7 @@ let () -> lent -> () {
 
 @test
 let () -> writtenThroughLending -> () {
-    let word :: arr[3] mut i8u <- "abc";
+    let word :: arr[3, mut i8u] <- "abc";
     shout(word);
     assert (word == "ABC");
 }
@@ -93,7 +93,7 @@ let () -> temporaryWritten -> () {
 @test
 let () -> comparedAcrossLengths -> () {
     let k :: mut i64u <- 2;
-    let made <- arr[k] mut i8u(103);
+    let made <- arr[k, mut i8u](103);
     made[1] <- 111;
     assert (made == "go" && made = "go" && "go" = made);
     assert (made != "goo" && made !== "g");
@@ -106,7 +106,7 @@ let () -> matched -> () {
     assert (code("x") = 0);
     assert (code("") = 0);
     let k :: mut i64u <- 4;
-    let made <- arr[k] mut i8u(115);
+    let made <- arr[k, mut i8u](115);
     made[1] <- 116;
     made[2] <- 111;
     made[3] <- 112;
@@ -117,32 +117,32 @@ let () -> matched -> () {
 let () -> charsWidenIntoBytes -> () {
     let word <- "hello";
     assert (count(word) = 5);
-    let b :: arr[5] i8u <- word;
+    let b :: arr[5, i8u] <- word;
     assert (b[0] = 104);
     assert (word == b);
 }
 
 @test
 let () -> converted -> () {
-    let decoded <- arr rune(greeting);
+    let decoded <- arr[rune](greeting);
     assert (decoded.len() = 5 && decoded[1] = 'é');
-    let encoded <- arr i8u(decoded);
+    let encoded <- arr[i8u](decoded);
     assert (encoded == greeting);
     let k :: mut i64u <- 2;
-    let made <- arr[k] mut i8u(104);
-    let ascii <- arr char(made);
+    let made <- arr[k, mut i8u](104);
+    let ascii <- arr[char](made);
     assert (ascii == "hh");
-    let bytes <- arr i8u("plain");
+    let bytes <- arr[i8u]("plain");
     assert (bytes.len() = 5);
 }
 
-@test(traps <- "'arr rune(bad)' isn't valid UTF-8")
+@test(traps <- "'arr[rune](bad)' isn't valid UTF-8")
 let () -> invalidUtf8 -> () {
-    let bad :: arr[2] i8u <- [0xC3, 0x28];
-    _ <- arr rune(bad);
+    let bad :: arr[2, i8u] <- [0xC3, 0x28];
+    _ <- arr[rune](bad);
 }
 
-@test(traps <- "'arr char(greeting)' isn't ASCII")
+@test(traps <- "'arr[char](greeting)' isn't ASCII")
 let () -> notAscii -> () {
-    _ <- arr char(greeting);
+    _ <- arr[char](greeting);
 }

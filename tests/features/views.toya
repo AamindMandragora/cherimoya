@@ -1,12 +1,12 @@
 # checks views: reading and writing through one as the place it views, inputs that are views, written or of an owning type, a function yielding a view of one of its inputs, views of elements and of what a pointer points at, and unscoped bindings
 let (n :: peek mut int) -> bump -> () { n +<- 1; }
-let (a :: arr int, b :: arr int) -> longest -> (r :: peek arr int) {
+let (a :: arr[int], b :: arr[int]) -> longest -> (r :: peek arr[int]) {
     match (a.len() >= b.len()) {
         true -> { a -| longest }
         false -> { b -| longest }
     }
 }
-let (xs :: arr int) -> total -> (r :: int) {
+let (xs :: arr[int]) -> total -> (r :: int) {
     let sum :: mut <- 0;
     let i :: mut i64u <- 0;
     repeat (i < xs.len()) {
@@ -15,7 +15,7 @@ let (xs :: arr int) -> total -> (r :: int) {
     }
     sum -|
 }
-let (r :: peek mut arr int) -> renew -> () { r <- arr int([9, 9]); }
+let (r :: peek mut arr[int]) -> renew -> () { r <- arr[int]([9, 9]); }
 let two :: mut i64u <- 2;
 
 @test
@@ -43,8 +43,8 @@ let () -> outParameter -> () {
 
 @test
 let () -> elementView -> () {
-    let grid <- arr[two] mut arr mut int(arr[two] mut int(1));
-    let row :: peek arr mut int <- grid[1];
+    let grid <- arr[two, mut arr[mut int]](arr[two, mut int](1));
+    let row :: peek arr[mut int] <- grid[1];
     row[0] <- 5;
     assert (grid[1][0] = 5);
     let cell :: peek mut <- grid[0][1];
@@ -54,15 +54,15 @@ let () -> elementView -> () {
 
 @test
 let () -> viewSeesReplacement -> () {
-    let grid <- arr[two] mut arr mut int(arr[two] mut int(1));
+    let grid <- arr[two, mut arr[mut int]](arr[two, mut int](1));
     let row :: peek <- grid[1];
-    grid[1] <- arr int([4, 5, 6]);
+    grid[1] <- arr[int]([4, 5, 6]);
     assert (row.len() = 3 && row[2] = 6);
 }
 
 @test
 let () -> pointerView -> () {
-    let p <- ptr mut int(3);
+    let p <- ptr[mut int](3);
     let v :: peek mut <- p[];
     v <- 8;
     assert (p[] = 8);
@@ -70,8 +70,8 @@ let () -> pointerView -> () {
 
 @test
 let () -> yieldsAView -> () {
-    let one <- arr int([1]);
-    let two <- arr int([2, 3]);
+    let one <- arr[int]([1]);
+    let two <- arr[int]([2, 3]);
     let long :: peek <- longest(one, two);
     assert (long.len() = 2 && total(long) = 5);
     assert (total(longest(two, one)) = 5);
@@ -79,14 +79,14 @@ let () -> yieldsAView -> () {
 
 @test
 let () -> writtenWhole -> () {
-    let xs :: mut <- arr int([1]);
+    let xs :: mut <- arr[int]([1]);
     renew(xs);
     assert (xs == [9, 9]);
 }
 
 @test
 let () -> unscopedBinding -> () {
-    let buf :: unscoped arr int <- arr int([4, 5]);
+    let buf :: unscoped arr[int] <- arr[int]([4, 5]);
     let kept <- buf;
     assert (total(kept) = 9);
 }

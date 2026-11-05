@@ -29,7 +29,7 @@ public:
     virtual ~Type() = default;
 };
 
-// a generic argument is either a type or a comptime value: the int in List[int], the 16 in arr[16] T
+// a generic argument is either a type or a comptime value: the int in List[int], the 16 in arr[16, T]
 struct GenericArg {
     std::unique_ptr<Type> type;
     std::unique_ptr<Expr> value;
@@ -43,7 +43,7 @@ public:
     NamedType(std::vector<Token> p, std::vector<GenericArg> a, Span s) : Type(TypeKind::Named, s), path(std::move(p)), args(std::move(a)) {}
 };
 
-// where a qualifier sits decides what it applies to: mut arr T rebinds the handle, arr mut T mutates the elements, mut T is a mutable value
+// where a qualifier sits decides what it applies to: mut arr[T] rebinds the handle, arr[mut T] mutates the elements, mut T is a mutable value
 enum class QualPosition { Handle, Elements, Value };
 
 // qualified types hold mut, where it sits, and the type it applies to, which is null for a bare qualifier like let x :: mut <- 5;
@@ -55,7 +55,7 @@ public:
     QualifiedType(Token q, QualPosition p, std::unique_ptr<Type> i, Span s) : Type(TypeKind::Qualified, s), qualifier(q), position(p), inner(std::move(i)) {}
 };
 
-// handles hold ptr or arr, the optional size or allocator in brackets, and the element type: arr[16] T, arr[Chunk] T, ptr T
+// handles hold ptr or arr, the optional size or allocator in brackets, and the element type: arr[16, T], arr[Chunk, T], ptr[T]
 class HandleType : public Type {
 public:
     Token handle;

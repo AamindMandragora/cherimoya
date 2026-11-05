@@ -15,8 +15,8 @@ The hierarchies reference each other: a refinement holds a predicate expression,
 The type grammar is built from small pieces that nest:
 
 - `NamedType`: a dotted path and its generic arguments. `int`, `std.mem.Allocator`, `Map[K, V]`, and `Fn[F, [S, T], S]` are all named types. Function types don't need their own node, since `Fn` is an ordinary protocol.
-- `HandleType`: `ptr` or `arr`, an optional bracketed argument, and the element type. `arr[16] T` and `arr[Chunk] T` look the same to the parser, and sema decides by kind whether the argument is a size or an allocator.
-- `QualifiedType`: `mut`, where it sits, and what it applies to. Where `mut` sits is the whole point. `mut arr T` rebinds the handle, `arr mut T` mutates the elements, and `mut int` is a mutable value. The parser records the position when it builds the node: a `mut` in front of a handle is `Handle`, a `mut` directly inside a handle is `Elements`, and anything else is `Value`. The position also falls out of the nesting, but storing it saves every later pass from re-deriving it.
+- `HandleType`: `ptr` or `arr`, an optional bracketed argument, and the element type. `arr[16, T]` and `arr[Chunk, T]` look the same to the parser, and sema decides by kind whether the argument is a size or an allocator.
+- `QualifiedType`: `mut`, where it sits, and what it applies to. Where `mut` sits is the whole point. `mut arr[T]` rebinds the handle, `arr[mut T]` mutates the elements, and `mut int` is a mutable value. The parser records the position when it builds the node: a `mut` in front of a handle is `Handle`, a `mut` directly inside a handle is `Elements`, and anything else is `Value`. The position also falls out of the nesting, but storing it saves every later pass from re-deriving it.
 - `ModeType`: `unscoped`, `peek`, or `wit`, and the type it applies to.
 - `TupleType` and `RecordType`: `[int, f64]` and `[x :: f64, y :: f64]`. A record is recognized by `name ::` as its first element. `::` only ever introduces a type, so record values are written with `<-`, as in `[x <- 1.0]`.
 - `RefinedType`: a base type, an optional binder, and a predicate. Type definitions name the binder (`int {p : 0 <= p <= 100}`), and parameters use their own name instead (`a :: int {a >= 0}`). The parser tells them apart by whether the brace opens with `name :`.
@@ -27,7 +27,7 @@ A generic argument is either a type or a comptime value. A lone name is parsed a
 
 ## Types in Value Position
 
-Calling a type converts or allocates: `i32(x)`, `arr mut T(n)`, `ptr T(v)`. When a NUD sees something that can only start a type (a built-in type name, `arr`, `ptr`, `peek`, `mut`, or `unscoped`), it parses a type and wraps it in a `TypeExprExpr`, and the ordinary call LED takes it from there. Types in value position never take a refinement, so the type parser has a flag that leaves a `{` alone. User type names are identifiers, so `NodeId(3)` is just a call, and `List[peek T]` is an index whose argument is a type. Sema sorts them out.
+Calling a type converts or allocates: `i32(x)`, `arr[mut T](n)`, `ptr[T](v)`. When a NUD sees something that can only start a type (a built-in type name, `arr`, `ptr`, `peek`, `mut`, or `unscoped`), it parses a type and wraps it in a `TypeExprExpr`, and the ordinary call LED takes it from there. Types in value position never take a refinement, so the type parser has a flag that leaves a `{` alone. User type names are identifiers, so `NodeId(3)` is just a call, and `List[peek T]` is an index whose argument is a type. Sema sorts them out.
 
 Annotation reuses the prefix parenthesis scan: if `::` follows the grouped expression, `(p :: Ord)` is an `AnnExpr`.
 

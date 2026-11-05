@@ -119,9 +119,9 @@ TEST_CASE("Lexer: flow, annotation, and punctuation tokens", "[lexer]") {
     CHECK(has(lexStr("x_"), K::Identifier, "x_"));
     CHECK(kindsOf(lexStr("let x :: int <- 5;")) == (std::vector<K>{
         K::KwLet, K::Identifier, K::ColonColon, K::TypeName, K::LArrow, K::IntLiteral, K::Semi}));
-    CHECK(kindsOf(lexStr("let v :: mut arr[16] char <- _;")) == (std::vector<K>{
-        K::KwLet, K::Identifier, K::ColonColon, K::KwMut, K::KwArr, K::LBracket, K::IntLiteral, K::RBracket,
-        K::TypeName, K::LArrow, K::Underscore, K::Semi}));
+    CHECK(kindsOf(lexStr("let v :: mut arr[16, char] <- _;")) == (std::vector<K>{
+        K::KwLet, K::Identifier, K::ColonColon, K::KwMut, K::KwArr, K::LBracket, K::IntLiteral, K::Comma,
+        K::TypeName, K::RBracket, K::LArrow, K::Underscore, K::Semi}));
     CHECK(kindsOf(lexStr("[x::1.0]")) == (std::vector<K>{
         K::LBracket, K::Identifier, K::ColonColon, K::FloatLiteral, K::RBracket}));
     CHECK(kindsOf(lexStr("[0, ..., <n]")) == (std::vector<K>{
@@ -397,7 +397,7 @@ TEST_CASE("Lexer: a complete function lexes to the expected sequence", "[lexer]"
         K::KwLet, K::Identifier, K::LArrow, K::IntLiteral, K::Semi,
         K::Identifier, K::Yield, K::RBrace,
     }));
-    const char* src2 = "let (xs :: peek arr mut i64u, p :: unscoped ptr Node) -> <+> -> (r :: mut arr i32) { }";
+    const char* src2 = "let (xs :: peek arr[mut i64u], p :: unscoped ptr[Node]) -> <+> -> (r :: mut arr[i32]) { }";
     auto ks = kindsOf(lexStr(src2));
     CHECK(ks.front() == K::KwLet);
     CHECK(std::count(ks.begin(), ks.end(), K::KwPeek) == 1);

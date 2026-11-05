@@ -216,20 +216,20 @@ TEST_CASE("Sema: named arguments and defaults", "[sema]") {
 
 // checks array literals, which take their elements' type the way an operator takes its operands', sizes known when the program compiles, including constants declared anywhere in a signature's scope, indexing by unsigned integers, len, and comparing arrays
 TEST_CASE("Sema: arrays", "[sema]") {
-    CHECK(symbolType("let xs <- [1, 2, 3];", "xs") == "arr[3] int");
-    CHECK(symbolType("let xs <- [1, 2.5];", "xs") == "arr[2] float");
-    CHECK(symbolType("let x :: i8 <- 1; let xs <- [1, x];", "xs") == "arr[2] i8");
-    CHECK(symbolType("let m <- [[1, 2], [3, 4], [5, 6]];", "m") == "arr[3] arr[2] int");
-    CHECK(semaErrors("let xs :: arr[3] i8 <- [1, 2, 3];") == 0);
-    CHECK(semaErrors("let xs :: arr[3] int <- [1, 2];") == 1);
+    CHECK(symbolType("let xs <- [1, 2, 3];", "xs") == "arr[3, int]");
+    CHECK(symbolType("let xs <- [1, 2.5];", "xs") == "arr[2, float]");
+    CHECK(symbolType("let x :: i8 <- 1; let xs <- [1, x];", "xs") == "arr[2, i8]");
+    CHECK(symbolType("let m <- [[1, 2], [3, 4], [5, 6]];", "m") == "arr[3, arr[2, int]]");
+    CHECK(semaErrors("let xs :: arr[3, i8] <- [1, 2, 3];") == 0);
+    CHECK(semaErrors("let xs :: arr[3, int] <- [1, 2];") == 1);
     CHECK(semaErrors("let xs <- [1, true];") == 1);
     CHECK(semaErrors("let xs <- [];") == 1);
-    CHECK(semaErrors("let xs :: arr[0] int <- [];") == 0);
+    CHECK(semaErrors("let xs :: arr[0, int] <- [];") == 0);
     // sizes
-    CHECK(semaErrors("let N <- 2 + 1; let xs :: arr[N] int <- [1, 2, 3];") == 0);
-    CHECK(semaErrors("let (xs :: arr[N] int) -> first -> (r :: int) { xs[0] -| } let N <- 2;") == 0);
-    CHECK(semaErrors("let n :: mut <- 3; let xs :: arr[n] mut int <- _;") == 1);
-    CHECK(semaErrors("let xs :: arr[2 - 3] int <- _;") == 1);
+    CHECK(semaErrors("let N <- 2 + 1; let xs :: arr[N, int] <- [1, 2, 3];") == 0);
+    CHECK(semaErrors("let (xs :: arr[N, int]) -> first -> (r :: int) { xs[0] -| } let N <- 2;") == 0);
+    CHECK(semaErrors("let n :: mut <- 3; let xs :: arr[n, mut int] <- _;") == 1);
+    CHECK(semaErrors("let xs :: arr[2 - 3, int] <- _;") == 1);
     // indexing and len
     CHECK(symbolType("let xs <- [1, 2]; let a <- xs[1];", "a") == "int");
     CHECK(symbolType("let m <- [[1, 2]]; let a <- m[0][1];", "a") == "int");
@@ -252,7 +252,7 @@ TEST_CASE("Sema: methods", "[sema]") {
     CHECK(symbolType("let xs <- [1, 2]; let n <- xs |> .len;", "n") == "i64u");
     CHECK(symbolType("let xs <- [1, 2]; let n <- .len <| xs;", "n") == "i64u");
     CHECK(symbolType("let m <- [[1, 2]]; let n <- m[0].len();", "n") == "i64u");
-    CHECK(symbolType("let (xs :: arr[2] int) -> len -> (r :: int) { 0 -| } let n <- len([1, 2]);", "n") == "i64u");
+    CHECK(symbolType("let (xs :: arr[2, int]) -> len -> (r :: int) { 0 -| } let n <- len([1, 2]);", "n") == "i64u");
     CHECK(semaErrors("let xs <- [1, 2]; let n <- xs.len;") == 1);
     CHECK(semaErrors("let xs <- [1, 2]; let n <- xs.len(1);") == 1);
     CHECK(semaErrors("let x <- 5; let n <- x.len();") == 1);
@@ -267,17 +267,17 @@ TEST_CASE("Sema: methods", "[sema]") {
 
 // checks where mut sits on an array: on its elements, they can be written, in front, the whole array can be replaced, a bare mut on an inferred type allows both at every level, and an uninitialized array needs one of them
 TEST_CASE("Sema: array mutability", "[sema]") {
-    CHECK(semaErrors("let xs :: arr[2] mut int <- [1, 2]; xs[0] <- 3; xs[1] +<- 1;") == 0);
-    CHECK(semaErrors("let xs :: arr[2] mut int <- [1, 2]; xs <- [3, 4];") == 1);
-    CHECK(semaErrors("let xs :: mut arr[2] int <- [1, 2]; xs <- [3, 4];") == 0);
-    CHECK(semaErrors("let xs :: mut arr[2] int <- [1, 2]; xs[0] <- 3;") == 1);
+    CHECK(semaErrors("let xs :: arr[2, mut int] <- [1, 2]; xs[0] <- 3; xs[1] +<- 1;") == 0);
+    CHECK(semaErrors("let xs :: arr[2, mut int] <- [1, 2]; xs <- [3, 4];") == 1);
+    CHECK(semaErrors("let xs :: mut arr[2, int] <- [1, 2]; xs <- [3, 4];") == 0);
+    CHECK(semaErrors("let xs :: mut arr[2, int] <- [1, 2]; xs[0] <- 3;") == 1);
     CHECK(semaErrors("let m :: mut <- [[1, 2], [3, 4]]; m[0][1] <- 5; m[1] <- [0, 0]; m <- m;") == 0);
-    CHECK(semaErrors("let m :: arr[2] mut arr[2] int <- [[1, 2], [3, 4]]; m[1] <- [0, 0];") == 0);
-    CHECK(semaErrors("let m :: arr[2] mut arr[2] int <- [[1, 2], [3, 4]]; m[0][1] <- 5;") == 1);
-    CHECK(semaErrors("let (xs :: arr[2] mut int) -> f -> () { xs[0] <- 1; }") == 0);
-    CHECK(semaErrors("let (xs :: arr[2] int) -> f -> () { xs[0] <- 1; }") == 1);
-    CHECK(semaErrors("let v :: arr[4] mut int <- _; v[0] <- 1;") == 0);
-    CHECK(semaErrors("let v :: arr[4] int <- _;") == 1);
+    CHECK(semaErrors("let m :: arr[2, mut arr[2, int]] <- [[1, 2], [3, 4]]; m[1] <- [0, 0];") == 0);
+    CHECK(semaErrors("let m :: arr[2, mut arr[2, int]] <- [[1, 2], [3, 4]]; m[0][1] <- 5;") == 1);
+    CHECK(semaErrors("let (xs :: arr[2, mut int]) -> f -> () { xs[0] <- 1; }") == 0);
+    CHECK(semaErrors("let (xs :: arr[2, int]) -> f -> () { xs[0] <- 1; }") == 1);
+    CHECK(semaErrors("let v :: arr[4, mut int] <- _; v[0] <- 1;") == 0);
+    CHECK(semaErrors("let v :: arr[4, int] <- _;") == 1);
     CHECK(semaErrors("let () -> f -> () { [1, 2][0] <- 3; }") == 1);
 }
 
@@ -321,105 +321,105 @@ TEST_CASE("Sema: discards", "[sema]") {
 TEST_CASE("Sema: handles", "[sema]") {
     // a length the program only knows at run time, which makes an array on the heap
     const std::string K = "let k :: mut i64u <- 3; ";
-    CHECK(symbolType(K + "let xs <- arr[k] mut int();", "xs") == "arr int");
-    CHECK(symbolType(K + "let xs <- arr[k] i8(1);", "xs") == "arr i8");
-    CHECK(symbolType(K + "let xs <- arr int([1, 2, 3]);", "xs") == "arr int");
-    CHECK(symbolType(K + "let p <- ptr int(5);", "p") == "ptr int");
-    CHECK(symbolType(K + "let m <- arr[k] mut arr int(arr int([1]));", "m") == "arr arr int");
-    CHECK(symbolType(K + "let n :: mut i8u <- 3; let xs <- arr[n] int();", "xs") == "arr int");
-    CHECK(symbolType(K + "let xs <- [1, 2] |> arr int;", "xs") == "arr int");
+    CHECK(symbolType(K + "let xs <- arr[k, mut int]();", "xs") == "arr[int]");
+    CHECK(symbolType(K + "let xs <- arr[k, i8](1);", "xs") == "arr[i8]");
+    CHECK(symbolType(K + "let xs <- arr[int]([1, 2, 3]);", "xs") == "arr[int]");
+    CHECK(symbolType(K + "let p <- ptr[int](5);", "p") == "ptr[int]");
+    CHECK(symbolType(K + "let m <- arr[k, mut arr[int]](arr[int]([1]));", "m") == "arr[arr[int]]");
+    CHECK(symbolType(K + "let n :: mut i8u <- 3; let xs <- arr[n, int]();", "xs") == "arr[int]");
+    CHECK(symbolType(K + "let xs <- [1, 2] |> arr[int];", "xs") == "arr[int]");
     // a length the program knows when it compiles makes a fixed array
-    CHECK(symbolType("let xs <- arr[3] int(7);", "xs") == "arr[3] int");
-    CHECK(symbolType("let N <- 2 + 2; let xs <- arr[N] int();", "xs") == "arr[4] int");
-    CHECK(semaErrors("let xs <- arr[3] mut int(_); xs[0] <- 1;") == 0);
-    CHECK(semaErrors("let xs <- arr[3] int(); xs[0] <- 1;") == 1);
+    CHECK(symbolType("let xs <- arr[3, int](7);", "xs") == "arr[3, int]");
+    CHECK(symbolType("let N <- 2 + 2; let xs <- arr[N, int]();", "xs") == "arr[4, int]");
+    CHECK(semaErrors("let xs <- arr[3, mut int](_); xs[0] <- 1;") == 0);
+    CHECK(semaErrors("let xs <- arr[3, int](); xs[0] <- 1;") == 1);
     // making them wrong
-    CHECK(semaErrors("let n :: mut <- 3; let xs <- arr[n] int();") == 1);
-    CHECK(semaErrors("let xs <- arr[true] int();") == 1);
-    CHECK(semaErrors(K + "let xs <- arr mut int(k, 0);") == 1);
-    CHECK(semaErrors(K + "let xs <- arr int(true);") == 1);
-    CHECK(semaErrors(K + "let xs <- arr int();") == 1);
-    CHECK(semaErrors(K + "let xs <- arr[k] int(2, 3);") == 1);
-    CHECK(semaErrors(K + "let xs <- arr[k] int(true);") == 1);
-    CHECK(semaErrors(K + "let ys <- [1, 2]; let xs <- arr i8(ys);") == 1);
-    CHECK(semaErrors(K + "let xs <- arr int([1, 2], 0);") == 1);
-    CHECK(semaErrors(K + "let p <- ptr int(1, 2);") == 1);
-    CHECK(semaErrors(K + "let p <- ptr int(true);") == 1);
-    CHECK(semaErrors(K + "let p <- ptr int(v <- 1);") == 1);
-    CHECK(semaErrors(K + "let ps <- arr[k] mut ptr int();") == 1);
-    CHECK(semaErrors(K + "let ps <- arr[k] mut ptr int(ptr int(1));") == 0);
-    CHECK(semaErrors(K + "let xs <- arr[k] mut int(_);") == 0);
-    CHECK(semaErrors(K + "let xs <- arr[k] int(_);") == 1);
-    CHECK(semaErrors(K + "let ps <- arr[k] mut ptr int(_);") == 1);
-    CHECK(semaErrors(K + "let p :: ptr[A] int <- ptr int(1);") == 1);
+    CHECK(semaErrors("let n :: mut <- 3; let xs <- arr[n, int]();") == 1);
+    CHECK(semaErrors("let xs <- arr[true, int]();") == 1);
+    CHECK(semaErrors(K + "let xs <- arr[mut int](k, 0);") == 1);
+    CHECK(semaErrors(K + "let xs <- arr[int](true);") == 1);
+    CHECK(semaErrors(K + "let xs <- arr[int]();") == 1);
+    CHECK(semaErrors(K + "let xs <- arr[k, int](2, 3);") == 1);
+    CHECK(semaErrors(K + "let xs <- arr[k, int](true);") == 1);
+    CHECK(semaErrors(K + "let ys <- [1, 2]; let xs <- arr[i8](ys);") == 1);
+    CHECK(semaErrors(K + "let xs <- arr[int]([1, 2], 0);") == 1);
+    CHECK(semaErrors(K + "let p <- ptr[int](1, 2);") == 1);
+    CHECK(semaErrors(K + "let p <- ptr[int](true);") == 1);
+    CHECK(semaErrors(K + "let p <- ptr[int](v <- 1);") == 1);
+    CHECK(semaErrors(K + "let ps <- arr[k, mut ptr[int]]();") == 1);
+    CHECK(semaErrors(K + "let ps <- arr[k, mut ptr[int]](ptr[int](1));") == 0);
+    CHECK(semaErrors(K + "let xs <- arr[k, mut int](_);") == 0);
+    CHECK(semaErrors(K + "let xs <- arr[k, int](_);") == 1);
+    CHECK(semaErrors(K + "let ps <- arr[k, mut ptr[int]](_);") == 1);
+    CHECK(semaErrors(K + "let p :: ptr[A, int] <- ptr[int](1);") == 1);
     // using them
-    CHECK(symbolType(K + "let xs <- arr[k] int(); let a <- xs[2];", "a") == "int");
-    CHECK(symbolType(K + "let xs <- arr[k] int(); let n <- xs.len();", "n") == "i64u");
-    CHECK(symbolType(K + "let p <- ptr int(5); let v <- p[];", "v") == "int");
-    CHECK(semaErrors(K + "let xs <- arr[k] int(); let a <- xs[9];") == 0);
-    CHECK(semaErrors(K + "let xs <- arr[k] int(); let a <- xs[];") == 1);
-    CHECK(semaErrors(K + "let p <- ptr int(5); let a <- p[0];") == 1);
-    CHECK(semaErrors(K + "let p <- ptr int(5); let n <- p.len();") == 1);
-    CHECK(semaErrors(K + "let a <- arr[k] int(); let b <- arr[k] int(); let s <- a = b; let d <- a == b;") == 0);
-    CHECK(semaErrors(K + "let a <- arr[k] int(); let b <- arr[k] int(); let s <- a < b;") == 1);
-    CHECK(semaErrors(K + "let a <- arr[k] int(); let b <- arr[k] i8(); let s <- a = b;") == 1);
+    CHECK(symbolType(K + "let xs <- arr[k, int](); let a <- xs[2];", "a") == "int");
+    CHECK(symbolType(K + "let xs <- arr[k, int](); let n <- xs.len();", "n") == "i64u");
+    CHECK(symbolType(K + "let p <- ptr[int](5); let v <- p[];", "v") == "int");
+    CHECK(semaErrors(K + "let xs <- arr[k, int](); let a <- xs[9];") == 0);
+    CHECK(semaErrors(K + "let xs <- arr[k, int](); let a <- xs[];") == 1);
+    CHECK(semaErrors(K + "let p <- ptr[int](5); let a <- p[0];") == 1);
+    CHECK(semaErrors(K + "let p <- ptr[int](5); let n <- p.len();") == 1);
+    CHECK(semaErrors(K + "let a <- arr[k, int](); let b <- arr[k, int](); let s <- a = b; let d <- a == b;") == 0);
+    CHECK(semaErrors(K + "let a <- arr[k, int](); let b <- arr[k, int](); let s <- a < b;") == 1);
+    CHECK(semaErrors(K + "let a <- arr[k, int](); let b <- arr[k, i8](); let s <- a = b;") == 1);
     // mut sits where it says, and a binding left to inference writes what the call says
-    CHECK(semaErrors(K + "let xs <- arr[k] mut int(); xs[0] <- 1;") == 0);
-    CHECK(semaErrors(K + "let xs <- arr[k] int(); xs[0] <- 1;") == 1);
-    CHECK(semaErrors(K + "let xs :: arr int <- arr[k] mut int(); xs[0] <- 1;") == 1);
-    CHECK(semaErrors(K + "let p <- ptr mut int(1); p[] <- 2;") == 0);
-    CHECK(semaErrors(K + "let p <- ptr int(1); p[] <- 2;") == 1);
-    CHECK(semaErrors(K + "let p :: mut ptr int <- ptr int(1); p <- ptr int(2);") == 0);
-    CHECK(semaErrors(K + "let p <- ptr int(1); p <- ptr int(2);") == 1);
-    CHECK(semaErrors(K + "let m <- arr[k] mut arr mut int(arr[k] mut int()); m[0][1] <- 3;") == 0);
-    CHECK(semaErrors(K + "let m <- arr[k] mut arr int(arr[k] int()); m[0][1] <- 3;") == 1);
+    CHECK(semaErrors(K + "let xs <- arr[k, mut int](); xs[0] <- 1;") == 0);
+    CHECK(semaErrors(K + "let xs <- arr[k, int](); xs[0] <- 1;") == 1);
+    CHECK(semaErrors(K + "let xs :: arr[int] <- arr[k, mut int](); xs[0] <- 1;") == 1);
+    CHECK(semaErrors(K + "let p <- ptr[mut int](1); p[] <- 2;") == 0);
+    CHECK(semaErrors(K + "let p <- ptr[int](1); p[] <- 2;") == 1);
+    CHECK(semaErrors(K + "let p :: mut ptr[int] <- ptr[int](1); p <- ptr[int](2);") == 0);
+    CHECK(semaErrors(K + "let p <- ptr[int](1); p <- ptr[int](2);") == 1);
+    CHECK(semaErrors(K + "let m <- arr[k, mut arr[mut int]](arr[k, mut int]()); m[0][1] <- 3;") == 0);
+    CHECK(semaErrors(K + "let m <- arr[k, mut arr[int]](arr[k, int]()); m[0][1] <- 3;") == 1);
     // nothing proves an uninitialized handle is written before it's freed yet
-    CHECK(semaErrors(K + "let xs :: mut arr int <- _;") == 1);
-    CHECK(semaErrors(K + "let ps :: arr[2] mut ptr int <- _;") == 1);
+    CHECK(semaErrors(K + "let xs :: mut arr[int] <- _;") == 1);
+    CHECK(semaErrors(K + "let ps :: arr[2, mut ptr[int]] <- _;") == 1);
 }
 
-// checks strings: a literal is its UTF-8 bytes as a fixed array, any fixed array is lent to an input that borrows an arr T, arrays compare across lengths, and a match compares a string by its bytes
+// checks strings: a literal is its UTF-8 bytes as a fixed array, any fixed array is lent to an input that borrows an arr[T], arrays compare across lengths, and a match compares a string by its bytes
 TEST_CASE("Sema: strings", "[sema]") {
     // a literal is chars when it's ASCII, bytes when it isn't, and whatever kind of string its context wants
-    CHECK(symbolType("let s <- \"hello\";", "s") == "arr[5] char");
-    CHECK(symbolType("let s <- \"h\u{E9}\";", "s") == "arr[3] i8u");
-    CHECK(symbolType("let s <- \"\";", "s") == "arr[0] char");
+    CHECK(symbolType("let s <- \"hello\";", "s") == "arr[5, char]");
+    CHECK(symbolType("let s <- \"h\u{E9}\";", "s") == "arr[3, i8u]");
+    CHECK(symbolType("let s <- \"\";", "s") == "arr[0, char]");
     CHECK(symbolType("let s <- \"ab\"; let c <- s[1];", "c") == "char");
-    CHECK(symbolType("let s :: arr[2] i8u <- \"ab\";", "s") == "arr[2] i8u");
-    CHECK(symbolType("let s :: arr[5] rune <- \"h\u{E9}llo\";", "s") == "arr[5] rune");
-    CHECK(semaErrors("let s :: arr[6] i8u <- \"h\u{E9}llo\";") == 0);
-    CHECK(semaErrors("let s :: arr[5] char <- \"h\u{E9}llo\";") == 1);
+    CHECK(symbolType("let s :: arr[2, i8u] <- \"ab\";", "s") == "arr[2, i8u]");
+    CHECK(symbolType("let s :: arr[5, rune] <- \"h\u{E9}llo\";", "s") == "arr[5, rune]");
+    CHECK(semaErrors("let s :: arr[6, i8u] <- \"h\u{E9}llo\";") == 0);
+    CHECK(semaErrors("let s :: arr[5, char] <- \"h\u{E9}llo\";") == 1);
     // chars are bytes already, so they widen into bytes, but nothing else widens
-    CHECK(semaErrors("let c <- \"ab\"; let b :: arr[2] i8u <- c;") == 0);
-    CHECK(semaErrors("let b :: arr[2] i8u <- \"ab\"; let c :: arr[2] char <- b;") == 1);
-    CHECK(semaErrors("let b :: arr[2] rune <- \"ab\"; let c :: arr[2] i8u <- b;") == 1);
-    CHECK(semaErrors("let c <- \"ab\"; let b :: arr[2] i8u <- \"ab\"; let same <- c == b;") == 0);
-    CHECK(semaErrors("let (s :: arr i8u) -> f -> () { } let () -> g -> () { f(\"ab\"); let c <- \"cd\"; f(c); }") == 0);
-    CHECK(semaErrors("let (s :: arr mut i8u) -> f -> () { } let () -> g -> () { let c :: arr[2] mut char <- \"cd\"; f(c); }") == 1);
+    CHECK(semaErrors("let c <- \"ab\"; let b :: arr[2, i8u] <- c;") == 0);
+    CHECK(semaErrors("let b :: arr[2, i8u] <- \"ab\"; let c :: arr[2, char] <- b;") == 1);
+    CHECK(semaErrors("let b :: arr[2, rune] <- \"ab\"; let c :: arr[2, i8u] <- b;") == 1);
+    CHECK(semaErrors("let c <- \"ab\"; let b :: arr[2, i8u] <- \"ab\"; let same <- c == b;") == 0);
+    CHECK(semaErrors("let (s :: arr[i8u]) -> f -> () { } let () -> g -> () { f(\"ab\"); let c <- \"cd\"; f(c); }") == 0);
+    CHECK(semaErrors("let (s :: arr[mut i8u]) -> f -> () { } let () -> g -> () { let c :: arr[2, mut char] <- \"cd\"; f(c); }") == 1);
     // the written conversions between kinds of string
-    CHECK(symbolType("let s <- \"h\u{E9}\"; let r <- arr rune(s);", "r") == "arr rune");
-    CHECK(symbolType("let r :: arr[2] rune <- \"h\u{E9}\"; let b <- arr i8u(r);", "b") == "arr i8u");
-    CHECK(symbolType("let b :: arr[2] i8u <- \"hi\"; let c <- arr char(b);", "c") == "arr char");
-    CHECK(symbolType("let c <- \"hi\"; let b <- arr i8u(c);", "b") == "arr i8u");
-    CHECK(semaErrors("let c <- \"hi\"; let r <- arr rune(c, 1);") == 1);
-    CHECK(semaErrors("let n <- [1, 2]; let r <- arr rune(n);") == 1);
+    CHECK(symbolType("let s <- \"h\u{E9}\"; let r <- arr[rune](s);", "r") == "arr[rune]");
+    CHECK(symbolType("let r :: arr[2, rune] <- \"h\u{E9}\"; let b <- arr[i8u](r);", "b") == "arr[i8u]");
+    CHECK(symbolType("let b :: arr[2, i8u] <- \"hi\"; let c <- arr[char](b);", "c") == "arr[char]");
+    CHECK(symbolType("let c <- \"hi\"; let b <- arr[i8u](c);", "b") == "arr[i8u]");
+    CHECK(semaErrors("let c <- \"hi\"; let r <- arr[rune](c, 1);") == 1);
+    CHECK(semaErrors("let n <- [1, 2]; let r <- arr[rune](n);") == 1);
     CHECK(symbolType("let s <- \"ab\"; let n <- s.len();", "n") == "i64u");
-    // lending a fixed array to an input that borrows an arr T, and not to one that takes it over
-    const std::string count = "let (s :: arr i8u) -> count -> (r :: i64u) { s.len() -| } ";
+    // lending a fixed array to an input that borrows an arr[T], and not to one that takes it over
+    const std::string count = "let (s :: arr[i8u]) -> count -> (r :: i64u) { s.len() -| } ";
     CHECK(semaErrors(count + "let n <- count(\"hi\");") == 0);
     CHECK(semaErrors(count + "let w <- \"hi\"; let n <- w |> count;") == 0);
-    CHECK(semaErrors("let (xs :: arr i8) -> f -> () { } let () -> g -> () { f([1, 2]); }") == 0);
-    CHECK(semaErrors("let (xs :: arr int) -> f -> () { } let () -> g -> () { f(\"hi\"); }") == 1);
-    CHECK(semaErrors("let (xs :: arr rune) -> f -> () { } let () -> g -> () { f(\"h\u{E9}\"); }") == 0);
-    CHECK(semaErrors("let (xs :: unscoped arr i8u) -> f -> () { let t <- xs; } let () -> g -> () { f(\"hi\"); }") == 1);
+    CHECK(semaErrors("let (xs :: arr[i8]) -> f -> () { } let () -> g -> () { f([1, 2]); }") == 0);
+    CHECK(semaErrors("let (xs :: arr[int]) -> f -> () { } let () -> g -> () { f(\"hi\"); }") == 1);
+    CHECK(semaErrors("let (xs :: arr[rune]) -> f -> () { } let () -> g -> () { f(\"h\u{E9}\"); }") == 0);
+    CHECK(semaErrors("let (xs :: unscoped arr[i8u]) -> f -> () { let t <- xs; } let () -> g -> () { f(\"hi\"); }") == 1);
     // arrays compare across lengths, a heap one with a fixed one
-    CHECK(semaErrors("let k :: mut i64u <- 2; let a <- arr[k] i8u(); let b <- a == \"go\"; let c <- \"go\" = a;") == 0);
+    CHECK(semaErrors("let k :: mut i64u <- 2; let a <- arr[k, i8u](); let b <- a == \"go\"; let c <- \"go\" = a;") == 0);
     CHECK(semaErrors("let b <- \"go\" == \"stop\";") == 1);
     CHECK(semaErrors("let b <- \"go\" < \"stop\";") == 1);
     // string patterns, which need a catch-all, and never match a fixed subject of another length
-    const std::string code = "let (cmd :: arr i8u) -> code -> (r :: int) { match (cmd) { \"go\" -> { 1 -| code } _ -> { 0 -| code } } } ";
+    const std::string code = "let (cmd :: arr[i8u]) -> code -> (r :: int) { match (cmd) { \"go\" -> { 1 -| code } _ -> { 0 -| code } } } ";
     CHECK(semaErrors(code) == 0);
-    CHECK(semaErrors("let (cmd :: arr i8u) -> code -> () { match (cmd) { \"go\" -> { } } }") == 1);
+    CHECK(semaErrors("let (cmd :: arr[i8u]) -> code -> () { match (cmd) { \"go\" -> { } } }") == 1);
     CHECK(semaWarnings("let w <- \"abc\"; match (w) { \"go\" -> { } _ -> { } }") == 1);
 }
 
@@ -433,19 +433,19 @@ TEST_CASE("Sema: handles on the stack", "[sema]") {
         return false;
     };
     const std::string body = "let () -> f -> () { let k :: mut i64u <- 3; ";
-    CHECK(isStacked(body + "let xs <- arr int([1, 2, 3]); }", "xs"));
-    CHECK(isStacked(body + "let p <- ptr int(1); }", "p"));
-    CHECK(isStacked(body + "let big <- arr[512] int(); let xs <- arr int(big); }", "xs"));
-    CHECK(!isStacked(body + "let big <- arr[513] int(); let xs <- arr int(big); }", "xs"));
-    CHECK(!isStacked(body + "let xs <- arr[k] int(); }", "xs"));
-    CHECK(!isStacked(body + "let xs <- arr int([1, 2]); let ys <- xs; }", "xs"));
-    CHECK(!isStacked(body + "let xs :: mut <- arr int([1, 2]); xs <- arr int([3]); }", "xs"));
-    CHECK(!isStacked("let () -> f -> (r :: arr int) { let xs <- arr int([1]); xs -| }", "xs"));
-    CHECK(!isStacked("let xs <- arr int([1]);", "xs"));
+    CHECK(isStacked(body + "let xs <- arr[int]([1, 2, 3]); }", "xs"));
+    CHECK(isStacked(body + "let p <- ptr[int](1); }", "p"));
+    CHECK(isStacked(body + "let big <- arr[512, int](); let xs <- arr[int](big); }", "xs"));
+    CHECK(!isStacked(body + "let big <- arr[513, int](); let xs <- arr[int](big); }", "xs"));
+    CHECK(!isStacked(body + "let xs <- arr[k, int](); }", "xs"));
+    CHECK(!isStacked(body + "let xs <- arr[int]([1, 2]); let ys <- xs; }", "xs"));
+    CHECK(!isStacked(body + "let xs :: mut <- arr[int]([1, 2]); xs <- arr[int]([3]); }", "xs"));
+    CHECK(!isStacked("let () -> f -> (r :: arr[int]) { let xs <- arr[int]([1]); xs -| }", "xs"));
+    CHECK(!isStacked("let xs <- arr[int]([1]);", "xs"));
     // what a view can replace whole might be freed through it, so it stays on the heap
-    CHECK(!isStacked("let (r :: peek mut arr int) -> renew -> () { } " + body + "let xs :: mut <- arr int([1]); renew(xs); }", "xs"));
-    CHECK(!isStacked(body + "let xs :: mut <- arr int([1]); let v :: peek mut <- xs; }", "xs"));
-    CHECK(isStacked(body + "let xs <- arr int([1]); let v :: peek <- xs; }", "xs"));
+    CHECK(!isStacked("let (r :: peek mut arr[int]) -> renew -> () { } " + body + "let xs :: mut <- arr[int]([1]); renew(xs); }", "xs"));
+    CHECK(!isStacked(body + "let xs :: mut <- arr[int]([1]); let v :: peek mut <- xs; }", "xs"));
+    CHECK(isStacked(body + "let xs <- arr[int]([1]); let v :: peek <- xs; }", "xs"));
 }
 
 // checks ownership: bindings own what they hold and moving hands it on, inputs borrow unless they're unscoped, which have to hand it on, and matches and loops agree on what moved
@@ -453,44 +453,44 @@ TEST_CASE("Sema: ownership", "[sema]") {
     const std::string K = "let k :: mut i64u <- 3; ";
     const std::string body = "let () -> f -> () { ";
     // moves and uses after them
-    CHECK(semaErrors(K + body + "let a <- arr[k] int(); let b <- a; }") == 0);
-    CHECK(semaErrors(K + body + "let a <- arr[k] int(); let b <- a; let n <- a.len(); }") == 1);
-    CHECK(semaErrors(K + body + "let a :: mut <- arr[k] int(); let b <- a; a <- arr[k] int(); let n <- a.len(); }") == 0);
-    CHECK(semaErrors(K + body + "let a <- ptr int(1); let ps <- [a, a]; }") == 1);
-    CHECK(semaErrors(K + body + "let a <- arr[k] int(); let p <- ptr arr int(a); let n <- a.len(); }") == 1);
+    CHECK(semaErrors(K + body + "let a <- arr[k, int](); let b <- a; }") == 0);
+    CHECK(semaErrors(K + body + "let a <- arr[k, int](); let b <- a; let n <- a.len(); }") == 1);
+    CHECK(semaErrors(K + body + "let a :: mut <- arr[k, int](); let b <- a; a <- arr[k, int](); let n <- a.len(); }") == 0);
+    CHECK(semaErrors(K + body + "let a <- ptr[int](1); let ps <- [a, a]; }") == 1);
+    CHECK(semaErrors(K + body + "let a <- arr[k, int](); let p <- ptr[arr[int]](a); let n <- a.len(); }") == 1);
     CHECK(semaErrors(K + body + "let x <- 1; let y <- x; let z <- x; }") == 0);
-    CHECK(semaErrors(K + body + "let xs <- arr[k] int(); let a <- xs[0]; let b <- xs[1]; }") == 0);
+    CHECK(semaErrors(K + body + "let xs <- arr[k, int](); let a <- xs[0]; let b <- xs[1]; }") == 0);
     // what can't move
-    CHECK(semaErrors(K + body + "let ps <- arr[k] mut ptr int(ptr int(1)); let p <- ps[0]; }") == 1);
-    CHECK(semaErrors(K + body + "let p <- ptr ptr int(ptr int(1)); let q <- p[]; }") == 1);
-    CHECK(semaErrors(K + "let table <- arr[k] int(); let () -> f -> () { let t <- table; }") == 1);
-    CHECK(semaErrors(K + "let a <- arr[k] int(); let b <- a;") == 1);
+    CHECK(semaErrors(K + body + "let ps <- arr[k, mut ptr[int]](ptr[int](1)); let p <- ps[0]; }") == 1);
+    CHECK(semaErrors(K + body + "let p <- ptr[ptr[int]](ptr[int](1)); let q <- p[]; }") == 1);
+    CHECK(semaErrors(K + "let table <- arr[k, int](); let () -> f -> () { let t <- table; }") == 1);
+    CHECK(semaErrors(K + "let a <- arr[k, int](); let b <- a;") == 1);
     // inputs borrow, unscoped ones take over and have to hand it on, and outputs move out
-    CHECK(semaErrors(K + "let (xs :: arr int) -> total -> (r :: i64u) { xs.len() -| } " + body + "let a <- arr[k] int(); _ <- total(a); _ <- total(a); }") == 0);
-    CHECK(semaErrors(K + "let (xs :: arr int) -> keep -> (r :: arr int) { xs -| }") == 1);
-    CHECK(semaErrors(K + "let (xs :: arr int) -> keep -> () { let b <- xs; }") == 1);
-    CHECK(semaErrors(K + "let (xs :: mut arr int) -> swap -> () { xs <- arr[k] int(); }") == 1);
-    CHECK(semaErrors(K + "let (xs :: arr mut int) -> zero -> () { xs[0] <- 0; }") == 0);
-    CHECK(semaErrors(K + "let (xs :: unscoped arr int) -> keep -> (r :: arr int) { xs -| }") == 0);
-    CHECK(semaErrors(K + "let (xs :: unscoped arr int) -> drop -> () { let given <- xs; }") == 0);
-    CHECK(semaErrors(K + "let (xs :: unscoped arr int) -> lose -> () { }") == 1);
-    CHECK(semaErrors(K + "let (xs :: unscoped arr int) -> keep -> (r :: arr int) { xs -| } " + body + "let a :: mut <- arr[k] int(); a <- keep(a); let n <- a.len(); }") == 0);
-    CHECK(semaErrors(K + "let (xs :: unscoped arr int) -> keep -> (r :: arr int) { xs -| } " + body + "let a <- arr[k] int(); _ <- keep(a); let n <- a.len(); }") == 1);
+    CHECK(semaErrors(K + "let (xs :: arr[int]) -> total -> (r :: i64u) { xs.len() -| } " + body + "let a <- arr[k, int](); _ <- total(a); _ <- total(a); }") == 0);
+    CHECK(semaErrors(K + "let (xs :: arr[int]) -> keep -> (r :: arr[int]) { xs -| }") == 1);
+    CHECK(semaErrors(K + "let (xs :: arr[int]) -> keep -> () { let b <- xs; }") == 1);
+    CHECK(semaErrors(K + "let (xs :: mut arr[int]) -> swap -> () { xs <- arr[k, int](); }") == 1);
+    CHECK(semaErrors(K + "let (xs :: arr[mut int]) -> zero -> () { xs[0] <- 0; }") == 0);
+    CHECK(semaErrors(K + "let (xs :: unscoped arr[int]) -> keep -> (r :: arr[int]) { xs -| }") == 0);
+    CHECK(semaErrors(K + "let (xs :: unscoped arr[int]) -> drop -> () { let given <- xs; }") == 0);
+    CHECK(semaErrors(K + "let (xs :: unscoped arr[int]) -> lose -> () { }") == 1);
+    CHECK(semaErrors(K + "let (xs :: unscoped arr[int]) -> keep -> (r :: arr[int]) { xs -| } " + body + "let a :: mut <- arr[k, int](); a <- keep(a); let n <- a.len(); }") == 0);
+    CHECK(semaErrors(K + "let (xs :: unscoped arr[int]) -> keep -> (r :: arr[int]) { xs -| } " + body + "let a <- arr[k, int](); _ <- keep(a); let n <- a.len(); }") == 1);
     CHECK(semaErrors(K + "let (n :: unscoped int) -> f -> () { }") == 1);
-    CHECK(semaErrors(K + "let xs :: unscoped arr int <- arr[k] int();") == 1);
-    CHECK(semaErrors(K + "let () -> make -> (r :: arr int) { arr[k] int() -| }") == 0);
-    CHECK(semaErrors(K + "let () -> make -> (r :: unscoped arr int) { arr[k] int() -| }") == 0);
+    CHECK(semaErrors(K + "let xs :: unscoped arr[int] <- arr[k, int]();") == 1);
+    CHECK(semaErrors(K + "let () -> make -> (r :: arr[int]) { arr[k, int]() -| }") == 0);
+    CHECK(semaErrors(K + "let () -> make -> (r :: unscoped arr[int]) { arr[k, int]() -| }") == 0);
     // a move in some arms of a match is a move after it, which an unscoped input can't have
-    CHECK(semaErrors(K + "let (c :: bool) -> f -> () { let a <- arr[k] int(); match (c) { true -> { let b <- a; } false -> { } } }") == 0);
-    CHECK(semaErrors(K + "let (c :: bool) -> f -> () { let a <- arr[k] int(); match (c) { true -> { let b <- a; } false -> { } } let n <- a.len(); }") == 1);
-    CHECK(semaErrors(K + "let (c :: bool, xs :: unscoped arr int) -> f -> (r :: arr int) { match (c) { true -> { xs -| f } false -> { } } arr[k] int() -| }") == 1);
-    CHECK(semaErrors(K + "let (c :: bool, xs :: unscoped arr int) -> f -> (r :: arr int) { match (c) { true -> { xs -| f } false -> { xs -| f } } }") == 0);
+    CHECK(semaErrors(K + "let (c :: bool) -> f -> () { let a <- arr[k, int](); match (c) { true -> { let b <- a; } false -> { } } }") == 0);
+    CHECK(semaErrors(K + "let (c :: bool) -> f -> () { let a <- arr[k, int](); match (c) { true -> { let b <- a; } false -> { } } let n <- a.len(); }") == 1);
+    CHECK(semaErrors(K + "let (c :: bool, xs :: unscoped arr[int]) -> f -> (r :: arr[int]) { match (c) { true -> { xs -| f } false -> { } } arr[k, int]() -| }") == 1);
+    CHECK(semaErrors(K + "let (c :: bool, xs :: unscoped arr[int]) -> f -> (r :: arr[int]) { match (c) { true -> { xs -| f } false -> { xs -| f } } }") == 0);
     // a binding from outside a loop has to hold a value at the end of every iteration
-    CHECK(semaErrors(K + body + "let a <- arr[k] int(); let i :: mut <- 0; repeat (i < 3) { let b <- a; i +<- 1; } }") == 1);
-    CHECK(semaErrors(K + body + "let a :: mut <- arr[k] int(); let i :: mut <- 0; repeat (i < 3) { let b <- a; a <- arr[k] int(); i +<- 1; } }") == 0);
-    CHECK(semaErrors(K + body + "let a <- arr[k] int(); repeat { let b <- a; -| repeat } }") == 0);
+    CHECK(semaErrors(K + body + "let a <- arr[k, int](); let i :: mut <- 0; repeat (i < 3) { let b <- a; i +<- 1; } }") == 1);
+    CHECK(semaErrors(K + body + "let a :: mut <- arr[k, int](); let i :: mut <- 0; repeat (i < 3) { let b <- a; a <- arr[k, int](); i +<- 1; } }") == 0);
+    CHECK(semaErrors(K + body + "let a <- arr[k, int](); repeat { let b <- a; -| repeat } }") == 0);
     // a binder borrows the subject
-    CHECK(semaErrors(K + body + "let a <- arr[k] int(); match (a) { b -> { let c <- b; } } }") == 1);
+    CHECK(semaErrors(K + body + "let a <- arr[k, int](); match (a) { b -> { let c <- b; } } }") == 1);
 }
 
 // checks views: what they view, writing through them, the paths they keep in place while they're live, and returning them
@@ -502,45 +502,45 @@ TEST_CASE("Sema: views", "[sema]") {
     CHECK(semaErrors(body + "let x <- 1; let v :: peek <- x; v <- 2; }") == 1);
     CHECK(semaErrors(body + "let v :: peek <- 1 + 2; }") == 1);
     CHECK(semaErrors(body + "let v :: peek int <- _; }") == 1);
-    CHECK(semaErrors(body + "let xs <- arr[k] int(); let v :: peek <- xs; let n <- v.len(); }") == 0);
-    CHECK(symbolType(body + "let xs <- arr[k] int(); let v :: peek <- xs[1]; }", "v") == "int");
-    CHECK(semaErrors(body + "let xs <- arr[k] int(); let v :: peek <- xs; let ys <- v; }") == 1);
+    CHECK(semaErrors(body + "let xs <- arr[k, int](); let v :: peek <- xs; let n <- v.len(); }") == 0);
+    CHECK(symbolType(body + "let xs <- arr[k, int](); let v :: peek <- xs[1]; }", "v") == "int");
+    CHECK(semaErrors(body + "let xs <- arr[k, int](); let v :: peek <- xs; let ys <- v; }") == 1);
     // inputs that are views, written or of an owning type, and the mutability what's passed needs
     const std::string bump = "let (n :: peek mut int) -> bump -> () { n +<- 1; } ";
     CHECK(semaErrors(bump + body + "let x :: mut <- 1; bump(x); }") == 0);
     CHECK(semaErrors(bump + body + "let x <- 1; bump(x); }") == 1);
     CHECK(semaErrors(bump + body + "bump(1); }") == 0);
-    const std::string zero = "let (xs :: arr mut int) -> zero -> () { xs[0] <- 0; } ";
-    CHECK(semaErrors(zero + body + "let xs <- arr[k] mut int(); zero(xs); }") == 0);
-    CHECK(semaErrors(zero + body + "let xs <- arr[k] int(); zero(xs); }") == 1);
-    CHECK(semaErrors(zero + body + "zero(arr[k] int()); }") == 0);
+    const std::string zero = "let (xs :: arr[mut int]) -> zero -> () { xs[0] <- 0; } ";
+    CHECK(semaErrors(zero + body + "let xs <- arr[k, mut int](); zero(xs); }") == 0);
+    CHECK(semaErrors(zero + body + "let xs <- arr[k, int](); zero(xs); }") == 1);
+    CHECK(semaErrors(zero + body + "zero(arr[k, int]()); }") == 0);
     // nothing a live view points into can be freed or moved, where only memory going away matters
-    const std::string grid = body + "let g <- arr[k] mut arr mut int(arr[k] mut int(1)); ";
+    const std::string grid = body + "let g <- arr[k, mut arr[mut int]](arr[k, mut int](1)); ";
     CHECK(semaErrors(grid + "let row :: peek <- g[1]; let ys <- g; let n <- row.len(); }") == 1);
-    CHECK(semaErrors(grid + "let e :: peek <- g[1][0]; g[1] <- arr[k] mut int(2); let n <- e + 1; }") == 1);
-    CHECK(semaErrors(grid + "let e :: peek <- g[1][0]; g[0] <- arr[k] mut int(2); let n <- e + 1; }") == 0);
-    CHECK(semaErrors(grid + "let i :: mut i64u <- 0; let e :: peek <- g[i][0]; g[0] <- arr[k] mut int(2); let n <- e + 1; }") == 1);
+    CHECK(semaErrors(grid + "let e :: peek <- g[1][0]; g[1] <- arr[k, mut int](2); let n <- e + 1; }") == 1);
+    CHECK(semaErrors(grid + "let e :: peek <- g[1][0]; g[0] <- arr[k, mut int](2); let n <- e + 1; }") == 0);
+    CHECK(semaErrors(grid + "let i :: mut i64u <- 0; let e :: peek <- g[i][0]; g[0] <- arr[k, mut int](2); let n <- e + 1; }") == 1);
     // a view of the place itself follows whatever's put there, so replacing it is fine
-    CHECK(semaErrors(grid + "let row :: peek <- g[1]; g[1] <- arr[k] mut int(2); let n <- row.len(); }") == 0);
+    CHECK(semaErrors(grid + "let row :: peek <- g[1]; g[1] <- arr[k, mut int](2); let n <- row.len(); }") == 0);
     CHECK(semaErrors(grid + "let row :: peek mut <- g[1]; row[0] <- 5; g[1][0] <- 6; let n <- row.len(); }") == 0);
-    CHECK(semaErrors(grid + "let e :: peek <- g[1][0]; let n <- e + 1; g[1] <- arr[k] mut int(2); }") == 0);
-    CHECK(semaErrors(grid + "let whole :: peek <- g; g[1] <- arr[k] mut int(2); let n <- whole.len(); }") == 0);
-    CHECK(semaErrors(body + "let xs :: mut <- arr[k] int(); let v :: peek <- xs; xs <- arr[k] int(); let n <- v.len(); }") == 0);
-    CHECK(semaErrors(body + "let p :: mut <- ptr arr int(arr[k] int()); let v :: peek <- p[]; p <- ptr arr int(arr[k] int()); let n <- v.len(); }") == 1);
-    const std::string replace = "let (g :: arr mut arr int) -> renew -> () { } ";
+    CHECK(semaErrors(grid + "let e :: peek <- g[1][0]; let n <- e + 1; g[1] <- arr[k, mut int](2); }") == 0);
+    CHECK(semaErrors(grid + "let whole :: peek <- g; g[1] <- arr[k, mut int](2); let n <- whole.len(); }") == 0);
+    CHECK(semaErrors(body + "let xs :: mut <- arr[k, int](); let v :: peek <- xs; xs <- arr[k, int](); let n <- v.len(); }") == 0);
+    CHECK(semaErrors(body + "let p :: mut <- ptr[arr[int]](arr[k, int]()); let v :: peek <- p[]; p <- ptr[arr[int]](arr[k, int]()); let n <- v.len(); }") == 1);
+    const std::string replace = "let (g :: arr[mut arr[int]]) -> renew -> () { } ";
     CHECK(semaErrors(replace + grid + "let e :: peek <- g[1][0]; renew(g); let n <- e + 1; }") == 1);
     CHECK(semaErrors(replace + grid + "let e :: peek <- g[1][0]; renew(g); }") == 0);
     // a loop keeps a view from before it live all the way round
-    CHECK(semaErrors(grid + "let e :: peek <- g[1][0]; let i :: mut <- 0; repeat (i < 2) { let n <- e + 1; g[1] <- arr[k] mut int(2); i +<- 1; } }") == 1);
+    CHECK(semaErrors(grid + "let e :: peek <- g[1][0]; let i :: mut <- 0; repeat (i < 2) { let n <- e + 1; g[1] <- arr[k, mut int](2); i +<- 1; } }") == 1);
     // a function yields a view of one of its inputs, which keeps the arguments in place at the call
-    const std::string longest = "let (a :: arr int, b :: arr int) -> longest -> (r :: peek arr int) { match (a.len() >= b.len()) { true -> { a -| longest } false -> { b -| longest } } } ";
-    CHECK(semaErrors(longest + body + "let a <- arr[k] int(); let b <- arr[k] int(); let l :: peek <- longest(a, b); let n <- l.len(); }") == 0);
-    CHECK(semaErrors(longest + body + "let a <- arr[k] int(); let b <- arr[k] int(); let l :: peek <- longest(a, b); let c <- b; let n <- l.len(); }") == 1);
-    CHECK(semaErrors(longest + body + "let a <- arr[k] int(); let l :: peek <- longest(a, arr[k] int()); }") == 1);
-    CHECK(semaErrors("let () -> own -> (r :: peek arr int) { let k :: mut i64u <- 2; let xs <- arr[k] int(); xs -| }") == 1);
+    const std::string longest = "let (a :: arr[int], b :: arr[int]) -> longest -> (r :: peek arr[int]) { match (a.len() >= b.len()) { true -> { a -| longest } false -> { b -| longest } } } ";
+    CHECK(semaErrors(longest + body + "let a <- arr[k, int](); let b <- arr[k, int](); let l :: peek <- longest(a, b); let n <- l.len(); }") == 0);
+    CHECK(semaErrors(longest + body + "let a <- arr[k, int](); let b <- arr[k, int](); let l :: peek <- longest(a, b); let c <- b; let n <- l.len(); }") == 1);
+    CHECK(semaErrors(longest + body + "let a <- arr[k, int](); let l :: peek <- longest(a, arr[k, int]()); }") == 1);
+    CHECK(semaErrors("let () -> own -> (r :: peek arr[int]) { let k :: mut i64u <- 2; let xs <- arr[k, int](); xs -| }") == 1);
     // an unscoped binding has to be moved before its scope ends, and can't be at the top
-    CHECK(semaErrors(body + "let buf :: unscoped arr int <- arr[k] int(); let kept <- buf; }") == 0);
-    CHECK(semaErrors(body + "let buf :: unscoped arr int <- arr[k] int(); }") == 1);
+    CHECK(semaErrors(body + "let buf :: unscoped arr[int] <- arr[k, int](); let kept <- buf; }") == 0);
+    CHECK(semaErrors(body + "let buf :: unscoped arr[int] <- arr[k, int](); }") == 1);
     CHECK(semaErrors(body + "let n :: unscoped int <- 1; }") == 1);
 }
 
@@ -937,11 +937,11 @@ TEST_CASE("Sema: fixes", "[sema]") {
     CHECK(fixed("let r <- [lo <- 1, ..., 5];") == "let r <- [1, ..., 5];");
     // arrays
     CHECK(fixed("let xs <- [1, 2]; xs[0] <- 3;") == "let xs :: mut <- [1, 2]; xs[0] <- 3;");
-    CHECK(fixed("let xs :: arr[2] int <- [1, 2]; xs[0] <- 3;") == "");
+    CHECK(fixed("let xs :: arr[2, int] <- [1, 2]; xs[0] <- 3;") == "");
     CHECK(fixed("let xs <- [1, 2]; let i <- 1; let a <- xs[i];") == "let xs <- [1, 2]; let i <- 1; let a <- xs[i64u(i)];");
     CHECK(fixed("let xs <- [1, 2]; let n <- xs.len;") == "let xs <- [1, 2]; let n <- xs.len();");
-    CHECK(fixed("let n :: mut <- 3; let xs <- arr[n] int();") == "let n :: mut <- 3; let xs <- arr[i64u(n)] int();");
-    CHECK(fixed("let n :: mut i64u <- 3; let xs <- arr mut int(n, 0);") == "let n :: mut i64u <- 3; let xs <- arr[n] mut int(0);");
+    CHECK(fixed("let n :: mut <- 3; let xs <- arr[n, int]();") == "let n :: mut <- 3; let xs <- arr[i64u(n), int]();");
+    CHECK(fixed("let n :: mut i64u <- 3; let xs <- arr[mut int](n, 0);") == "let n :: mut i64u <- 3; let xs <- arr[n, mut int](0);");
     // arguments and defaults
     const std::string add = "let (a :: int, b :: int) -> add -> (r :: int) { a + b -| } ";
     CHECK(fixed(add + "let x <- add(a <- 1, 2);") == "");

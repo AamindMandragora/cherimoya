@@ -108,7 +108,7 @@ The tests use an S-expression dump function (`dump`) that renders the tree as a 
 
 The parser handles expressions only. There are no statements, no declarations, no `let`, no `match`, and no closures. The test harness feeds raw expression strings, so there's no way to parse a full program yet. That's commit 3.
 
-Anything that needs the type grammar waits for commit 3 too: closures (their parameters are typed), annotation like `(p :: Ord)`, and types in value position, such as `i32(x)`, `arr mut T(n)`, and `size[i32]()`.
+Anything that needs the type grammar waits for commit 3 too: closures (their parameters are typed), annotation like `(p :: Ord)`, and types in value position, such as `i32(x)`, `arr[mut T](n)`, and `size[i32]()`.
 
 Membership clause patterns are parsed as expressions. That covers every pattern a comprehension needs today, but patterns get their own hierarchy in commit 3.
 

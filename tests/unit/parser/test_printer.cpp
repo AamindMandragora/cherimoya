@@ -363,7 +363,7 @@ public:
             }
             case TypeKind::Handle: {
                 auto& h = static_cast<const HandleType&>(t);
-                return std::string(h.handle.text) + (h.arg ? "[" + arg(*h.arg, depth) + "]" : "") + " " + type(*h.inner, depth);
+                return std::string(h.handle.text) + "[" + (h.arg ? arg(*h.arg, depth) + ", " : "") + type(*h.inner, depth) + "]";
             }
             case TypeKind::Mode: {
                 auto& m = static_cast<const ModeType&>(t);
@@ -609,7 +609,7 @@ TEST_CASE("Printer: parentheses follow precedence, associativity, and mixing", "
     canonical("x <- old p.x + old (a + b);\n");
     canonical("x <- Vec2 <- [1.0, 2.0] <+> Vec2 <- [3.0, 4.0];\n");
     canonical("x <- [(Point <- [1, 2]), q <- 3];\n");
-    canonical("x <- (arr T)[0];\n");
+    canonical("x <- (arr[T])[0];\n");
     canonical("x <- a < -1;\n");
 }
 
@@ -644,8 +644,8 @@ TEST_CASE("Printer: statements and scopes", "[printer]") {
         "{\n"
         "    let count :: mut i64u <- 0;\n"
         "    let [q, r] <- divmod(17, 5);\n"
-        "    let v :: mut arr[16] char <- _;\n"
-        "    let buf :: unscoped <- arr mut T(n, _);\n"
+        "    let v :: mut arr[16, char] <- _;\n"
+        "    let buf :: unscoped <- arr[mut T](n, _);\n"
         "    xs[i] *<- 2;\n"
         "    _ <- write(1, s, len(s));\n"
         "    v <+><- w;\n"
@@ -699,8 +699,8 @@ TEST_CASE("Printer: closures, folds, and comprehensions", "[printer]") {
         "} : [i, x] <- enumerate(xs)];\n");
     canonical("let any <- (||, false)[x < 0 : x <- xs];\n");
     canonical("let s <- (<+>, zero)[vs];\n");
-    canonical("let n <- i32(x) + size[i32]() + len(arr i64u([x : x <- xs]));\n");
-    canonical("let p <- ptr T(value);\n");
+    canonical("let n <- i32(x) + size[i32]() + len(arr[i64u]([x : x <- xs]));\n");
+    canonical("let p <- ptr[T](value);\n");
     canonical("let o <- cmp((p :: Ord), q);\n");
 }
 
@@ -714,13 +714,13 @@ TEST_CASE("Printer: declarations", "[printer]") {
     canonical("type Option[T] <- Some[T] | None;\n");
     canonical("type Ord[T] <- [ let (a :: peek T, b :: peek T) -> cmp -> (r :: int) ];\n");
     canonical("type Num[T] <- [ let (a :: T, b :: T) -> + -> (r :: T), let (a :: T) -> - -> (r :: T) ];\n");
-    canonical("type List[T, A :: Allocator <- Global] <- [data :: arr[A] mut T, count :: i64u] {l : l.count <= len(l.data) && written(l.data) == [0, ..., <l.count]};\n");
-    canonical("type Map[K :: Ord, V] <- [keys :: arr K, vals :: mut arr mut V];\n");
+    canonical("type List[T, A :: Allocator <- Global] <- [data :: arr[A, mut T], count :: i64u] {l : l.count <= len(l.data) && written(l.data) == [0, ..., <l.count]};\n");
+    canonical("type Map[K :: Ord, V] <- [keys :: arr[K], vals :: mut arr[mut V]];\n");
     canonical("export [List, list_new, push, Result[dist, prev]];\n");
     canonical("import [Allocator] <- std.mem;\n");
     canonical("@tier(strict);\n");
     canonical("@tier(strict) { x <- 1; }\n");
-    canonical("@extern(\"c\") let (fd :: i32, buf :: peek arr char, n :: i64u) -> write -> (r :: i64);\n");
+    canonical("@extern(\"c\") let (fd :: i32, buf :: peek arr[char], n :: i64u) -> write -> (r :: i64);\n");
     canonical("@global_allocator let heap <- Bump();\n");
     canonical("let (x :: int) -> inc -> (r :: int) { x + 1 -| }\n");
     canonical("let [T :: Ord] (a :: T, b :: T) -> max -> (m :: T) { }\n");
@@ -751,7 +751,7 @@ TEST_CASE("Printer: a reference program round trip", "[printer]") {
         "        [>100, ...]   -> { 100 -| }\n"
         "    } -|\n"
         "}\n"
-        "let (xs :: peek arr int, target :: int) -> count_pairs -> (c :: i64u) {\n"
+        "let (xs :: peek arr[int], target :: int) -> count_pairs -> (c :: i64u) {\n"
         "    let count :: mut i64u <- 0;\n"
         "    let n <- len(xs);\n"
         "    repeat outer (i) <- [0, ..., <n] {\n"

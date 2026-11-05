@@ -290,7 +290,7 @@ public:
     AnnExpr(std::unique_ptr<Expr> e, std::unique_ptr<Type> a, Span s) : Expr(ExprKind::Ann, s), expr(std::move(e)), annotation(std::move(a)) {}
 };
 
-// type expressions are a type in value position, which then gets called: the i32 in i32(x), the arr mut T in arr mut T(n)
+// type expressions are a type in value position, which then gets called: the i32 in i32(x), the arr[mut T] in arr[mut T](n)
 class TypeExprExpr : public Expr {
 public:
     std::unique_ptr<Type> typeExpr;

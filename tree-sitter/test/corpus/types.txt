@@ -8,7 +8,7 @@ let a :: Node <- _;
 let a :: std.mem.Allocator <- _;
 let a :: List[int] <- _;
 let a :: Map[K, V] <- _;
-let a :: Option[unscoped ptr Expr] <- _;
+let a :: Option[unscoped ptr[Expr]] <- _;
 let a :: Fn[F, [S, T], S] <- _;
 let a :: i32.max <- _;
 
@@ -193,13 +193,13 @@ let a :: [bool, int, float, char, rune, boolf] <- _;
 handles
 ================================================================================
 
-let a :: ptr T <- _;
-let a :: arr T <- _;
-let a :: arr[16] T <- _;
-let a :: arr[A] T <- _;
-let a :: arr[Chunk] mut T <- _;
-let a :: arr[N * 2] T <- _;
-let a :: arr[A] [int, int] <- _;
+let a :: ptr[T] <- _;
+let a :: arr[T] <- _;
+let a :: arr[16, T] <- _;
+let a :: arr[A, T] <- _;
+let a :: arr[Chunk, mut T] <- _;
+let a :: arr[N * 2, T] <- _;
+let a :: arr[A, [int, int]] <- _;
 
 --------------------------------------------------------------------------------
 
@@ -269,7 +269,7 @@ let a :: [int, f64] <- _;
 let a :: [] <- _;
 let a :: [int,] <- _;
 let a :: [x :: f64, y :: f64] <- _;
-let a :: [data :: arr[A] mut T, count :: i64u] <- _;
+let a :: [data :: arr[A, mut T], count :: i64u] <- _;
 
 --------------------------------------------------------------------------------
 
@@ -326,14 +326,14 @@ where mut sits decides what it applies to, and the modes
 ================================================================================
 
 let a :: mut int <- _;
-let a :: mut arr T <- _;
-let a :: arr mut T <- _;
-let a :: mut arr mut T <- _;
-let a :: mut ptr T <- _;
-let a :: peek arr char <- _;
+let a :: mut arr[T] <- _;
+let a :: arr[mut T] <- _;
+let a :: mut arr[mut T] <- _;
+let a :: mut ptr[T] <- _;
+let a :: peek arr[char] <- _;
 let a :: peek mut S <- _;
-let a :: peek arr mut i64u <- _;
-let a :: unscoped ptr Expr <- _;
+let a :: peek arr[mut i64u] <- _;
+let a :: unscoped ptr[Expr] <- _;
 let a :: unscoped <- _;
 let a :: mut <- _;
 let a :: wit <- _;
@@ -519,10 +519,10 @@ generic arguments are types when they start like one
 ================================================================================
 
 let a :: Map[int {x > 0}, K.y {z}, K[x] {y}] <- _;
-let a :: arr[n] T <- _;
-let a :: arr[n + 1] T <- _;
-let a :: arr[f(x)] T <- _;
-let a :: arr[-1] T <- _;
+let a :: arr[n, T] <- _;
+let a :: arr[n + 1, T] <- _;
+let a :: arr[f(x), T] <- _;
+let a :: arr[-1, T] <- _;
 
 --------------------------------------------------------------------------------
 
@@ -594,12 +594,12 @@ types in value position
 x <- i32(x);
 x <- f64(x);
 x <- i64u(id) + 1;
-x <- arr mut T(n);
-x <- arr mut T(n, fill);
-x <- arr mut T(n, _);
-x <- arr T(seq);
-x <- arr i64u([x : x <- xs]);
-x <- ptr T(value);
+x <- arr[mut T](n);
+x <- arr[mut T](n, fill);
+x <- arr[mut T](n, _);
+x <- arr[T](seq);
+x <- arr[i64u]([x : x <- xs]);
+x <- ptr[T](value);
 x <- size[i32]();
 x <- List[peek T];
 x <- NodeId(3);
@@ -736,8 +736,8 @@ x <- mut;
 a conversion in a handle's brackets is a value
 ================================================================================
 
-x <- arr[i64u(n) + 1] mut int(0);
-y <- arr[int] T;
+x <- arr[i64u(n) + 1, mut int](0);
+y <- arr[int, T];
 
 --------------------------------------------------------------------------------
 
@@ -773,8 +773,8 @@ y <- arr[int] T;
 a called path in a handle's brackets is a value, and a plain path is a type
 ================================================================================
 
-x <- arr[xs.len() + 1] int(0);
-y <- arr[std.mem.A] T;
+x <- arr[xs.len() + 1, int](0);
+y <- arr[std.mem.A, T];
 
 --------------------------------------------------------------------------------
 

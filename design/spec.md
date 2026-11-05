@@ -204,7 +204,7 @@ In an expression, an infix `<-` is only ever construction, so it must be followe
 
 - `i32(x)`, `f16(n)`, `char(r)`, `boolf(t)`: a conversion between numbers, characters, and fuzzy booleans, with the rules in 5.5–5.9. Widening is free, and anything that can lose a value traps unless it's proven safe, or wraps or saturates into a wrapping type.
 - `NodeId(3)` and `i64u(id)`: a newtype conversion, both ways.
-- `arr[n] mut T()`, `arr[n] mut T(fill)`, `arr[n] mut T(_)`, `arr T(seq)`, and `ptr T(v)` make arrays and handles (4.3).
+- `arr[n, mut T]()`, `arr[n, mut T](fill)`, `arr[n, mut T](_)`, `arr[T](seq)`, and `ptr[T](v)` make arrays and handles (4.3).
 - A conversion takes one unnamed value, and `x |> i8` converts too.
 
 **Annotation.** `(value :: T)` checks the value against `T` and never converts it. The value is checked with `T` as its expected type, so a literal takes `T`'s type and anything else must already be a `T`: `(5 :: i8)` is an `i8`, `(300 :: i8)` doesn't fit, and `(x :: i8)` on an `int` is a mismatch. It is the way to type a literal where nothing else would, as in `(1 :: i8u) < 2`. Annotating with a protocol is ascription (2.2).
@@ -216,7 +216,7 @@ In an expression, an infix `<-` is only ever construction, so it must be followe
 - **`=` and `!=` are shallow.** They compare the value a variable holds: handles compare by address (and, for arrays, length), floats compare bitwise, sums compare by tag plus shallow payload, and fixed arrays compare element by element with `=`.
 - **`==` and `!==` are deep.** They dereference recursively until no addresses remain, compare packs and records element by element, and compare arrays by length and then element by element, each element with `==`. Floats compare by value: IEEE equality for NaN-free floats, and the total order for NaN-carrying ones, so all NaNs are deep-equal to each other and `-0.0 == +0.0`.
 - **The orderings** `<` `<=` `>` `>=` compare values, so the "or equal" in `<=` is deep equality: `a <= b` is exactly `a < b || a == b`. Nothing orders arrays.
-- **Arrays across lengths:** an `arr T` on the heap compares with a fixed `arr[N] T` of the same elements by length and then each element, with the same operator, so `cmd == "go"` works on any `arr i8u`. Two fixed arrays of different lengths are different types, which don't compare.
+- **Arrays across lengths:** an `arr[T]` on the heap compares with a fixed `arr[N, T]` of the same elements by length and then each element, with the same operator, so `cmd == "go"` works on any `arr[i8u]`. Two fixed arrays of different lengths are different types, which don't compare.
 - **Characters and integers:** a value's bits are its value, so `==` agrees with `=`.
 - **Recursive types** (recursive through a pointer) don't get automatic deep equality. They define `-> == ->`, which is the `Eq` protocol.
 - **Shallow implies deep.** Equal bits always compare deep-equal. The reverse doesn't hold: `-0.0` and `+0.0` are deep-equal with different bits. There is no `===`.
@@ -271,7 +271,7 @@ An **exclusivity marker** is a comparison on the bound, not a fixed start or end
 - **Zip by index:** `[[xs[i], ys[i]] : 0 <= i < min(xs.len(), ys.len())]`, where the interval makes both bounds checks provable.
 - **Zip with the prelude:** `[x + y : [x, y] <- zip(xs, ys)]`.
 
-**Laziness.** A comprehension is a recipe, not a list. Creating one computes and allocates nothing. Elements are produced one at a time, only when consumed by a `repeat` loop, a fold, or a materializing constructor, `arr T([...])`.
+**Laziness.** A comprehension is a recipe, not a list. Creating one computes and allocates nothing. Elements are produced one at a time, only when consumed by a `repeat` loop, a fold, or a materializing constructor, `arr[T]([...])`.
 
 **Fusion.** A source may be any lazy sequence, including another comprehension. Nested comprehensions fuse into a single loop with no intermediate storage:
 
@@ -322,18 +322,18 @@ let variance <- m[2] / m[0] - mean * mean;
   ```
 - **Nested arrays:** `m[i][j]`. An element's index runs before a value assigned to it.
 - **Slicing:** `xs[a, ..., <b]` costs O(1): one bounds check at creation, and the result is always a `peek` view. Strided slices produce a separate strided-view type.
-- **Dereference:** `p[]` reads the pointee, and `p[] <- v;` writes through the pointer, which needs `ptr mut T`. `p <- q;` rebinds the pointer itself, which needs `mut ptr T`.
+- **Dereference:** `p[]` reads the pointee, and `p[] <- v;` writes through the pointer, which needs `ptr[mut T]`. `p <- q;` rebinds the pointer itself, which needs `mut ptr[T]`.
 - **Field access through pointers** auto-dereferences: `p.x`.
-- **Address-of is type-directed.** Where a `peek T` is expected and a `T` place is supplied, a view is taken automatically, and a `ptr T` passed where a `peek T` is expected becomes a view. An `arr[N] T` converts to a `peek arr T` view for free, and is lent the same way to an input that borrows an `arr T`, so `(s :: arr i8u)` takes a string of any length. There is no address-of operator.
-- **Raw pointers:** `Raw[T]` in `std.unsafe` is a non-owning pointer with no drop glue. The unsafe-tier intrinsics that convert between pointers and integer addresses (for MMIO and page tables) produce and consume `Raw[T]`, never an owning `ptr T`.
+- **Address-of is type-directed.** Where a `peek T` is expected and a `T` place is supplied, a view is taken automatically, and a `ptr[T]` passed where a `peek T` is expected becomes a view. An `arr[N, T]` converts to a `peek arr[T]` view for free, and is lent the same way to an input that borrows an `arr[T]`, so `(s :: arr[i8u])` takes a string of any length. There is no address-of operator.
+- **Raw pointers:** `Raw[T]` in `std.unsafe` is a non-owning pointer with no drop glue. The unsafe-tier intrinsics that convert between pointers and integer addresses (for MMIO and page tables) produce and consume `Raw[T]`, never an owning `ptr[T]`.
 
-  > Open: how `Raw[T]` relates to `ptr void`, in FFI (11).
+  > Open: how `Raw[T]` relates to `ptr[void]`, in FFI (11).
 - **In-place strided updates:** `repeat (i) <- [0, 2, ..., <xs.len()] { xs[i] *<- 2; }`.
 
 ### 2.10 Packs, tuples, and records
 
-- **A pack is `[a, b, c]`.** A homogeneous pack is an `arr[N] T` and a tuple `[T, T, ...]` at once, with identical layout. A heterogeneous pack like `[1, 2.0]` is a tuple only.
-- **Element types** of a homogeneous pack are picked the way an operator picks its operands': the element type the context expects, else the first element that isn't a literal, else a float literal's type. `let xs :: arr[3] i8 <- [1, 2, 3];` makes three `i8`s, `[1, x]` takes `x`'s type, and `[1, 2.5]` is floats. An empty pack takes its type from where it goes: `([] :: arr[0] int)`.
+- **A pack is `[a, b, c]`.** A homogeneous pack is an `arr[N, T]` and a tuple `[T, T, ...]` at once, with identical layout. A heterogeneous pack like `[1, 2.0]` is a tuple only.
+- **Element types** of a homogeneous pack are picked the way an operator picks its operands': the element type the context expects, else the first element that isn't a literal, else a float literal's type. `let xs :: arr[3, i8] <- [1, 2, 3];` makes three `i8`s, `[1, x]` takes `x`'s type, and `[1, 2.5]` is floats. An empty pack takes its type from where it goes: `([] :: arr[0, int])`.
 - **Element access** is `t[i]`. For a heterogeneous tuple the index must be comptime, so the element type is known.
 - **Tuple types** are written `[int, f64]`.
 - **A named pack** `[x <- 1.0, y <- 2.0]` is an anonymous record, typed structurally, with type `[x :: f64, y :: f64]`. `::` only ever introduces a type, so record values always use `<-`. Fields are accessed with `.x` and by position with `[0]`. Inside a pack, `name <- value` is always a named element, even when the value is a pack which is a construction when `name` is a type.
@@ -380,7 +380,7 @@ A pack followed by a parenthesized list and `->` is a capture closure, since cal
 - Each closure has its own unique type.
 - The lang protocol `Fn[F, [Args], R]` is satisfied by closures and ordinary functions alike.
 - Generic code takes `[F :: Fn[[S, T], S]]` and stays monomorphized.
-- Storing different closures in one place goes through a protocol value, `unscoped ptr Fn[...]`, with dynamic dispatch. This boxing is the only cost.
+- Storing different closures in one place goes through a protocol value, `unscoped ptr[Fn[...]]`, with dynamic dispatch. This boxing is the only cost.
 
 **Yields.** A closure body is the closure's own scope, so a bare `-|` at its top level leaves it. To leave from deeper inside, name a block around the body.
 
@@ -418,7 +418,7 @@ let x <- 5;                                  # type inferred
 let x :: int <- 5;                           # annotated
 let x :: mut int <- 5;                       # mutable binding
 let x :: mut <- 5;                           # qualifier only, type inferred
-let v :: arr[16] mut int <- _;               # uninitialized (4.8)
+let v :: arr[16, mut int] <- _;               # uninitialized (4.8)
 let [q, r] <- divmod(17, 5);                 # destructuring a pack
 ```
 
@@ -636,7 +636,7 @@ chunk {
 ```
 
 - A `chunk` yields like a block and can be named.
-- **Lexical default.** Allocations written inside the block whose allocator would default to `Global` default to a `Chunk` allocator type that exists only within that block, giving types like `arr[Chunk] T`. Code in called functions is unaffected.
+- **Lexical default.** Allocations written inside the block whose allocator would default to `Global` default to a `Chunk` allocator type that exists only within that block, giving types like `arr[Chunk, T]`. Code in called functions is unaffected.
 - **Escaping** the block is a type error.
 - At `}`, the bump region resets in one step.
 - Nested chunks each get their own type.
@@ -706,12 +706,12 @@ For arrays and handles, the position of `mut` decides what it applies to:
 
 | Written | Means |
 |---|---|
-| `mut arr T`, `mut arr[N] T`, `mut ptr T` | the binding can be rebound or replaced |
-| `arr mut T`, `arr[N] mut T` | the elements can be written |
-| `ptr mut T` | the pointee can be written |
+| `mut arr[T]`, `mut arr[N, T]`, `mut ptr[T]` | the binding can be rebound or replaced |
+| `arr[mut T]`, `arr[N, mut T]` | the elements can be written |
+| `ptr[mut T]` | the pointee can be written |
 | `mut T` on a value type | a mutable binding |
 
-Both positions can apply at once. Nested arrays take one per level, so `arr[2] mut arr[3] int` can replace its rows but not their elements. A bare `mut` on a type left to inference, `let m :: mut <- [[1, 2], [3, 4]];`, allows everything at every level. The type is the same wherever `mut` sits, since `mut` says what a binding can do, not what the value is. A binding left to inference can write what the call that made its handle says, so `let b <- arr[n] mut int(0);` can write `b[0]`.
+Both positions can apply at once. Nested arrays take one per level, so `arr[2, mut arr[3, int]]` can replace its rows but not their elements. A bare `mut` on a type left to inference, `let m :: mut <- [[1, 2], [3, 4]];`, allows everything at every level. The type is the same wherever `mut` sits, since `mut` says what a binding can do, not what the value is. A binding left to inference can write what the call that made its handle says, so `let b <- arr[n, mut int](0);` can write `b[0]`.
 
 **Fields** carry no `mut` of their own. Their mutability comes from the container: through a `peek mut S`, every field is writable.
 
@@ -719,14 +719,14 @@ Both positions can apply at once. Nested arrays take one per level, so `arr[2] m
 
 | Type | What it is |
 |---|---|
-| `arr[N] T` | an inline fixed-size array, `N` a comptime integer, the same thing as a homogeneous pack. A value, copied when bound, passed, or returned |
-| `arr T` | a handle: the elements' address and their run-time length (and an allocator instance pointer when the allocator is stateful) |
-| `arr[A] T` | a handle whose memory came from allocator type `A`. A bare `arr T` is `arr[Global] T` |
-| `ptr T` | a single-object owning handle, never null |
-| `Option[ptr T]` | a nullable pointer, `None` stored as null, with the size and ABI of a C pointer. There is no `nullptr` |
+| `arr[N, T]` | an inline fixed-size array, `N` a comptime integer, the same thing as a homogeneous pack. A value, copied when bound, passed, or returned |
+| `arr[T]` | a handle: the elements' address and their run-time length (and an allocator instance pointer when the allocator is stateful) |
+| `arr[A, T]` | a handle whose memory came from allocator type `A`. A bare `arr[T]` is `arr[Global, T]` |
+| `ptr[T]` | a single-object owning handle, never null |
+| `Option[ptr[T]]` | a nullable pointer, `None` stored as null, with the size and ABI of a C pointer. There is no `nullptr` |
 | `Raw[T]` (`std.unsafe`) | a non-owning raw pointer, no drop glue, unsafe tier |
 
-Arrays and handles nest, `arr arr int`, and a fixed array can hold handles, `arr[3] ptr int`.
+Arrays and handles nest, `arr[arr[int]]`, and a fixed array can hold handles, `arr[3, ptr[int]]`.
 
 **`arr[A]` versus `arr[N]`:** the argument's kind decides. A type argument is an allocator, and a comptime integer is a size: an integer literal or an immutable binding that folds to one, as in `let N <- 2 + 1;`. Anything else, including a size below zero, is `cherimoya requires an array's size to be known when the program compiles, please use an integer literal or an immutable binding of one`.
 
@@ -739,16 +739,16 @@ Arrays and handles nest, `arr arr int`, and a fixed array can hold handles, `arr
 | Written | Makes |
 |---|---|
 | `[1, 2, 3]` | a fixed array. Bound immutably, it lives in read-only data, and bound as `mut`, it's copied into the scope |
-| `arr[n] mut T()` | `n` elements of `T`'s default (`Default`): `0`, `0.0`, `false`, `'\0'`, and an empty array for an array element |
-| `arr[n] mut T(fill)` | `n` deep copies of `fill`, which is borrowed, so `p` still holds its value after `arr[n] mut ptr int(p)` |
-| `arr[n] mut T(_)` | `n` uninitialized elements (4.8) |
-| `arr T(seq)` | the elements of a fixed array, range, or comprehension, materialized |
-| `ptr T(v)` | `v`, in its own allocation |
+| `arr[n, mut T]()` | `n` elements of `T`'s default (`Default`): `0`, `0.0`, `false`, `'\0'`, and an empty array for an array element |
+| `arr[n, mut T](fill)` | `n` deep copies of `fill`, which is borrowed, so `p` still holds its value after `arr[n, mut ptr[int]](p)` |
+| `arr[n, mut T](_)` | `n` uninitialized elements (4.8) |
+| `arr[T](seq)` | the elements of a fixed array, range, or comprehension, materialized |
+| `ptr[T](v)` | `v`, in its own allocation |
 
-An array's length goes in brackets, where a fixed array's size does, and the size alone decides what's made: a length known when the program compiles makes a fixed array, `arr[3] int(0)` is `[0, 0, 0]`, and a run-time length makes an `arr T` on the heap, which is any unsigned integer: `cherimoya requires an array's length to be unsigned, please convert it, like 'i64u(n)'`. A type never holds a run-time length. Brackets read a value the way they read a size, so `arr[xs.len() + 1] int(0)` works, since a type is never called there. `arr T(xs)` and `ptr T(v)` move what they're given when it owns anything. Allocation failure, or a length whose size overflows, traps:
+An array's length goes in brackets, where a fixed array's size does, and the size alone decides what's made: a length known when the program compiles makes a fixed array, `arr[3, int](0)` is `[0, 0, 0]`, and a run-time length makes an `arr[T]` on the heap, which is any unsigned integer: `cherimoya requires an array's length to be unsigned, please convert it, like 'i64u(n)'`. A type never holds a run-time length. Brackets read a value the way they read a size, so `arr[xs.len() + 1, int](0)` works, since a type is never called there. `arr[T](xs)` and `ptr[T](v)` move what they're given when it owns anything. Allocation failure, or a length whose size overflows, traps:
 
 ```
-trap at line 4: out of memory making 'arr[n] mut int()'
+trap at line 4: out of memory making 'arr[n, mut int]()'
 ```
 
 **Length** is `xs.len()`, an `i64u`, from the `Sized` protocol, which every array implements.
@@ -761,7 +761,7 @@ Everything goes on the stack unless its size is truly variable, and only that go
 
 | Value | Placement | Freed |
 |---|---|---|
-| size bounded by its type: `arr[N] T`, scalars, records of them | inline, wherever its binding lives | with its binding |
+| size bounded by its type: `arr[N, T]`, scalars, records of them | inline, wherever its binding lives | with its binding |
 | size bounded by a refinement, including growth up to a stated bound | the bound is reserved on the stack | at the end of its scope |
 | size truly variable (no bound) | heap | when its owner is done with it |
 | `peek` | wherever the original lives | never by the view |
@@ -774,24 +774,24 @@ A handle whose size the program knows when it compiles, and that never leaves it
 
 **Moving out.** Moving a value that lives on the stack out of its scope is a compile error, and `unscoped` is how a value is made to outlive it.
 
-**Unbound constructions** take their placement from the expected type: a construction flowing into an output declared `Option[unscoped ptr Expr]` is allocated on the heap.
+**Unbound constructions** take their placement from the expected type: a construction flowing into an output declared `Option[unscoped ptr[Expr]]` is allocated on the heap.
 
 **Fields:** owning `ptr` fields always point to the heap, and unbounded array fields are always on the heap.
 
-> Open: how stack placement of a refinement-bounded `arr T` meets `unscoped` and outputs: whether `unscoped` (and every `ptr T`) always means the heap, and what happens when a function yields a bounded `arr T` it made.
+> Open: how stack placement of a refinement-bounded `arr[T]` meets `unscoped` and outputs: whether `unscoped` (and every `ptr[T]`) always means the heap, and what happens when a function yields a bounded `arr[T]` it made.
 
 > Open: whether a flag forbids implicit heap use (a size with no bound that the program didn't mark), now that there is no run-time split for one to report.
 
 ### 4.5 Ownership and moves
 
-A binding owns the handle it holds. **Moving:** an owned handle has one owner, so binding it, `let b <- a;`, assigning it, `b <- a;`, yielding it, and putting it in a pack, a `ptr`, or `arr T(xs)` all move it, and the place it came from holds nothing:
+A binding owns the handle it holds. **Moving:** an owned handle has one owner, so binding it, `let b <- a;`, assigning it, `b <- a;`, yielding it, and putting it in a pack, a `ptr`, or `arr[T](xs)` all move it, and the place it came from holds nothing:
 
 ```
 cherimoya requires 'a' to hold a value to use it, please assign it again after moving it on line 4
 ```
 
 - Assigning to a moved binding makes it hold a value again, and assigning to one that still holds a value frees that value first.
-- A handle made and never bound, like `arr[n] int().len()` or the argument in `total(arr[n] int())`, is freed at the end of its statement.
+- A handle made and never bound, like `arr[n, int]().len()` or the argument in `total(arr[n, int]())`, is freed at the end of its statement.
 - **Elements:** moving out of an element, `let p <- ps[0];`, is an error, since it would leave a hole the array frees. `take(ps[0])` does it (3.11).
 - **Top-level bindings** can't be moved, since any function can use them at any time: `cherimoya requires 'table' to be owned by a function to move it, please use it in place, since every function can use it`.
 - **Binders** borrow the subject they match, like an input, so moving one is `cherimoya requires 'b' to be owned to move it, please move what it matched instead`.
@@ -802,7 +802,7 @@ cherimoya requires 'a' to hold a value to use it, please assign it again after m
 
 **An input borrows.** `total(xs)` lends `xs` for the call, so the caller still owns and frees it, and the callee works on it in place: it can read it, write its elements when they're `mut`, and pass it on to another call. It can't keep it, so moving, rebinding, or yielding it is an error: `cherimoya requires 'xs' to be owned to move it, please declare it 'unscoped' to take it over`. A borrowed input follows the peek rules (4.7).
 
-**An `unscoped` input takes ownership.** `(xs :: unscoped arr mut int)` owns what it's given, so a call moves the caller's argument in, without saying so, the way a binding moves, and the caller can't use it until it's assigned again. The callee must discharge it (4.1), and binding it is one way, so `let given <- xs;` makes the callee's own binding the owner, which frees it at the end of its scope. One moved in only some arms of a match is an error on the others, since freeing it there would be letting it go. That is how a function hands an array back changed: `xs <- grow(xs);`.
+**An `unscoped` input takes ownership.** `(xs :: unscoped arr[mut int])` owns what it's given, so a call moves the caller's argument in, without saying so, the way a binding moves, and the caller can't use it until it's assigned again. The callee must discharge it (4.1), and binding it is one way, so `let given <- xs;` makes the callee's own binding the owner, which frees it at the end of its scope. One moved in only some arms of a match is an error on the others, since freeing it there would be letting it go. That is how a function hands an array back changed: `xs <- grow(xs);`.
 
 **Outputs move out.** A function can yield a handle it owns, one it made or took over, and the caller owns it from then on.
 
@@ -817,7 +817,7 @@ cherimoya requires 'a' to hold a value to use it, please assign it again after m
 
 ### 4.8 Uninitialized storage
 
-Arrays may be created uninitialized, with `<- _` or `arr[n] mut T(_)`. Until Z3 can prove the elements are written before they're dropped, only elements that own nothing can start out uninitialized, and a binding that owns something can't: `cherimoya requires an uninitialized binding to own nothing, please give it a value`.
+Arrays may be created uninitialized, with `<- _` or `arr[n, mut T](_)`. Until Z3 can prove the elements are written before they're dropped, only elements that own nothing can start out uninitialized, and a binding that owns something can't: `cherimoya requires an uninitialized binding to own nothing, please give it a value`.
 
 **Reads need proof.** Every read of an element requires proof that it was written. Z3 proves this using invariants, for example `wit {written(a) == [0, ..., <i]}`. When it can't, the tier decides:
 
@@ -831,7 +831,7 @@ Arrays may be created uninitialized, with `<- _` or `arr[n] mut T(_)`. Until Z3 
 - **Owning element types:** the containing type states the initialized range in its invariant, with the verifier intrinsic `written(a)`. Z3 checks that every operation keeps it true, and drop glue evaluates that range at run time and drops exactly those elements:
 
   ```
-  type List[T, A :: Allocator <- Global] <- [data :: arr[A] mut T, count :: i64u]
+  type List[T, A :: Allocator <- Global] <- [data :: arr[A, mut T], count :: i64u]
       {l : l.count <= l.data.len() && written(l.data) == [0, ..., <l.count]};
   ```
 - **Without a stated range,** the array must be proven fully initialized at every exit from its scope.
@@ -842,7 +842,7 @@ Arrays may be created uninitialized, with `<- _` or `arr[n] mut T(_)`. Until Z3 
 
 ### 4.9 Allocators
 
-- **`Allocator[A]`** is a lang protocol: `alloc[E]` gives `Option[unscoped arr[A] mut E]` (uninitialized), and `release` takes memory back.
+- **`Allocator[A]`** is a lang protocol: `alloc[E]` gives `Option[unscoped arr[A, mut E]]` (uninitialized), and `release` takes memory back.
 - **`Global`** is zero-sized and the program-wide default. Its methods are compiler-provided, and use the system's allocator, or whatever a kernel registers with `@globalAllocator`. Running out of memory traps.
 - **The allocator is part of the handle type,** so drop glue always releases memory to the right allocator.
 - **Generic defaults** use `<-`: `A :: Allocator <- Global`.
@@ -854,7 +854,7 @@ Arrays may be created uninitialized, with `<- _` or `arr[n] mut T(_)`. Until Z3 
 - **Overwriting an owning place,** including writing an element or a pointee that owns something, frees the old value first.
 - **Top-level bindings** are freed when the program ends, after `start` returns (and after each test), so a run under valgrind ends with nothing leaked.
 - **A trap frees nothing,** since the process is ending.
-- **Copies:** trivial types copy implicitly, and owning types move. A deep copy uses the `Clone` protocol. The compiler deep-copies its own handles (arrays and pointers all the way down) where it needs to, as in `arr[n] mut T(fill)`.
+- **Copies:** trivial types copy implicitly, and owning types move. A deep copy uses the `Clone` protocol. The compiler deep-copies its own handles (arrays and pointers all the way down) where it needs to, as in `arr[n, mut T](fill)`.
 - **`Raw[T]`** is trivial: it copies and is never dropped.
 - There is no `defer`.
 
@@ -1030,7 +1030,7 @@ A `char` is always a whole character: a byte above 7F is part of a longer UTF-8 
 
 ### 5.8 Strings
 
-A string is an array of characters, of one of three kinds: `arr char`, ASCII, a byte each, `arr i8u`, UTF-8 bytes, which files, terminals, and C use, and `arr rune`, a whole character each. A literal is the kind its context wants, and otherwise chars when it's all ASCII and UTF-8 bytes when it isn't, and like any constant fixed array, an immutable one lives in read-only data. A string of chars widens into a string of bytes wherever bytes are wanted, without being written, since it already is one, except into something that could write bytes that aren't ASCII. Every other change of kind makes a new array, so it's written: `arr rune(s)` decodes, trapping on bytes that aren't valid UTF-8, `arr i8u(s)` encodes, and `arr char(s)` traps on a character past ASCII. String literals hold the same escapes as character literals and are checked the same way, so `\xHH` is at most `7F` and every literal is valid UTF-8. A string matches a literal pattern of the same bytes, whatever its length (3.6). The stdlib provides `string` (text with string functions) and `cstring` (null-terminated, for C interop).
+A string is an array of characters, of one of three kinds: `arr[char]`, ASCII, a byte each, `arr[i8u]`, UTF-8 bytes, which files, terminals, and C use, and `arr[rune]`, a whole character each. A literal is the kind its context wants, and otherwise chars when it's all ASCII and UTF-8 bytes when it isn't, and like any constant fixed array, an immutable one lives in read-only data. A string of chars widens into a string of bytes wherever bytes are wanted, without being written, since it already is one, except into something that could write bytes that aren't ASCII. Every other change of kind makes a new array, so it's written: `arr[rune](s)` decodes, trapping on bytes that aren't valid UTF-8, `arr[i8u](s)` encodes, and `arr[char](s)` traps on a character past ASCII. String literals hold the same escapes as character literals and are checked the same way, so `\xHH` is at most `7F` and every literal is valid UTF-8. A string matches a literal pattern of the same bytes, whatever its length (3.6). The stdlib provides `string` (text with string functions) and `cstring` (null-terminated, for C interop).
 
 > Open: how `string` and `cstring` are defined.
 
@@ -1075,7 +1075,7 @@ let [generics] (inputs) -> name -> (outputs) wit {obligations} { body }
 - **Inputs** are `(name :: Type {refinement} <- default, ...)`, or `()` for none. Every input has a type.
 - **Outputs** are named, `(name :: Type {refinement}, ...)`, or `()` for void. The names exist for contracts and documentation, and values are produced by yields. One output gives the function that output's type. A function's type is written `(int, int) : bool`.
 - **Multiple outputs** are yielded as a pack: `[q, r] -|`.
-- **Qualifiers on output types** decide placement for what flows into them: `(e :: Option[unscoped ptr Expr])`.
+- **Qualifiers on output types** decide placement for what flows into them: `(e :: Option[unscoped ptr[Expr]])`.
 - **The name slot** holds an identifier or any overloadable operator (5.3).
 - **The optional `wit { }`** holds function-level obligations, and later termination measures.
 - **The body** is the function's own scope. Its final yield is the result, and early exits are `-| name`.
@@ -1115,7 +1115,7 @@ Bindings at the top of a file are globals. Everything at the top that isn't a fu
 ### 6.5 Externs
 
 ```
-@extern("c") let (fd :: i32, buf :: arr i8u, n :: i64u) -> write -> (r :: i64);
+@extern("c") let (fd :: i32, buf :: arr[i8u], n :: i64u) -> write -> (r :: i64);
 ```
 
 ---
@@ -1170,7 +1170,7 @@ Cherimoya has no macros. Compile-time evaluation, in the manner of Zig, does wha
 
 - `+ - * /` on same-shape arrays are elementwise, with scalars broadcast (`xs * 2`, `2 * xs`), nested arrays recursing, and each element trapping like a scalar.
 - An operation shaped `T × T → T` (where `T` can itself be an array: matrix add and multiply, concatenation, cross product) or `coll[T] × coll[T] → T` (like dot product) is an operator. Everything else (transpose, norms, reductions, reshaping) is a named function.
-- Also provided: elementwise comparisons giving `arr[N] bool`, norms (length, distance, normalize), reshaping (reverse, rotate, flatten, fill), and reductions (sum, product, min, max, any, all).
+- Also provided: elementwise comparisons giving `arr[N, bool]`, norms (length, distance, normalize), reshaping (reverse, rotate, flatten, fill), and reductions (sum, product, min, max, any, all).
 
 > Open: the spellings of the array-math operators and functions.
 
@@ -1207,9 +1207,9 @@ An attribute is `@name(args)` followed by what it applies to, and attributes sta
 - **`@extern("c")`** declares a foreign function. The FFI is universal: C is the first target, not the only one.
 - **ABI mapping:**
   - Handles lower to their data pointer at C boundaries.
-  - `Option[ptr T]` has the ABI of a nullable C pointer.
+  - `Option[ptr[T]]` has the ABI of a nullable C pointer.
   - `Raw[T]` has the ABI of a C pointer.
-  - `ptr void` is an untyped pointer for foreign code.
+  - `ptr[void]` is an untyped pointer for foreign code.
   - An `unscoped` handle passed to an extern input declared `unscoped` is discharged.
 - **Strings** cross as `cstring` (5.8).
 
@@ -1313,7 +1313,7 @@ this side is 'int'
 | `-g` | every function by its source name, the line of every instruction, every binding and input with its type, and every scope |
 | `-gline-tables-only` | function names and lines, for breakpoints and backtraces |
 
-Either works at any optimization level. Names are the source's: `clamp`, `outer.inner`, `clamp.lo<-`, and `init` (artificial). Types are described under their cherimoya names, immutable bindings are `const`, and a `boolf` is fixed-point scaled by 1/255. DWARF is version 5, and an MSVC target gets CodeView. On ELF, a `-g` binary embeds gdb pretty-printers that decode FP8, bfloat16, and `f128` exactly, print 1-byte integers as numbers, print a `rune` as `955 'λ'`, and show arrays by their elements, `arr int of 3 = {1, 2, 3}`.
+Either works at any optimization level. Names are the source's: `clamp`, `outer.inner`, `clamp.lo<-`, and `init` (artificial). Types are described under their cherimoya names, immutable bindings are `const`, and a `boolf` is fixed-point scaled by 1/255. DWARF is version 5, and an MSVC target gets CodeView. On ELF, a `-g` binary embeds gdb pretty-printers that decode FP8, bfloat16, and `f128` exactly, print 1-byte integers as numbers, print a `rune` as `955 'λ'`, and show arrays by their elements, `arr[int] of 3 = {1, 2, 3}`.
 
 ### 14.3 Editors
 
@@ -1369,7 +1369,7 @@ let (a :: int {a >= 0}, b :: int {b > 0})
 }
 
 # counts the pairs of non-negative elements that add up to target, stopping at 1000
-let (xs :: arr int, target :: int) -> countPairs -> (c :: i64u) {
+let (xs :: arr[int], target :: int) -> countPairs -> (c :: i64u) {
     let count :: mut i64u <- 0;
     let n <- xs.len();
     repeat outer (i) <- [0, ..., <n] {
@@ -1401,7 +1401,7 @@ let (n :: int) -> fizzBuzzCode -> (c :: int) {
 }
 
 # takes the array over and hands it back with every element doubled
-let (xs :: unscoped arr mut int) -> doubled -> (r :: arr mut int) {
+let (xs :: unscoped arr[mut int]) -> doubled -> (r :: arr[mut int]) {
     repeat (i) <- [0, ..., <xs.len()] { xs[i] *<- 2; }
     xs -|
 }
@@ -1418,7 +1418,7 @@ let () -> start -> (code :: int) {
     let xs      <- [1, 2, 3, 4];
     let ys      <- [10, 20, 30];
     let total   <- (+, 0)[x * x : x <- [1, ..., 10] && x % 2 = 0];
-    let pairs   <- countPairs(arr int([3, -1, 4, 1, 5]), 5);
+    let pairs   <- countPairs(arr[int]([3, -1, 4, 1, 5]), 5);
     let [q, r]  <- divmod(17, 5);
     let v       <- Vec2 <- [x <- 1.0, y <- 2.0] <+> Vec2 <- [3.0, 4.0];
     let folded  <- ((acc, x) -> { acc + x * rate -| }, 0)[[1, 2, 3]];
@@ -1428,7 +1428,7 @@ let () -> start -> (code :: int) {
     let piped   <- 3 |> inc |> double;
     let back    <- double <| inc <| 2 + 3;
     let capped  <- 250 |> bound(hi <- 200);
-    let heap    :: mut <- arr mut int(3, 7);
+    let heap    :: mut <- arr[mut int](3, 7);
     heap <- doubled(heap);
     assert (total = 220);
     assert (q = 3 && r = 2);

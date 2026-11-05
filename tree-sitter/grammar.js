@@ -650,15 +650,15 @@ module.exports = grammar({
     // pattern <- source
     membershipClause: ($) => prec.dynamic(1, seq(field('pattern', $._pattern), '<-', field('source', $._goLevel11))),
 
-    // a type spelling called on something in a generic argument, which cheri reads as a conversion, a value, rather than a type, like the i64u(n) in arr[i64u(n)] int(0), where the other families read it as a type in value position followed by a call
+    // a type spelling called on something in a generic argument, which cheri reads as a conversion, a value, rather than a type, like the i64u(n) in arr[i64u(n), int](0), where the other families read it as a type in value position followed by a call
     _conversion: ($) => seq(field('callee', alias($._conversionType, $.typeExpression)), field('arguments', $.argumentList)),
     _conversionType: ($) => field('type', alias($._builtinNamedType, $.namedType)),
 
-    // a dotted path called on something in a generic argument, which cheri reads as a call or a method call, a value, rather than a type, like the xs.len() in arr[xs.len() + 1] int(0), since a type is never called there
+    // a dotted path called on something in a generic argument, which cheri reads as a call or a method call, a value, rather than a type, like the xs.len() in arr[xs.len() + 1, int](0), since a type is never called there
     _calledPath: ($) => seq(field('callee', alias($._calledPathMember, $.memberExpression)), field('arguments', $.argumentList)),
     _calledPathMember: ($) => seq(field('object', choice($.identifier, alias($._calledPathMember, $.memberExpression))), '.', field('field', $.identifier)),
 
-    // a type in value position, which gets called to convert or allocate: the i32 in i32(x), the arr mut T in arr mut T(n)
+    // a type in value position, which gets called to convert or allocate: the i32 in i32(x), the arr[mut T] in arr[mut T](n)
     typeExpression: ($) => field('type', choice(
       alias($._builtinNamedType, $.namedType),
       $.handleType,
@@ -847,21 +847,8 @@ module.exports = grammar({
     // mut and the type it applies to, which is left to inference when none follows
     qualifiedType: ($) => prec.right(PREC.greedy, seq(field('qualifier', 'mut'), optional(field('type', $._unrefinedType)))),
 
-    // ptr or arr, the optional size or allocator in brackets, and the element type: arr[16] T, arr[Chunk] T, ptr T
-    handleType: ($) => seq(field('handle', choice('ptr', 'arr')), choice(
-      seq('[', field('argument', $._genericArgument), ']', field('type', $._unrefinedType)),
-      field('type', $._unbracketedType),
-    )),
-
-    // a type that doesn't start with [, which is what can follow ptr or arr right away, since a [ there always holds the handle's size or allocator
-    _unbracketedType: ($) => choice(
-      alias($._bareNamedType, $.namedType),
-      alias($._pathNamedType, $.namedType),
-      alias($._builtinNamedType, $.namedType),
-      $.modeType,
-      $.qualifiedType,
-      $.handleType,
-    ),
+    // ptr or arr, then in brackets what it holds, after a size or an allocator when there is one: arr[16, T], arr[Chunk, T], arr[T], ptr[T]
+    handleType: ($) => seq(field('handle', choice('ptr', 'arr')), '[', optional(seq(field('argument', $._genericArgument), ',')), field('type', $._unrefinedType), ']'),
 
     // [int, f64]
     tupleType: ($) => seq('[', commaSeparatedTrailing($._type), ']'),

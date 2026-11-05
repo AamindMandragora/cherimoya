@@ -14259,15 +14259,15 @@
           }
         },
         {
+          "type": "STRING",
+          "value": "["
+        },
+        {
           "type": "CHOICE",
           "members": [
             {
               "type": "SEQ",
               "members": [
-                {
-                  "type": "STRING",
-                  "value": "["
-                },
                 {
                   "type": "FIELD",
                   "name": "argument",
@@ -14278,71 +14278,26 @@
                 },
                 {
                   "type": "STRING",
-                  "value": "]"
-                },
-                {
-                  "type": "FIELD",
-                  "name": "type",
-                  "content": {
-                    "type": "SYMBOL",
-                    "name": "_unrefinedType"
-                  }
+                  "value": ","
                 }
               ]
             },
             {
-              "type": "FIELD",
-              "name": "type",
-              "content": {
-                "type": "SYMBOL",
-                "name": "_unbracketedType"
-              }
+              "type": "BLANK"
             }
           ]
-        }
-      ]
-    },
-    "_unbracketedType": {
-      "type": "CHOICE",
-      "members": [
+        },
         {
-          "type": "ALIAS",
+          "type": "FIELD",
+          "name": "type",
           "content": {
             "type": "SYMBOL",
-            "name": "_bareNamedType"
-          },
-          "named": true,
-          "value": "namedType"
+            "name": "_unrefinedType"
+          }
         },
         {
-          "type": "ALIAS",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_pathNamedType"
-          },
-          "named": true,
-          "value": "namedType"
-        },
-        {
-          "type": "ALIAS",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_builtinNamedType"
-          },
-          "named": true,
-          "value": "namedType"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "modeType"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "qualifiedType"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "handleType"
+          "type": "STRING",
+          "value": "]"
         }
       ]
     },

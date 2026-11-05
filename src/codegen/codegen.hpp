@@ -292,7 +292,7 @@ class Codegen {
         return irbuilder.CreatePtrToInt(past, irbuilder.getInt64Ty());
     }
 
-    // allocates count values of an element type through the runtime, zeroed when asked, which traps when they don't fit, saying what was being made: out of memory making 'arr int(n)'
+    // allocates count values of an element type through the runtime, zeroed when asked, which traps when they don't fit, saying what was being made: out of memory making 'arr[int](n)'
     llvm::Value* allocate(llvm::Value* count, llvm::Type* element, bool isZeroed, Span span) {
         auto* type = llvm::FunctionType::get(irbuilder.getPtrTy(), {irbuilder.getInt64Ty(), irbuilder.getInt64Ty(), irbuilder.getInt32Ty(), irbuilder.getPtrTy(), irbuilder.getInt64Ty()}, false);
         auto alloc = module->getOrInsertFunction("cheri_alloc", type);
@@ -510,7 +510,7 @@ class Codegen {
         return isNegated ? irbuilder.CreateNot(result) : result;
     }
 
-    // lends a fixed array to an input that borrows an arr T, as an array on the heap's handle to where its elements already are, a binding's or an element's, or a slot of their own for a value that isn't a place, where an input that can write the elements gets a copy unless the binding's elements can be written, so it never writes one that can't, like a string in read-only data
+    // lends a fixed array to an input that borrows an arr[T], as an array on the heap's handle to where its elements already are, a binding's or an element's, or a slot of their own for a value that isn't a place, where an input that can write the elements gets a copy unless the binding's elements can be written, so it never writes one that can't, like a string in read-only data
     llvm::Value* lend(Expr& e, bool isWritten) {
         auto& array = *asArray(e.type);
         bool isPlace = e.kind == ExprKind::Identifier || e.kind == ExprKind::Index;
@@ -1084,7 +1084,7 @@ class Codegen {
         return nullptr;
     }
 
-    // converts one kind of string into another on the heap, arr rune(s), arr i8u(r), or arr char(s), through the runtime, which traps on bytes that aren't valid UTF-8 or a character past ASCII, where chars become bytes by a copy, since they already are bytes, or returns null when the call isn't a conversion
+    // converts one kind of string into another on the heap, arr[rune](s), arr[i8u](r), or arr[char](s), through the runtime, which traps on bytes that aren't valid UTF-8 or a character past ASCII, where chars become bytes by a copy, since they already are bytes, or returns null when the call isn't a conversion
     llvm::Value* convertString(const std::vector<Expr*>& args, HandleSemaType& handle, Span span) {
         if (args.size() != 1 || handle.handle != HandleKind::Array) return nullptr;
         SemaType* from = arrayElement(args[0]->type);
@@ -1134,7 +1134,7 @@ class Codegen {
         return heapArray(lower(&handle), memory, irbuilder.CreateLoad(i64, count));
     }
 
-    // makes an array or a pointer by calling its type: ptr T(v) puts v in memory of its own, arr T(xs) puts a fixed array's elements there, and arr[n] T(...) makes n zeroed elements, which is every type's default, n uninitialized ones, or n deep copies of a fill, as a fixed array when sema folded n, and on the heap otherwise, where a handle sema found never outlives its function goes in the function's frame instead, as many elements as sema folded
+    // makes an array or a pointer by calling its type: ptr[T](v) puts v in memory of its own, arr[T](xs) puts a fixed array's elements there, and arr[n, T](...) makes n zeroed elements, which is every type's default, n uninitialized ones, or n deep copies of a fill, as a fixed array when sema folded n, and on the heap otherwise, where a handle sema found never outlives its function goes in the function's frame instead, as many elements as sema folded
     llvm::Value* emitMake(Expr& made, Expr& callee, const std::vector<Expr*>& args, Span span) {
         bool isOnStack = sema.isOnStack(&made);
         auto memoryFor = [&](llvm::Type* element, llvm::Value* count, bool isZeroed) -> llvm::Value* {
@@ -1143,7 +1143,7 @@ class Codegen {
             if (isZeroed) irbuilder.CreateStore(llvm::Constant::getNullValue(slot->getAllocatedType()), slot);
             return slot;
         };
-        // the length of an arr[n] T(...) on the heap, then its fill, in the order they're written, both before the memory they go in, the way a call's arguments are, where a fill that's a constant of all zero bits, like 0, 0.0, or false, is the same as the default, so the memory starts out zeroed and nothing has to fill it, and _ leaves it as it is
+        // the length of an arr[n, T](...) on the heap, then its fill, in the order they're written, both before the memory they go in, the way a call's arguments are, where a fill that's a constant of all zero bits, like 0, 0.0, or false, is the same as the default, so the memory starts out zeroed and nothing has to fill it, and _ leaves it as it is
         llvm::Value* fill = nullptr;
         bool isZeroed = args.empty();
         auto& written = *static_cast<TypeExprExpr&>(callee).typeExpr;

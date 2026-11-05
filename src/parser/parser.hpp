@@ -437,20 +437,20 @@ class Parser {
         }
     }
 
-    // parses one generic argument: a type, or a comptime value when it can't be a type (arr[16] T, arr[N * 2] T)
+    // parses one generic argument: a type, or a comptime value when it can't be a type (arr[16, T], arr[N * 2, T])
     GenericArg parseGenericArg() {
         bool nameOnly = peek().kind == TokenKind::Identifier;
         if (nameOnly) {
             auto next = peekAt(1).kind;
             nameOnly = next == TokenKind::Comma || next == TokenKind::RBracket || next == TokenKind::LBracket || next == TokenKind::Dot;
-            // a dotted path called on something is a call or a method call, a value, like the xs.len() in arr[xs.len() + 1] int(0), since a type is never called there
+            // a dotted path called on something is a call or a method call, a value, like the xs.len() in arr[xs.len() + 1, int](0), since a type is never called there
             if (next == TokenKind::Dot) {
                 size_t at = 1;
                 while (peekAt(at).kind == TokenKind::Dot && peekAt(at + 1).kind == TokenKind::Identifier) at += 2;
                 if (peekAt(at).kind == TokenKind::LParen) nameOnly = false;
             }
         }
-        // a type spelling called on something is a conversion, a value, like the i64u(n) in arr[i64u(n)] int(0)
+        // a type spelling called on something is a conversion, a value, like the i64u(n) in arr[i64u(n), int](0)
         bool isConversion = peek().kind == TokenKind::TypeName && peekAt(1).kind == TokenKind::LParen;
         if (nameOnly || (startsType(peek()) && peek().kind != TokenKind::Identifier && !isConversion)) {
             return {parseType(), nullptr};
@@ -1004,17 +1004,27 @@ public:
                 break;
             }
 
-            // handles, where a mut right after the handle applies to the elements
+            // handles take what they hold in brackets, like any generic, after a size or an allocator when there is one, arr[3, int] or arr[int], where a mut in front of what they hold applies to the elements
             case TokenKind::KwPtr:
             case TokenKind::KwArr: {
                 auto handle = advance();
+                std::string shape = handle.kind == TokenKind::KwArr ? "'arr[T]' or 'arr[size, T]'" : "'ptr[T]'";
+                expect(TokenKind::LBracket, "'[' after '" + std::string(handle.text) + "' in " + shape);
                 std::optional<GenericArg> arg = std::nullopt;
-                if (peek().kind == TokenKind::LBracket) {
+                std::unique_ptr<Type> inner;
+                auto first = parseGenericArg();
+                if (peek().kind == TokenKind::Comma) {
                     advance();
-                    arg = parseGenericArg();
-                    expect(TokenKind::RBracket, "']' after the handle's size or allocator in 'arr[size] T'");
+                    arg = std::move(first);
+                    inner = parseType(false);
+                } else if (first.type) {
+                    inner = std::move(first.type);
+                } else {
+                    Span at = first.value ? first.value->span : Span{start, prevEnd()};
+                    engine.printError("cherimoya expected a type for the handle to hold in " + shape + ", got a value instead", at);
+                    inner = std::make_unique<ErrorType>(at);
                 }
-                auto inner = parseType(false);
+                expect(TokenKind::RBracket, "']' after what the handle holds in " + shape);
                 if (inner->kind == TypeKind::Qualified) static_cast<QualifiedType&>(*inner).position = QualPosition::Elements;
                 type = std::make_unique<HandleType>(handle, std::move(arg), std::move(inner), Span{start, prevEnd()});
                 break;
@@ -1226,7 +1236,7 @@ public:
                 left = parsePack(tok);
                 break;
 
-            // a type in value position, which gets called to convert or allocate: i32(x), arr mut T(n), ptr T(v)
+            // a type in value position, which gets called to convert or allocate: i32(x), arr[mut T](n), ptr[T](v)
             case TokenKind::TypeName:
             case TokenKind::KwArr:
             case TokenKind::KwPtr:

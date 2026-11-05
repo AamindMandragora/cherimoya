@@ -840,34 +840,34 @@ TEST_CASE("Parser: types", "[parser][type]") {
     CHECK(typeDump("List[int]") == "(List int)");
     CHECK(typeDump("Map[K, V]") == "(Map K V)");
     CHECK(typeDump("List[T, A]") == "(List T A)");
-    CHECK(typeDump("Option[unscoped ptr Expr]") == "(Option (unscoped (ptr Expr)))");
+    CHECK(typeDump("Option[unscoped ptr[Expr]]") == "(Option (unscoped (ptr Expr)))");
     CHECK(typeDump("Fn[F, [S, T], S]") == "(Fn F (tuple S T) S)");
-    CHECK(typeDump("ptr T") == "(ptr T)");
-    CHECK(typeDump("arr T") == "(arr T)");
-    CHECK(typeDump("arr[16] T") == "(arr [16] T)");
-    CHECK(typeDump("arr[A] T") == "(arr [A] T)");
-    CHECK(typeDump("arr[Chunk] mut T") == "(arr [Chunk] (mut@elems T))");
-    CHECK(typeDump("arr[N * 2] T") == "(arr [(* N 2)] T)");
+    CHECK(typeDump("ptr[T]") == "(ptr T)");
+    CHECK(typeDump("arr[T]") == "(arr T)");
+    CHECK(typeDump("arr[16, T]") == "(arr [16] T)");
+    CHECK(typeDump("arr[A, T]") == "(arr [A] T)");
+    CHECK(typeDump("arr[Chunk, mut T]") == "(arr [Chunk] (mut@elems T))");
+    CHECK(typeDump("arr[N * 2, T]") == "(arr [(* N 2)] T)");
     // a type spelling called on something in brackets is a conversion, a value
-    CHECK(typeDump("arr[i64u(n)] T") == "(arr [(call (type i64u) n)] T)");
-    CHECK(typeDump("arr[xs.len()] T").find("call") != std::string::npos);
-    CHECK(typeDump("arr[std.mem.A] T").find("call") == std::string::npos);
+    CHECK(typeDump("arr[i64u(n), T]") == "(arr [(call (type i64u) n)] T)");
+    CHECK(typeDump("arr[xs.len(), T]").find("call") != std::string::npos);
+    CHECK(typeDump("arr[std.mem.A, T]").find("call") == std::string::npos);
     CHECK(typeDump("[int, f64]") == "(tuple int f64)");
     CHECK(typeDump("[x :: f64, y :: f64]") == "(record x:f64 y:f64)");
-    CHECK(typeDump("[data :: arr[A] mut T, count :: i64u]") == "(record data:(arr [A] (mut@elems T)) count:i64u)");
+    CHECK(typeDump("[data :: arr[A, mut T], count :: i64u]") == "(record data:(arr [A] (mut@elems T)) count:i64u)");
 }
 
 // checks that where mut sits decides what it applies to, and the modes
 TEST_CASE("Parser: qualifiers and modes", "[parser][type]") {
     CHECK(typeDump("mut int") == "(mut@value int)");
-    CHECK(typeDump("mut arr T") == "(mut@handle (arr T))");
-    CHECK(typeDump("arr mut T") == "(arr (mut@elems T))");
-    CHECK(typeDump("mut arr mut T") == "(mut@handle (arr (mut@elems T)))");
-    CHECK(typeDump("mut ptr T") == "(mut@handle (ptr T))");
-    CHECK(typeDump("peek arr char") == "(peek (arr char))");
+    CHECK(typeDump("mut arr[T]") == "(mut@handle (arr T))");
+    CHECK(typeDump("arr[mut T]") == "(arr (mut@elems T))");
+    CHECK(typeDump("mut arr[mut T]") == "(mut@handle (arr (mut@elems T)))");
+    CHECK(typeDump("mut ptr[T]") == "(mut@handle (ptr T))");
+    CHECK(typeDump("peek arr[char]") == "(peek (arr char))");
     CHECK(typeDump("peek mut S") == "(peek (mut@value S))");
-    CHECK(typeDump("peek arr mut i64u") == "(peek (arr (mut@elems i64u)))");
-    CHECK(typeDump("unscoped ptr Expr") == "(unscoped (ptr Expr))");
+    CHECK(typeDump("peek arr[mut i64u]") == "(peek (arr (mut@elems i64u)))");
+    CHECK(typeDump("unscoped ptr[Expr]") == "(unscoped (ptr Expr))");
     CHECK(typeDump("unscoped") == "(unscoped)");
     CHECK(typeDump("mut") == "(mut@value)");
     CHECK(typeDump("wit") == "(wit)");
@@ -914,8 +914,8 @@ TEST_CASE("Parser: bindings", "[parser][stmt]") {
     CHECK(stmtDump("let x <- 5;") == "(let x <- 5)");
     CHECK(stmtDump("let x :: int <- 5;") == "(let x :: int <- 5)");
     CHECK(stmtDump("let x :: mut int <- 5;") == "(let x :: (mut@value int) <- 5)");
-    CHECK(stmtDump("let buf :: unscoped <- arr mut T(n);") == "(let buf :: (unscoped) <- (call (type (arr (mut@elems T))) n))");
-    CHECK(stmtDump("let v :: mut arr[16] char <- _;") == "(let v :: (mut@handle (arr [16] char)) <- _)");
+    CHECK(stmtDump("let buf :: unscoped <- arr[mut T](n);") == "(let buf :: (unscoped) <- (call (type (arr (mut@elems T))) n))");
+    CHECK(stmtDump("let v :: mut arr[16, char] <- _;") == "(let v :: (mut@handle (arr [16] char)) <- _)");
     CHECK(stmtDump("let [q, r] <- divmod(17, 5);") == "(let (pack q r) <- (call divmod 17 5))");
     CHECK(stmtDump("let n0 :: wit <- node_count(g);") == "(let n0 :: (wit) <- (call node_count g))");
     CHECK(stmtDump("let count :: mut <- list_new[i64u]();") == "(let count :: (mut@value) <- (call (index list_new (type i64u))))");
@@ -1047,12 +1047,12 @@ TEST_CASE("Parser: annotation and types in value position", "[parser][expr]") {
     CHECK(parseDump("cmp((p :: Ord), q)") == "(call cmp (:: p Ord) q)");
     CHECK(parseDump("i32(x)") == "(call (type i32) x)");
     CHECK(parseDump("f64(x)") == "(call (type f64) x)");
-    CHECK(parseDump("arr mut T(n)") == "(call (type (arr (mut@elems T))) n)");
-    CHECK(parseDump("arr mut T(n, fill)") == "(call (type (arr (mut@elems T))) n fill)");
-    CHECK(parseDump("arr mut T(n, _)") == "(call (type (arr (mut@elems T))) n _)");
-    CHECK(parseDump("arr T(seq)") == "(call (type (arr T)) seq)");
-    CHECK(parseDump("arr i64u([x : x <- xs])") == "(call (type (arr i64u)) (compr x (in x xs)))");
-    CHECK(parseDump("ptr T(value)") == "(call (type (ptr T)) value)");
+    CHECK(parseDump("arr[mut T](n)") == "(call (type (arr (mut@elems T))) n)");
+    CHECK(parseDump("arr[mut T](n, fill)") == "(call (type (arr (mut@elems T))) n fill)");
+    CHECK(parseDump("arr[mut T](n, _)") == "(call (type (arr (mut@elems T))) n _)");
+    CHECK(parseDump("arr[T](seq)") == "(call (type (arr T)) seq)");
+    CHECK(parseDump("arr[i64u]([x : x <- xs])") == "(call (type (arr i64u)) (compr x (in x xs)))");
+    CHECK(parseDump("ptr[T](value)") == "(call (type (ptr T)) value)");
     CHECK(parseDump("size[i32]()") == "(call (index size (type i32)))");
     CHECK(parseDump("List[peek T]") == "(index List (type (peek T)))");
     CHECK(parseDump("NodeId(3)") == "(call NodeId 3)");
@@ -1160,7 +1160,7 @@ TEST_CASE("Parser: functions", "[parser][decl]") {
     CHECK(stmtDump("let (a :: T, b :: T) -> == -> (r :: bool) { }") == "(fn-decl == (a:T b:T) -> (r:bool) (block))");
     CHECK(stmtDump("let (g :: peek mut Graph) -> grow -> () wit {node_count(g) >= node_count(old g)} { }")
         == "(fn-decl grow (g:(peek (mut@value Graph))) -> () (wit (chain (call node_count g) >= (call node_count (old g)))) (block))");
-    CHECK(stmtDump("let (fd :: i32, buf :: peek arr char, n :: i64u) -> write -> (r :: i64);") == "(fn-decl write (fd:i32 buf:(peek (arr char)) n:i64u) -> (r:i64) no-body)");
+    CHECK(stmtDump("let (fd :: i32, buf :: peek arr[char], n :: i64u) -> write -> (r :: i64);") == "(fn-decl write (fd:i32 buf:(peek (arr char)) n:i64u) -> (r:i64) no-body)");
     CHECK(stmtDump("let (s :: peek Shape) -> area -> (a :: f64) { let (r :: f64) -> sq -> (o :: f64) { r * r -| } 0.0 -| }")
         == "(fn-decl area (s:(peek Shape)) -> (a:f64) (block (fn-decl sq (r:f64) -> (o:f64) (block (-| (* r r)))) (-| 0.0)))");
     CHECK(stmtErrors("let (a :: int) -> f -> (r :: int) { a -| }") == 0);
@@ -1185,10 +1185,10 @@ TEST_CASE("Parser: type definitions", "[parser][decl]") {
         == "(type Num [T] protocol (fn-decl + (a:T b:T) -> (r:T) no-body) (fn-decl - (a:T) -> (r:T) no-body))");
     CHECK(stmtDump("type Spaceship[T] <- [ let (a :: peek T, b :: peek T) -> <=> -> (r :: int) ];")
         == "(type Spaceship [T] protocol (fn-decl <=> (a:(peek T) b:(peek T)) -> (r:int) no-body))");
-    CHECK(stmtDump("type List[T, A :: Allocator <- Global] <- [data :: arr[A] mut T, count :: i64u] {l : l.count <= len(l.data) && written(l.data) == [0, ..., <l.count]};")
+    CHECK(stmtDump("type List[T, A :: Allocator <- Global] <- [data :: arr[A, mut T], count :: i64u] {l : l.count <= len(l.data) && written(l.data) == [0, ..., <l.count]};")
         == "(type List [T A::Allocator<-Global] product (refine (record data:(arr [A] (mut@elems T)) count:i64u) l : "
            "(&& (chain (. l count) <= (call len (. l data))) (== (call written (. l data)) (range 0 ... <(. l count))))))");
-    CHECK(stmtDump("type Map[K :: Ord, V] <- [keys :: arr K, vals :: arr V];") == "(type Map [K::Ord V] product (record keys:(arr K) vals:(arr V)))");
+    CHECK(stmtDump("type Map[K :: Ord, V] <- [keys :: arr[K], vals :: arr[V]];") == "(type Map [K::Ord V] product (record keys:(arr K) vals:(arr V)))");
     CHECK(stmtErrors("type Bad <- Foo | std.Bar;") == 1);
     CHECK(stmtErrors("type Bad <- Foo | Bar[3];") == 1);
     CHECK(stmtErrors("type Bad <- int") == 1);
@@ -1266,7 +1266,7 @@ TEST_CASE("Parser: a module header", "[parser][decl]") {
         "export [List, list_new, push, Result[dist, prev]];\n"
         "import [Allocator] <- std.mem;\n"
         "import [Raw] <- std.unsafe;\n"
-        "@extern(\"c\") let (fd :: i32, buf :: peek arr char, n :: i64u) -> write -> (r :: i64);\n"
+        "@extern(\"c\") let (fd :: i32, buf :: peek arr[char], n :: i64u) -> write -> (r :: i64);\n"
         "let LIMIT <- 4096;\n"
         "wit {Vec2 :: Ord};\n";
     CHECK(stmtErrors(src) == 0);

@@ -6,8 +6,8 @@ bindings
 let x <- 5;
 let x :: int <- 5;
 let x :: mut int <- 5;
-let buf :: unscoped <- arr mut T(n);
-let v :: mut arr[16] char <- _;
+let buf :: unscoped <- arr[mut T](n);
+let v :: mut arr[16, char] <- _;
 let n0 :: wit <- node_count(g);
 let count :: mut <- list_new[i64u]();
 let ages :: Map[string, int] <- [["ada", 36], ["alan", 41]];

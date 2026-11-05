@@ -157,7 +157,7 @@ def lookup(value):
         return RunePrinter(value)
     # a structure is named by its tag, the way C names it
     stripped = value.type.strip_typedefs().unqualified()
-    if stripped.code == gdb.TYPE_CODE_STRUCT and (stripped.tag or "").startswith("arr "):
+    if stripped.code == gdb.TYPE_CODE_STRUCT and (stripped.tag or "").startswith("arr["):
         data = value["data"]
         element = data.type.target().strip_typedefs().unqualified().name
         text = element in STRINGS and stringText([int((data + i).dereference()) & 0xFFFFFFFF for i in range(int(value["len"]))], element)
