@@ -1,134 +1,85 @@
-# Commit 5.1: LLVM Lowering & the First Executable
+# Commit 5.1: Ranges, For-Each Loops, and Slices
 
 ## The Problem
 
-After commit 4, cherimoya can tell whether a program is right, but it can't run one. Sema has resolved every name and typed every expression, and nothing turns that into instructions. Commit 5.1 does: `cheri build prog.moya` checks the program, lowers it to LLVM IR, optimizes it, writes an object file, and links it with a small runtime into an executable whose exit code is what `start` yields.
+A loop over an array had to be a `repeat (cond)` with a counter declared outside it, bumped by hand at the end of every iteration, and indexed into the array, where forgetting the bump loops forever and an off-by-one reads past the end. The parser has read ranges, `[0, ..., <n]`, and for-each loops, `repeat (x) <- xs`, since commit 1.4, but sema had no type for one and nothing to run the other. Commit 5.1 makes ranges values, runs for-each loops over ranges and arrays, and slices arrays into views of part of them, which 4.3's views made possible.
 
-## The Pipeline
+## Ranges
 
-`cheri build <file>` runs every stage in order:
+A range is a value, a sequence it works out from its ends and its stride rather than storing, so it's a fixed size whatever its length, is copied like an `int`, and owns nothing:
 
-1. Lex, parse, and check, stopping on any error, since codegen only ever sees programs sema accepted.
-2. Lower the checked AST to an LLVM module.
-3. Verify the module. Broken IR is a codegen bug, so it's printed next to the verifier's complaint and the build stops.
-4. Optimize with LLVM's standard pipeline.
-5. Write a native object file through LLVM's target machine, as position-independent code, since `cc` links executables as PIE by default.
-6. Link the object with the runtime through `cc`, and remove the object.
+| Type | What it is | Written |
+|---|---|---|
+| `range[T]` | a range with an end, whose length is decided at run time | `[0, ..., <n]`, `[n, n - 2, ..., 0]` |
+| `range[..., T]` | a range with no end | `[0, ...]`, `[1, 3, ...]` |
 
-Every setting LLVM offers on the way passes through the command line, and `cheri help` lists them:
+`range[T]` mirrors `arr[T]`: its length isn't part of its type, so every bounded range of `int`s is a `range[int]`, and one with no end is a type of its own, since it can't be counted. `T` is an integer, a character, a float, or a `boolf`, and anything else is `cherimoya expected a range of integers, characters, floats, or boolfs, got 'bool' instead`. A range's elements have one type, worked out the way a binary operator's operands are, so a literal takes the other end's type, `[0, ..., <xs.len()]` is a `range[i64u]`, and two different types are an error, since nothing widens.
 
-- **What to produce:** `--emit` stops at an object file, assembly, IR, or bitcode instead of an executable, with `-c`, `-S`, and `--emit-llvm` as shorthands. IR goes to the terminal unless `-o` names a file. `--emit-llvm -O0` shows exactly what codegen wrote, which is the version to read when debugging codegen.
-- **How hard to optimize:** `-O0` through `-O3`, `-Os`, and `-Oz`, with `-O3` by default, which sets both the optimizer's pipeline and how hard the backend works when it selects and schedules instructions.
-- **What to build for:** `--target` cross-compiles to any triple LLVM supports, and `--cpu` and `--features` tune the code, with `--cpu native` meaning the machine cheri runs on.
-- **How to link:** `--linker` picks the program that links, `--static` makes a static executable, and `-L`, `-l`, and `--link-arg` pass straight through.
+A range's elements are what the reference gives:
 
-`cheri run` builds into the temporary directory, runs the program, removes it, and exits the way the program did, where a program killed by a signal exits with 128 plus the signal, as a shell reports it. Since it keeps nothing, it takes no `-o` or `--emit`. `cheri check` stops after the front end. The command comes first, and the file can go before, between, or after the options. Linking and running go through the shell, so every path in those commands is quoted, and a file or directory with spaces in its name works.
+- `[a, ..., b]` includes both ends, `[a, ..., <b]` stops below `b`, `[>a, ..., b]` starts above `a`, and `[a, ..., >b]` stops above `b`, counting down.
+- The stride is the difference of the first two elements, `[0, 2, ..., <n]`, and is one step without a second, which for a character is the next code point and for a `boolf` the next of its 256 steps.
+- A range without a second element counts the way its end marker says, `<b` up and `>b` down, and without one, the way its ends do at run time, so `[5, ..., 0]` counts down and `[a, ..., b]` counts whichever way `a` and `b` lie.
+- A range with nothing in it, `[0, ..., <0]` or `[5, ..., <0]`, is empty, not an error.
+- Its ends are evaluated once, when it's made, so `[0, ..., <xs.len()]` reads the length once.
 
-The module is named after the file, and every function's symbol is `cheri`, its module, and its name joined with dots: `start` in `prog.moya` is `cheri.prog.start`, and a function `g` nested in `f` is `cheri.prog.f.g`. Dots are legal in LLVM and ELF symbols, they stay readable in a debugger, and modules slot into the same scheme later. The `cheri.` in front means nothing a program defines can collide with LLVM's intrinsics, which own every symbol starting with `llvm.`, so a file can be called `llvm.moya`.
+A float has no next value worth stepping to, so a range of floats needs a stride: `cherimoya requires a range of floats to have a stride, please give it a second element, like '[0.0, 0.5, ..., 2.0]'`. Its `i`th element is computed from the first, `a + i * stride`, rather than by adding the stride over and over, so `[0.0, 0.1, ..., 1.0]` doesn't drift, and a NaN or an infinite end traps. The rest of the reference's rules hold: equal first and second elements are `cherimoya requires a range's first two elements to differ, please give it a stride`, or a trap when they're only known at run time, a marker has to agree with the stride, `cherimoya expected '>' to end a range that counts down, got '<' instead`, and iterating never overflows, since a range knows its last element when it's made instead of finding it by stepping past it.
 
-## The Runtime
+What a range can do:
 
-Every program links with `libcheri_rt`, a small C library built with the compiler. It defines C's `main`, which calls the program's init function and then its `start`, and hands the result back as the exit code. Codegen exports the entry module's `start` and init as `cheri_start` and `cheri_init` with aliases, so the runtime never needs to know the module's name, and declares them like any C function:
+| | `range[T]` | `range[..., T]` |
+|---|---|---|
+| `r.len()`, an `i64u` | yes | no |
+| `r[i]`, the `i`th element, checked like an array's index | yes | no |
+| `r.has(x)`, whether `x` is one of its elements | yes | yes |
+| `=` and `==`, the same elements in the same order | yes | yes |
+| `repeat (x) <- r` | yes | yes, until it's left |
 
-```c
-void cheri_init(void);
-long long cheri_start(void);
-```
+`r.has(x)` is exact: `[0, 2, ..., 10].has(3)` is false, and for floats, `x` has to be one of the elements the range computes. Two ranges are equal when they hold the same elements, so `[0, ..., 4] = [0, 1, ..., <5]`, and every empty range equals every other. A length that can't be an `i64u`, only `[0, ..., 2^64 - 1]` in `i64u` and its signed twin, traps when it's taken. Asking an endless range for its length is `cherimoya requires 'r' to have an end to take its length, please give it one, like '[0, ..., <n]'`, and the same goes for indexing it.
 
-Every symbol a program defines has a dot in it and the runtime's names don't, so the two can never collide, even in a file called `cheri.moya`. The runtime also defines `cheri_trap`, which reports a failed runtime check with its line and aborts. It's where every future trap goes: overflow, division by zero, NaN, and bounds checks.
+## For-Each Loops
 
-The runtime's path is baked into `cheri` when it's built, so `cheri build` works from any directory.
-
-## Types
-
-Sema's core types map directly: `int` is `i64`, `bool` is `i1`, `float` is `double`, and `void` and `never` are `void`. The error type never reaches codegen, since a program with an error stops before it, so lowering one is a codegen bug, reported with `llvm_unreachable`. Sema interns its types, so each one is lowered once and cached by pointer.
-
-## Declaring Before Defining
-
-Functions are declared before any body is emitted, the same order sema checks them in, so a call can reach a function defined later. Declaring walks the whole program, including inside function bodies and the blocks, matches, loops, and chunks in their expressions, assertions, and match guards, so a function nested anywhere is found and named under the function around it. Nested functions can't capture their parent's locals, so each one is compiled as its own LLVM function, exactly like a top-level one. Externs are declared and never defined, for the linker to fill in.
-
-Sema writes the symbol it resolved onto the AST, and codegen reads it. Identifiers already had theirs, and function declarations, parameters, and binder patterns gained one, so codegen never looks a name up again.
-
-## Locals as Stack Slots
-
-Every local and parameter gets a stack slot, made with `alloca` at the top of the function's entry block. A binding stores into its slot, a name loads from it, and an assignment stores again. Parameters are copied into slots on entry, so they behave exactly like bindings, including a `mut` parameter being assigned.
-
-This keeps codegen free of SSA bookkeeping: it never has to track which value a variable has on which path. The optimizer's mem2reg pass turns every slot back into registers, with phi nodes where control joins. Slots live in the entry block because mem2reg only promotes those, and because a slot made inside a loop's body would take new stack space on every iteration. A factorial loop written with two `mut` locals comes out of the optimizer with no memory traffic at all:
-
-```llvm
-repeat.body:
-  %i.07 = phi i64 [ %1, %repeat.body ], [ 2, %definition ]
-  %product.06 = phi i64 [ %0, %repeat.body ], [ 1, %definition ]
-  %0 = mul i64 %i.07, %product.06
-  %1 = add i64 %i.07, 1
-```
-
-## Top-Level Bindings
-
-A binding outside every function is a global, named like a function: `LIMIT` in `prog.moya` is `cheri.prog.LIMIT`. Everything at the top of a file that isn't a function, bindings and statements alike, runs once, in order, in a generated `cheri.prog.init`, which the runtime calls before `start`. An immutable binding whose initializer folds to a constant needs no code: the constant becomes the global's starting value, and the global is marked constant so the optimizer can replace every read with the value. Anything else is computed in init and stored each time its `let` runs, which a binding inside a top-level loop does once per iteration, so a `mut` one starts over every time round. Functions read and assign globals exactly like locals, through the same lookup.
-
-## Expressions
-
-- **Literals** are kept raw by the lexer, so codegen strips the separators and reads the prefix to pick the radix, through LLVM's arbitrary-width integers. Floats are decimal only for now.
-- **Arithmetic and bitwise operators** pick integer or float instructions from the left operand's type, which sema made match the right one. Division and remainder are signed, since `int` is.
-- **Comparisons** are signed for ints and ordered for floats, which are NaN-free.
-- **Chains** emit each operand once and join the neighboring comparisons with `and`.
-- **`&&` and `||`** short-circuit. The right side gets its own block, and a phi at the join picks the answer: the decided value when control came straight from the left side, and the right side's value otherwise. The phi names the block the left side finished in, which isn't always the one it started in.
-- **Calls and pipes** look their callee up among the declared functions. Both pipes are one-argument calls. A call to a void function has no value, so `tick() -|` is a bare yield.
-
-## Scopes and Yields
-
-Codegen mirrors sema's yield-target stack. Every function, block, match, arm, loop, and chunk pushes an exit while its insides are emitted, holding the block where control continues after it and, when it has a value, a stack slot for that value. A yield is resolved with sema's rules and becomes a branch: a yield to the function returns, and a yield to anything else stores its value in the target's slot and jumps to its end. The scope then loads its value there.
-
-A yield ends its block, so the statements after it in the same list can't run, which sema already warned about, and codegen stops emitting them. A block whose last statement didn't leave falls through to its end. A function that ends in a block nothing reaches, like one where every path already returned, ends with `unreachable`, and a void function that falls off its end returns.
-
-## Match
-
-A match is a chain of tests. Each arm tests its pattern and either runs its body or falls to the next arm's test: catch-alls always match, a guard is its own condition, and a literal compares against the subject, which is emitted once. A binder stores the subject in a slot for its arm. Every arm shares the match's end and value slot, so a bare yield in an arm and `-| match` land in the same place. Past the last arm, a match with a value can't get there, since sema made it cover everything, so it's `unreachable`, and a void match goes to its end.
-
-The equality a match chose in commit 4.2 takes effect here. Deep equality compares floats by value, so `-0.0` matches a `0.0` arm, and `match (=, x)` compares their 64 bits as integers, so it doesn't.
-
-## Loops
-
-A loop is a header that decides whether to run the body again. A while loop's header tests its condition and goes to the body or the end, and an infinite loop's header is its body. A body that didn't leave goes back to the header. A bare yield in the body and `-| repeat` both branch to the loop's end, and only an infinite loop has a value slot, since only it can yield a value. Invariants are for the verifier and emit nothing, and so do `wit` statements.
-
-## Assertions
-
-`assert (cond)` branches on its condition. When it holds, the program continues. When it doesn't, it calls `cheri_trap` with the assertion's own source text and line, and the program stops:
+`repeat (x) <- xs { ... }` runs its body once for each element of `xs`, a range or an array, fixed, on the heap, or a slice, in order:
 
 ```
-trap at line 3: assert (n % 2 = 0);
+let total :: mut <- 0;
+repeat (x) <- xs { total +<- x; }
+repeat (x :: mut) <- ys { x *<- 2; }        # every element of ys is doubled
+repeat (i) <- [0, 2, ..., <ys.len()] { ys[i] <- 0; }
 ```
 
-The trap is marked as never returning, so LLVM drops anything after it.
+Over an array, `x` is a view of each element in turn, the way `let x :: peek <- xs[i];` is, so nothing is copied, and `(x :: mut)` is a view that writes, which needs `xs`'s elements to be writable: `cherimoya requires the elements of 'xs' to be mutable to write them through 'x', please declare it as 'arr[mut int]'`. A view of `xs[i]` overlaps every element of `xs`, so 4.3's rules keep `xs` where it is while the loop runs: moving or replacing it, or writing over an element that owns memory, is an error in the body, while writing an `int` element is fine. Over a range, `x` is each element's value, since a range has no elements in memory to view, and `(x :: mut)` is an error, `cherimoya requires 'x' to be a view of an array's element to be 'mut', please remove 'mut', since a range's elements are values`. The binder is a name, with or without `mut`: binding packs, `([i, x]) <- enumerate(xs)`, comes with destructuring in 10.2.
 
-## The Entry Point
+A source that isn't a place, like `repeat (x) <- make(n)`, lives until the loop ends, where it's freed. A loop's label and its binder work as targets the way they do in a `repeat (cond)`, so `-| repeat` leaves it and `-| x` skips to the next element. A loop over an endless range runs until something leaves it, and its counter traps if it passes the largest value of its type, the way `+` does. A for-each loop that yields a value has the type `Option[T]`, which waits for sum types, so until then a yield with a value out of one is `cherimoya requires a for-each loop to yield nothing until sum types arrive, please yield from a block around it`.
 
-A program that's built needs a top-level `start` declared as `let () -> start -> (code :: int)`, which is what the runtime calls: `cherimoya requires a program to have a 'start' function, please add 'let () -> start -> (code :: int) { 0 -| }'`. It's called `start` so it never shares a name with the C `main` the runtime defines, which a debugger would otherwise mix up with it. Sema checks it when asked, since a program being checked on its own, like every sema test, doesn't need one, and the driver always asks. A nested function named `start` doesn't count, including one inside a top-level block, so codegen exports the `start` declared at the top of the file, not just any function whose symbol ends in `.start`.
+## Slices
 
-## Testing Whole Programs
-
-Unit tests check each stage in C++. Commit 5.1 adds a second kind of test: whole programs in `tests/run/`, each one a `.moya` file whose first line is the exit code it should produce, and a program that should trap names the trap on a `# trap:` line:
+`xs[a, ..., <b]` is a view of the elements of `xs` from `a` up to `b`, a `peek arr[T]`, so nothing is copied, and writing `s[0]` writes `xs[a]`. A slice is a range in an array's brackets, so every marker works, `xs[a, ..., b]` includes `b`, and `xs[a, ...]` runs to the end, while a stride, `xs[0, 2, ..., <n]`, is `cherimoya requires a slice to be contiguous, please index with a range in a loop instead, like 'repeat (i) <- [0, 2, ..., <n]'`, until strided views arrive. Its ends are unsigned indices, like any index, and they're checked once, when it's made:
 
 ```
-# exit: 134
-# trap: trap at line 5: assert (n % 2 = 0);
-# checks that a false assertion traps with its line, which aborts the program
-let (n :: int) -> half -> (r :: int) { ... }
+trap at line 6: the slice 2 to 5 is past the end of 'xs', which holds 3
 ```
 
-Every file is registered with ctest as `Run: <name>`. A script builds it with the real `cheri` at `-O0` and at `-O3`, since the two can disagree, runs it with a ten-second limit, and compares the exit code, so a loop that never ends fails its test instead of hanging the run. A trap has to be the one the test names, so a test can't pass by trapping for some other reason. These test the whole toolchain end to end: the driver, codegen, optimization, the runtime, and linking.
+A slice that counts down, `xs[5, ..., 1]`, would be strided, so it's an error when its ends are constants and empty when they're only known at run time, the way the range is. Slicing a slice works, and so does slicing a fixed array, which gives a `peek arr[T]` too. A slice is always a view, so a binding of one is a view without saying `peek`, `let s <- xs[1, ..., <3];`, which 4.3's rules keep from outliving `xs`, and since a slice's path is `xs` with an index the program doesn't know, it keeps every element of `xs` in place while it's live. A slice writes when `xs`'s elements do, and a copy is a conversion, `arr[int](xs[1, ..., <3])`, which works from any array now, not just a fixed one.
+
+## Debugging
+
+With `-g`, gdb shows a range the way it's written, and a slice the way an array on the heap is:
+
+```
+$1 = [0, 2, ..., 10]
+$2 = [0, ...]
+$3 = peek arr[int] of 2 = {20, 30}
+```
+
+## Codegen
+
+A range lowers to a struct of its first element, its stride's size as an unsigned integer of the element's width, the index of its last element, an `i64u`, and a byte of flags, whether it counts down and whether it's empty, so its `i`th element is the first plus or minus `i` strides, which can't overflow, since the result is in range. An endless range has no last index. Making a range works out its direction, stride, and last index, and traps on what can't be; `len`, indexing, `has`, and equality read them. A for-each loop over a range counts an index from 0 to the last one, checking for the last before stepping so it never overflows, and over an array, an index from 0 to its length, viewing each element by address. A slice is a handle to its first element and its length, with no owner, so nothing frees it, and it's made after one check that its ends are in order and in bounds. In the control-flow graph, a loop's element is a view taken at the top of every iteration, and its source a use, so 4.3's dataflow checks it with nothing new.
 
 ## What Was Built
 
-`src/codegen/codegen.hpp` is the `Codegen` class. `runtime/runtime.c` is the runtime. `tools/cheri/main.cpp` is the `cheri` driver, with `build`, `run`, `check`, and `help`. `scripts/run_test.sh` runs one program test. `CMakeLists.txt` finds LLVM through `llvm-config`, links it only into what does codegen with its headers marked as system headers, builds the runtime, and registers every program test, and `scripts/build.sh` builds with clang. Sema gained the entry-point check and records the symbols of function declarations, parameters, and binder patterns, and the parser's nodes gained the fields for them.
-
-`tests/run/` has 29 programs covering literals in every base, arithmetic, bitwise operators, short-circuiting, locals and assignment, calls and pipes including void calls, blocks and labeled yields, early exits, every form of match including float equality, while and infinite loops, nested functions, including ones in assertions and guards, chunks, top-level bindings and a top-level loop, the entry point, and assertions that hold and fail. `tests/unit/sema/test_sema.cpp` gained the entry point. 3320 unit assertions and 29 programs, 0 failures.
+`src/sema/type.hpp` and `src/sema/context.hpp` gained `RangeSemaType`, `src/sema/sema.hpp` checks ranges and their methods, for-each loops, and slices, and `src/sema/cfg.hpp` lowers for-each loops into the graph. `src/codegen/codegen.hpp` emits ranges, loops, and slices, `src/codegen/debug.hpp` describes ranges, `src/codegen/printers.py` prints them, and `src/lsp/features.hpp` says what `range` is. `tests/unit/sema/test_sema.cpp` checks ranges, their types, strides, markers, and methods, loops over each kind of source, and slices, `tests/features/ranges.toya` runs them, and `tests/debug/ranges.moya` prints them in gdb. `editors/zed/extension.toml` points at 4.4's grammar.
 
 ## Current Limitations
 
-Floats are decimal only, and hexadecimal, octal, and binary floats aren't lowered. Integer arithmetic wraps instead of trapping on overflow, and dividing by zero is undefined, until the numeric model does both. There's one `int` and one `float`. Programs are a single file.
-
-## What's Next
-
-Commit 6 builds the full numeric model: every integer width with trapping and wrapping arithmetic, every float type with NaN traps and the NaN total order, FP8 and bfloat16, conversions, and literals that adapt to their expected type.
+Strided slices and slices that count down wait for a strided view type. Walking a string of bytes by its characters, without converting it to runes first, waits for protocols, which give a source its own way to iterate, as do loops over a source that isn't a range or an array. Destructuring binders, `([i, x])`, come with tuples, and range patterns in a match with patterns. A for-each loop can't yield a value until `Option` arrives. A slice keeps every element of what it slices in place until Z3 can tell indices apart, and an endless range has no length or indexing.

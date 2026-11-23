@@ -48,7 +48,7 @@ let (n :: int) -> clamp -> (r :: int) {
 }
 ```
 
-Bindings are immutable unless they're declared `mut`, a value can't be silently dropped (`_ <- f(x);` discards one on purpose), and comments start with `#`. The design of every compiler stage is written up in [`design/`](design/).
+Bindings are immutable unless they're declared `mut`, a value can't be silently dropped (`_ <- f(x);` discards one on purpose), and comments start with `#`. [The book](docs/book/) teaches the language from the start, [the reference](docs/reference.md) defines it, and [`design/`](design/) explains how the compiler implements it, commit by commit.
 
 ## Status
 
@@ -221,7 +221,8 @@ Any other editor that speaks the Language Server Protocol can start `cheri lsp` 
 | `tests/features/` | `.toya` files testing each part of the language, run once the basics pass |
 | `tests/debug/` | programs built with debug info, checked with llvm-dwarfdump and gdb |
 | `tests/test/` | `.toya` files with every outcome a test can have, which `cheri test` has to report exactly as `expected.out` says |
-| `design/` | a design note for every commit |
+| `docs/` | the book, the language reference, and stdcheri's docs |
+| `design/` | how the compiler works, by concept, with a design doc for every commit |
 
 ## Tests
 

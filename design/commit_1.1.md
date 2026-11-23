@@ -1,95 +1,86 @@
 # Commit 1.1: Lexer
 
-## The Problem
+## The Feature
 
-The parser wants to think in words: a `let` keyword, an identifier, a `<-` flow token. But a source file is a flat run of bytes. Somebody has to turn that byte soup into labeled tokens, so every later pass works with a structured stream instead of doing character-level surgery. That's the lexer, and it's the only thing commit 1.1 builds.
+- **Tokens.** `cheri <file.moya>` reads a file and turns it into a stream of tokens, printing each one's kind, text, and byte offset, and exits non-zero if anything was malformed.
+- **Keywords.** `let type export import`, the scopes `match repeat chunk`, the qualifiers `unscoped peek mut ptr arr`, the place intrinsics `take swap replace`, the verification words `wit assert old`, `true false`, and `macro moya`, reserved for macros. A lone `_` is its own `Underscore` token, and `_x` is an ordinary name. There is no `if`: it lexes as a name.
+- **Built-in type names.** `i8` through `i128uw`, the floats in NaN-free and NaN-carrying `n` pairs (`f8`, which is `f8e4m3`, `f8e5m2`, `f16`, `f16e8m7`, `f32`, `f64`, `f128`), `int`, `float`, `bool`, `char`, `rune`, and `boolf` all lex as `TypeName`. A malformed one like `i64wu` or `f8n` lexes as a name.
+- **Numbers.** Decimal, `0x` hex, `0o` octal, and `0b` binary, with `_` separators anywhere in a digit run and a fractional part in every base. `3.14` is one float, `1.foo` is `1 . foo`, `1.` is `1 .`, and `1...` is an integer and an ellipsis. There are no leading-dot floats: write `0.5`, not `.5`.
+- **Comments.** `#` to the end of the line. There are no block comments, which leaves `//` free to be an operator and means a comment can never swallow code.
+- **Operators.** One table holds every operator: 28 built-ins, 96 extra operators, and 78 compounds. Maximal munch picks the longest spelling, so `<<<-` wins over `<<<`, which wins over `<<`, then `<-`, then `<`.
+- **Punctuation.** `( ) [ ] { } , ; . ... : :: @ $`. There is no `..`, which lexes as two dots for the parser to reject.
+- **The spacing rule.** Two operator tokens that touch, where either is a flow token, a pipe, a compound, or an extra operator, are an error: `a**-b` gets `cherimoya requires whitespace between the operators '**' and '-', please write '** -'`, and `a ** -b` is fine.
+- **Errors that don't stop lexing.** A bad number like `0o78` gets `cherimoya expected an octal digit (0 to 7), got '8' instead`, and `0b2` gets `cherimoya expected a binary digit (0 or 1) after '0b', got '2' instead`. An unclosed string or char literal is reported at its opening quote. An unknown character gets `cherimoya expected a name, a literal, an operator, or punctuation, got <it> instead`. Each error is shown with its line and the span underlined in carets.
 
-## Locations
+## Why
 
-The first question isn't how to scan tokens, it's how to talk about *where* things are. Every diagnostic the compiler ever emits needs to point at source code, so the location model has to be right from the start.
+The parser wants to think in words, a `let` keyword, a name, a `<-` flow token, but a source file is a flat run of bytes. The lexer turns that into labeled tokens so every later pass works on a structured stream instead of characters. Since every diagnostic the compiler will ever emit points at source, the location model and the diagnostic forms are settled here too.
 
-The obvious choice is line and column numbers, but that's wasteful to store and expensive to compute on every token. An integer byte offset into the source buffer is smaller, faster, and sufficient: one `size_t` per token. Line and column can be derived lazily by counting newlines backward from the offset, and in practice only diagnostics ever need that conversion. So `SourceLoc` is just a byte offset, and `Span` is a half-open pair of them marking a range of source text. The `SourceManager` owns the file's text buffer, loads it in binary mode (so CRLF isn't translated and offsets match the disk on Windows), and provides the offset-to-line/col conversion when diagnostics need it.
+- **Byte offsets as locations.** Line and column are wasteful to store and costly to compute for every token. A byte offset is one `size_t`, and only diagnostics ever need it turned into a line and column, so that's done lazily.
+- **Tokens peek into the source.** Token text is a `string_view` into the source buffer, not a copy, so the buffer has to outlive every token taken from it, the same owner-outlives-peek discipline the language enforces.
+- **Binary mode.** The file is read in binary so CRLF isn't translated and offsets match the bytes on disk on Windows.
+- **A small keyword list.** Everything people expect to be a keyword is either a function (`size[T]()`), a sigil (`@extern`), or not in the language. `if` stays a name on purpose, so the parser can see `if (` and point the user at `match` instead of failing on an unknown keyword.
+- **Type spellings in the keyword table.** Malformed spellings are just absent from the table, so they lex as names for a later pass to reject. Teaching the lexer to validate suffix orders would put type-system knowledge in the wrong layer.
+- **`true` and `false` are keywords.** They're keywords as tokens and literal values in the tree, and the parser bridges the two.
+- **`_` is its own token.** It means discard, uninitialized, and wildcard in three places, none of which is a name.
+- **Raw literal text.** The lexer doesn't know the target type, and parsing into a 64-bit host integer would silently truncate `i128` literals, so the value is parsed later, with the width in hand.
+- **One dot guard.** The `.` after a number is consumed only when a digit of the number's base follows it. One character of lookahead resolves `3.14`, `1.foo`, `1.`, and `1...`, and without leading-dot floats the dot never conflicts with member access.
+- **A whole bad word is one error.** A letter or digit right after a number is one its base doesn't have, so it belongs to the same mistake: `123abc` is one error, not a number and then a stray name.
+- **An operator table, not a switch.** There are close to a hundred extra operators, and every overloadable binary operator gets a compound form, so a hand-written switch per character doesn't survive. The table is the single source of truth, and the parser reads levels and associativity straight from the entry each token carries, so moving an operator is a one-line edit.
+- **Extra operators.** They're a fixed set of operator tokens with no built-in meaning, for programs to define. Programs can't invent new operators; they pick from these.
+- **Kinds only where grammar needs them.** Built-ins carry their own kinds (`LArrow`, `Yield`, `PipeFwd`, `Shl`, `NeEq`, ...) so the parser can switch on them. Every extra operator is `ExtraOp` and every compound is `CompoundAssign`, since what tells them apart is data, not grammar.
+- **Unary minus isn't a token.** `-5` is `Minus IntLiteral`, and whether the minus is prefix or binary is the parser's call.
+- **The spacing rule.** Munch decides how touching operators split, but the writer might have meant the other split, so the lexer refuses to guess where a guess matters. It only looks at operators touching operators: letters, digits, brackets, commas, dots, and colons can't merge into an operator, so `x<-1` is an assignment, `(<+>, 0)[xs]` is a fold, and `[x::1.0]` is a record, and none of them is an error. The flip side is that `[0, ..., <-1]` isn't a lexer error: it lexes a flow token, which the parser rejects, and a negative end is written `< -1`.
+- **Never abort.** A malformed token becomes an `Error` token and lexing goes on, so one run reports every mistake.
+- **Three diagnostic forms.** Every diagnostic, from the lexer on, takes one of three shapes. Expected something else: `cherimoya expected <what> <where>, got <other> instead`. A known misunderstanding from another language's habits: `cherimoya uses <x> for <y> instead of <z> as follows: <example>`. A broken rule: `cherimoya requires <rule>, please <fix>`.
 
-The important implication: tokens hold `string_view`s that point into the SourceManager's buffer. They're *peeks*, not copies. The SourceManager must outlive every token derived from it, or those views dangle. This is, fittingly, the same owner-outlives-peek discipline the language itself enforces. It bit the test harness once already: a helper returned tokens after its local SourceManager died. Dangling views, crash, lesson learned.
+## Implementation
 
-## Keywords and Types
+### Source and Diagnostics
 
-Identifiers and keywords share the same shape: a run of alphanumeric characters. The lexer scans the run first, then looks it up in a keyword table. If the table contains it, the token gets the keyword's kind. If not, it's an `Identifier`. A run that is exactly `_` is neither: it's its own `Underscore` token, because it means discard, uninitialized, and wildcard in three different places, none of which is a name. `_x` is still an ordinary identifier.
+`src/source/source.hpp` defines `SourceLoc`, a byte offset, `LineCol`, a 1-based line and column, and `SourceManager`, which owns the code. `loadFile` reads in binary mode and leaves no code when the path can't be read, `loadString` loads a string for tests, and `text` hands out a view. `getLineCol` counts newlines up to an offset, and `getLineN` returns one line.
 
-The keyword list is deliberately small: `let type export import`, the scopes `match repeat chunk`, the qualifiers `unscoped peek mut ptr arr`, the place intrinsics `take swap replace`, the verification words `wit assert old`, `true false`, and `macro moya` for later. Everything else people expect to be a keyword is either a function (`size[T]()`), a sigil (`@extern`), or not in the language. In particular there is no `if`. It lexes as an identifier on purpose, so the parser can see `if (` and point the user at `match` instead of failing on an unknown keyword.
+`src/diagnostics/diagnostics.hpp` defines `Span`, a half-open pair of `SourceLoc`s, `Diagnostic`, a message and a span, and `DiagnosticEngine`, which holds the `SourceManager` by reference and every diagnostic so far. `printError` records one and prints it, and `getErrorN` formats it: `error at line N:` or `error at lines N-M:`, each line the span covers with carets under its part, keeping tabs so the carets line up, then the message. A span that ends with a newline is placed on the line of its last character.
 
-The same table handles all built-in type spellings. Every valid form (`i8` through `i128uw`, the floats, `int`, `float`, `bool`, `char`, `rune`, `boolf`) maps to `TokenKind::TypeName`. Floats come in pairs: a NaN-free type and a NaN-carrying `n` twin, across `f8` (which is `f8e4m3`), `f8e5m2`, `f16`, `f16e8m7`, `f32`, `f64`, and `f128`. Malformed forms like `i64wu` or `f8n` are simply absent from the table, so they lex as `Identifier` and are left for a later stage to reject. The alternative, teaching the lexer to validate suffix orderings, would scatter type-system knowledge into the wrong layer.
+### Tokens and Keywords
 
-`true` and `false` are in the keyword table as `KwTrue` and `KwFalse`. They're keywords at the token level, literal values at the AST level. The parser bridges the gap.
+`src/lexer/token.hpp` defines `TokenKind` and `Token`, which holds its kind, its text as a `string_view`, its `SourceLoc`, and `op`, a pointer to its operator table entry, null for anything that isn't an operator. `src/lexer/keywords.hpp` has `keywordTable`, mapping each keyword to its kind and each built-in type spelling to `TypeName`, and `lookupKeyword`.
 
-## Numbers
+### Operator Table
 
-Numeric literals support four bases (decimal, `0x` hex, `0o` octal, `0b` binary), underscore separators anywhere in a digit run (permissive, stripped later), and fractional parts in every base. The one subtle case is the dot: `3.14` should be a single `FloatLiteral`, but `1.foo` should be `IntLiteral Dot Identifier`, and `1.` should be `IntLiteral Dot`. The guard is simple: consume the `.` only if a base-appropriate digit follows it. One lookahead character resolves every case, including `1...`, which is an integer followed by an ellipsis.
+`src/lexer/operators.hpp` defines `OpInfo`: its spelling, `kind`, `category` (`OpCategory`: flow, arithmetic, bitwise, logical, comparison, equality, pipe, compound, extra), `isOverloadable`, its binary `level` and `prefixLevel` on the 17-level ladder (1 tightest, 0 meaning no such form), `assoc`, and for a compound its `base`. `Assoc` has `None`, `Left`, `Right`, and `Chain`, the last for the built-in comparisons, since `a < b <= c` is neither left- nor right-associative but one node. `-` is the one operator with both forms, level 5 binary and level 3 prefix. Construction's `<-` sits at level 1.
 
-A letter or digit right after a number is one its base doesn't have, so it's part of the same mistake. The scanner takes the rest of the word into one Error token and reports it once: `0o78` gets `cherimoya expected an octal digit (0 to 7), got '8' instead`, and `123abc` is one error, not a number and then a stray name.
+`operatorTable` builds a `std::deque` once, in three passes, so entries keep their addresses:
 
-Literal text is kept raw, never parsed to a host integer. The lexer doesn't know the target type, and parsing to a 64-bit host value would silently truncate `i128` literals. The actual value parse happens later in the type checker, with the target width in hand.
+1. **Hand-listed entries.** The built-ins, then the named extra operators: the doubles and triples that don't already mean something, `** *** // %% ++ +++ -- <<< >>> &&& ^^^ |||`, each triple on its double's level, `<=>` with the comparisons but `None` so it never chains, and the combinators `>>= =<< <$> <~> ~> <~` at level 15.
+2. **Wrapped extra operators.** Every single-symbol binary operator inside each of eight wrappers, `<>`, `<<`, `>>`, `||`, `|>`, `<|`, `|<`, `>|`. A wrapped operator takes its inside's level and associativity, so `<+>` adds and `<*>` multiplies, except that a wrapped comparison like `<<>` never chains. Anything containing `<-`, `->`, or `-|`, or already named, is skipped. No extra operator is longer than three symbols, and no operator contains a bracket.
+3. **Compounds.** Every overloadable binary operator from two `T`s to a `T` gets `X<-` pointing back at its base: the arithmetic and bitwise built-ins, the doubles and triples, and wrapped arithmetic or bitwise operators. That's where `+<-`, `<<<-`, `>><-`, `**<-`, and `<+><-` come from. Comparisons and equality give a `bool`, so there's no `==<-` or `<=><-`, and the combinators don't fit the shape.
 
-Leading-dot floats like `.5` are not supported. Write `0.5`. This keeps the lexer's dot handling unambiguous and avoids a grammar conflict with member access.
+`operatorLookupTable` maps spellings to entries, `maxOperatorLength` is where munch starts, `lookupOperator` finds one entry, and `needsSpacing` says which categories the spacing rule covers.
 
-## Comments
+### Lexer
 
-Comments start with `#` and run to the end of the line. There are no block comments. That frees `//` to be an operator, and it means a comment can never swallow code by accident.
+`src/lexer/lexer.hpp` is the `Lexer`, built from a `DiagnosticEngine`. `lex` skips whitespace and comments with `skipWhitespaceAndComments`, then picks a scanner by the first character:
 
-## The Operator Table
+- **`scanIdentOrKeyword`** reads the whole word, then makes it `Underscore`, a keyword, or an `Identifier`.
+- **`scanNumber`** reads a base prefix, then digits and separators, and takes a `.` only when a digit of the base follows. A missing digit or a word character right after the number takes the rest of the word into one `Error` token and one diagnostic.
+- **`scanQuoted`** reads a string or char literal to its closing quote, skipping `\` escapes, and reports an unclosed one at its opening quote.
+- **`scanOperatorOrError`** tries every length from `maxOperatorLength` down to one and takes the first hit, then falls back to punctuation. Anything else is an `Error` token, and a non-ASCII character takes its continuation bytes with it, so it's one token and one diagnostic, not one per byte.
 
-A hand-written switch per first character doesn't survive contact with the extra operators: there are close to a hundred of them, and every overloadable operator also gets a compound form. So operators live in one table, `src/lexer/operators.hpp`, and it is the single source of truth. Each entry records its spelling, its token kind, a category (flow, arithmetic, bitwise, logical, comparison, equality, pipe, compound, extra), whether it's overloadable, its binary level, its prefix level, its associativity, and for compounds the base operator. The parser reads levels and associativity straight from the entry hanging off each token, so moving an extra operator is a one-line edit.
+Every path advances the position, so an unrecognized character can't loop forever. After the stream is finished, `checkSpacing` reports each touching pair once, spanning both tokens, and `lex` appends an `Eof` token.
 
-The table is built in three passes. First, the hand-listed entries: the built-in operators with their place on the 17-level ladder, then the named extra operators. Second, the wrapped extra operators are generated. Third, the compounds are generated from everything before them.
+### Driver and Build
 
-Built-ins carry their own kinds (`LArrow`, `Yield`, `PipeFwd`, `Shl`, `NeEq`, ...), so the parser can switch on them. Every extra operator shares `ExtraOp` and every compound shares `CompoundAssign`, since what distinguishes them is data, not grammar. `-` is the one operator with two forms: level 5 as a binary operator and level 3 as a prefix, so entries hold both levels. Built-in comparisons get a fourth associativity, `Chain`, because `a < b <= c` is neither left nor right associative. It's one node.
+`tools/cheri/main.cpp` loads a file, lexes it, prints each token, and exits non-zero with an error count if any diagnostic was reported. `CMakeLists.txt` builds `cheri` as C++17 with warnings on and fetches Catch2 for `cheri_tests`. `scripts/build.sh`, `scripts/test.sh`, and `scripts/clean.sh` configure and build, run the tests through `ctest`, and remove the build directory.
 
-## Extra Operators
+## Tests
 
-The extra operators are a fixed set of operator tokens with no built-in meaning, for users to define. Users can't invent new operators. They pick from the extra ones.
+`tests/unit/lexer/test_lexer.cpp` has 17 Catch2 test cases covering maximal munch, single, double, and triple operators, macro tokens, flow and punctuation, numeric literals in all four bases, the dot guard, strings and `#` comments, error recovery, keyword and type completeness, the precedence ladder in the table, every generated compound lexing as one token, extra operator validation, the spacing rule, touching operators across three classes reporting one diagnostic each, `<-` on a negative range end, and golden sequences of a whole function and a macro. Each test lexes with its own `SourceManager` kept in a `std::deque`, so the managers outlive the tokens that point into them.
 
-The named extra operators are the doubles and triples that don't already mean something: `** *** // %% ++ +++ -- <<< >>> &&& ^^^ |||`. A triple sits on the same level as the double it extends, so `&&&` is with `&&` and `<<<` is with `<<`. `<=>` sits with the comparisons but never chains. The combinators `>>= =<< <$> <~> ~> <~` share level 15.
+The extra operator test splits every extra operator into built-ins and checks whether a split could be a valid fragment, a binary operator followed only by prefix operators. Exactly two have one: `a--b` could be `a - -b`, and `a<~b` could be `a < ~b`. Munch always picks the extra operator, and the other reading is a space away. The test pins that list, so a new extra operator with a hidden second reading fails the build. 2205 assertions, 0 failures.
 
-The rest is generated: every single-symbol binary operator wrapped in one of eight wrappers, `<>`, `<<`, `>>`, `||`, `|>`, `<|`, `|<`, `>|`. A wrapped token takes the level and associativity of whatever is inside it, so `<+>` adds and `<*>` multiplies. A wrapped comparison like `<<>` never chains. Generation skips anything that contains `<-`, `->`, or `-|`, and anything already named. No extra operator is longer than three symbols, and no operator anywhere contains a bracket.
+## Current Limitations
 
-Some extra operators could also be read as two built-ins. A test splits every extra operator into built-in operators and checks whether the split could be a valid fragment: a binary operator followed only by prefix operators. Exactly two tokens have one. `a--b` could mean `a - -b`, and `a<~b` could mean `a < ~b`. Maximal munch always picks the extra operator, and the other reading is a space away: `a - -b` and `a < ~b` lex as written. The test pins that list, so a new extra operator with a hidden second reading fails the build instead of surprising someone.
-
-## Compounds
-
-Compound assignment isn't hand-listed either. Every overloadable binary operator that takes two `T`s and returns a `T` gets `X<-`: the arithmetic and bitwise built-ins, the doubles and triples, and wrapped tokens whose inside is arithmetic or bitwise. That's where `+<-`, `<<<-`, `>><-`, `**<-`, and `<+><-` come from. Comparisons and equality return `bool`, so there is no `==<-` or `<=><-`. The combinators don't fit the shape either. Each compound points back at its base, so the parser never has to take a spelling apart.
-
-## Maximal Munch
-
-Maximal munch is the scanning rule, and with a table it's mechanical. Starting from the longest spelling in the table, try every length down to one and take the first hit. `<<<-` before `<<<` before `<<` before `<-` before `<`. Anything the table doesn't know falls through to punctuation: `( ) [ ] { } , ; . ... : :: @ $`. There is no `..`: ranges are packs with `...` in them, so `..` lexes as two dots and the parser rejects it.
-
-Unary minus is not a separate token. `-5` lexes as `Minus IntLiteral`. Whether the minus is unary or binary is the parser's call, and it handles it naturally via the NUD/LED split.
-
-## Spacing
-
-Munch decides how touching operators split, but the writer might have meant the other split. The spacing rule makes the lexer refuse to guess where the guess matters: when two operator tokens touch and either one is a flow token, a pipe, a compound, or an extra operator, that's an error. `a**-b` is rejected, and `a ** -b` is fine.
-
-The rule only looks at operators touching operators. Letters, digits, brackets, commas, dots, and colons can't merge into an operator, so they never need a space. `x<-1` is an assignment, `(<+>, 0)[xs]` is a fold, `[x::1.0]` is a record, and none of them is an error. Spaces between operators are always legal. The check runs once over the finished token stream and reports one diagnostic per touching pair, spanning both tokens.
-
-The flip side is that `[0, ..., <-1]` isn't a lexer error. It lexes as a flow token, and the parser rejects it. An exclusivity marker on a negative end is written `< -1`.
-
-## Error Recovery
-
-The lexer never aborts. A malformed token emits `TokenKind::Error` through the `DiagnosticEngine` and lexing continues, so a single run can surface multiple errors. The critical invariant is that every path through the scanner advances the position. Without it, an unrecognized character would infinite-loop. The `default` case in the operator scanner must emit an Error token for the character and advance past it, or everything breaks. A character outside ASCII is several bytes, and it's one Error token and one diagnostic, not one per byte. A string or char literal that's never closed is reported at its opening quote.
-
-Diagnostics are span-based with multi-line caret rendering. The `DiagnosticEngine` holds the `SourceManager` by reference (one shared source of truth, no copies) and renders each error with the source line and a caret pointing at the relevant span.
-
-Every diagnostic, from the lexer on, is written in one of three forms:
-
-- **Expected something else**: `cherimoya expected <what> <where>, got <other> instead`, naming the construct's shape where it helps. `0b2` gets `cherimoya expected a binary digit (0 or 1) after '0b', got '2' instead`.
-- **A known misunderstanding**: `cherimoya uses <x> for <y> instead of <z> as follows: <example>`, for mistakes that come from another language's habits.
-- **A broken rule**: `cherimoya requires <rule>, please <fix>`. `a**-b` gets `cherimoya requires whitespace between the operators '**' and '-', please write '** -'`.
-
-## What Was Built
-
-`src/source/source.hpp` defines `SourceLoc`, `LineCol`, and `SourceManager`. `src/diagnostics/diagnostics.hpp` provides `Span`, `Diagnostic`, and `DiagnosticEngine`. `src/lexer/token.hpp` has the `TokenKind` enum and the `Token` struct, which carries a pointer to its operator table entry. `src/lexer/keywords.hpp` contains the keyword and type lookup table. `src/lexer/operators.hpp` is the operator table: 28 built-ins, 96 extra operators, and 78 generated compounds. `src/lexer/lexer.hpp` is the `Lexer` class itself. `tools/cheri/main.cpp` is the driver: load file, lex, dump tokens, exit non-zero on errors.
-
-`tests/unit/lexer/test_lexer.cpp` has seventeen Catch2 test cases covering maximal munch, single/double/triple operators, macro tokens, flow and punctuation, numeric literals in all four bases, the dot guard, strings and `#` comments, error recovery, keyword and type completeness, the precedence ladder in the table, every generated compound lexing as one token, extra operator validation, the spacing rule, operators touching across three classes, `<-` on a negative range end, and golden sequences of a whole function and a macro. 2205 assertions, 0 failures.
-
-## What's Next
-
-Commit 2 turns the flat token stream into an expression tree with a Pratt parser that reads its levels from the operator table.
+- **Only tokens.** Nothing reads the stream yet. The driver just dumps it, until the parser builds a tree from it.
+- **Macros.** `macro`, `moya`, and `$` are reserved, but nothing gives them meaning.
+- **Literal values.** Numbers, strings, and chars are kept as raw text, until type checking parses them at their target types.

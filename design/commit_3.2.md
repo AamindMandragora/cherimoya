@@ -1,73 +1,97 @@
-# Commit 3.2: Declarations & the Round-Trip Printer
+# Commit 3.2: Strings
 
-## The Problem
+## The Feature
 
-After commit 3.1, the parser can read a function body but not the function around it, and it can't read a file. There's no way to define a function, a type, or a module's exports and imports, and no attributes. Commit 3.2 adds those, which finishes the grammar. It also adds a printer that turns the tree back into source, used by the tests to check the parser against itself.
+- **Three kinds of string.** A string is an array of characters, so it's no new type at all, and everything arrays do, strings do too. Cherimoya has three kinds of character, so it has three kinds of string:
 
-## A Program Is a List of Statements
+| String | `"héllo"` is | `s[1]` | `s.len()` |
+|---|---|---|---|
+| `arr[char]` | an error, since `é` isn't ASCII | `'e'` in `"hello"` | the characters, which are bytes too |
+| `arr[i8u]` | 6 UTF-8 bytes | `195`, the first half of `é` | the bytes |
+| `arr[rune]` | 5 runes | `'é'` | the characters |
 
-A file isn't just a list of declarations: functions can be defined inside bodies, `@tier(strict) { ... }` wraps statements, and `let LIMIT <- 4096;` and `wit {Vec2 :: Ord};` are just as valid at the top of a file as inside a function. So a program is a list of statements, and `parseProgram` calls `parseStmt` until the end of the file. Declarations are their own hierarchy in `decl.hpp`, and a `DeclStmt` wraps one so it can sit wherever a statement can. The grammar is the same at every level. Rejecting what doesn't belong at the top level, like an assignment, is sema's job.
+- **Literals take the kind their context wants.** `let r :: arr[5, rune] <- "héllo";` is five runes, a literal passed to an `arr[i8u]` input is bytes, and a pattern is the kind its subject is. Without a context, a literal is chars when every character is ASCII, so `"hello"` is an `arr[5, char]`, and its UTF-8 bytes when one isn't, so `"héllo"` is an `arr[6, i8u]`. An empty literal, `""`, is an `arr[0, char]`. A literal that isn't ASCII where chars are wanted is `cherimoya requires "héllo" to be ASCII to be a string of chars, please make it 'arr[i8u]' or 'arr[rune]'`.
+- **Escapes.** A string literal holds the escapes a character literal does, checked the same way, and each character is encoded in UTF-8, so every literal is valid UTF-8. Bytes that aren't are written as an array, `[0xFF] :: arr[1, i8u]`.
+- **Storage.** Like any constant fixed array, a literal bound to an immutable binding lives in read-only data, and one bound as `mut`, `let word :: arr[3, mut i8u] <- "abc";`, is copied into the binding, whose bytes can then be written.
+- **Chars widen into bytes.** A string of chars binds, compares, and is lent as bytes wherever bytes are wanted, through arrays and pointers of them too, without being written and without a copy. The one place it doesn't go is an input that can write bytes, which is a type error.
+- **Conversions between kinds.** Every other change of kind makes a new array on the heap, so it's written as a conversion:
 
-The hierarchy stays separate because later passes treat declarations differently: name resolution makes a first pass over them to build symbol tables before any body is checked.
+| Conversion | From | Fails when |
+|---|---|---|
+| `arr[rune](s)` | bytes or chars, decoded | the bytes aren't valid UTF-8: `trap at line 4: 'arr[rune](s)' isn't valid UTF-8` |
+| `arr[i8u](s)` | runes, encoded, or chars, copied | never, since a rune is always a Unicode scalar value |
+| `arr[char](s)` | bytes or runes | a character isn't ASCII: `trap at line 4: 'arr[char](s)' isn't ASCII` |
 
-## Functions
+  Decoding is strict, so a sequence cut short, a continuation byte where none goes, an encoding longer than its character needs, a surrogate, or a code point past `10FFFF` all trap.
+- **Lending.** A function that takes an `arr[T]` input borrows it, so any fixed array of `T` can go there: `(s :: arr[i8u])` takes a string of any length, and `(xs :: arr[int])` takes `[1, 2, 3]`. Nothing is copied. A function that writes the elements, `(s :: arr[mut i8u])`, writes the binding's own, and gets a copy of anything whose elements can't be written, a literal, an immutable binding, or a value that isn't a binding, so the caller's value stays as it was. An `unscoped` input isn't lent to.
+- **Comparing across lengths.** `=` and `==` compare an array on the heap with a fixed array of the same elements by length and then each element with the same operator, so `cmd == "go"` works on any `arr[i8u]`, `xs == [1, 2]` on any `arr[int]`, and strings of chars compare with strings of bytes. Two fixed arrays of different lengths are different types, so comparing them is still an error, and nothing orders strings, so `<` on one is an error.
+- **String patterns.** A string is a literal pattern, which matches when the subject has the same length and the same bytes:
 
-A function is `let [generics] (inputs) -> name -> (outputs) wit {obligations} { body }`. `parseLet` already had to look past the `let` to tell a binding from a function: `let (` is always a function, and `let [` is one when the matching `]` is followed by `(`, since `let [q, r] <- ...` is destructuring. In commit 3.1 that check reported "not supported yet". Now it hands off to `parseFnDecl`.
+```
+match (cmd) {
+    "go" -> { 1 -| code }
+    "stop" -> { 2 -| code }
+    _ -> { 0 -| code }
+}
+```
 
-- **Generics** are `[name :: bound & bound <- fallback]`. Bounds are types joined by `&`, and the fallback is a generic argument, so it can be a type (`<- Global`) or a comptime value.
-- **Inputs and outputs** reuse the parameter list from closures, and refinements come along with the types. Outputs are always parenthesized, and `()` is void.
-- **The name** is an identifier or any overloadable operator token: the built-in `+ - * / % & | ^ << >> ~ ! ==` and every extra operator. The lexer's table already records which operators are overloadable, so the check is one line. Unary and binary `-` share a name and are told apart by arity, which is sema's job.
-- **`wit {obligations}`** is optional and holds an expression.
-- **The body** is a block. An extern has `;` instead, and a protocol member has neither.
+  A match on an array needs a catch-all, the way one on a number does, and a pattern that can never match a fixed subject, since its length differs, is a warning: `cherimoya never matches this arm, since the subject holds 3 elements and this pattern 2`.
+- **Debugging.** With `-g`, gdb shows each kind of string the way cherimoya writes it, with its escapes, on the heap or not: chars as their text, runes as theirs after a `U`, and bytes as their numbers and then, when they're valid UTF-8, the text they spell. Bytes that aren't valid UTF-8, and signed bytes, show only their numbers.
 
-## Type Definitions
+```
+$1 = "abc"
+$2 = U"héllo"
+$3 = {104, 195, 169, 10} "hé\n"
+$4 = arr[i8u] of 2 = {103, 111} "go"
+```
 
-Every type definition is `type Name[generics] <- right side;`. There is one `TypeDecl` node, and the parser records which form the right side took:
+## Why
 
-- **protocol**: the right side opens with `[ let`. Members are signatures without bodies, separated by commas, parsed with the same `parseFnDecl` in member mode.
-- **sum**: the right side has more than one alternative separated by `|`. Each alternative is parsed as a type, so `Circle[f64]` comes out as a named type with type arguments, and is then turned into a variant with a payload. A dotted name or a value argument isn't a variant and is an error.
-- **enum**: a sum where no variant has a payload.
-- **product**: a record, optionally refined with an invariant.
-- **refinement**: any other refined type.
-- **newtype**: anything else.
+A string literal could be written, and `@test(traps <- "...")` read one, but sema had no type for one anywhere else. Making a string an array of characters means it needs no new type, only the two things arrays couldn't do yet and strings most need: a function that takes a string of any length, and a comparison or a match against a literal of a different length.
 
-A single alternative is never a sum, so `type Wrapper <- Foo[int];` is a newtype of `Foo[int]`, not a one-variant sum. That keeps the reading of a one-alternative right side unambiguous without asking sema what `Foo` is.
+- **Three kinds, picked by the program.** Chars are ASCII, one byte each, so a string of them is compact and indexes by character, but holds only ASCII. Bytes are UTF-8, compact, and what files, terminals, and C use, so they never convert at the edges, but a character can take several of them. Runes are each a whole character, four bytes each.
+- **Chars widen for free,** since ASCII is valid UTF-8, byte for byte, so nothing changes and nothing is copied. Writing bytes into chars could put a byte that isn't ASCII there, which is why an input that writes is the exception.
+- **Other changes are written,** since each makes a new array, and an allocation is never hidden.
+- **Lending** is the free view of a fixed array the spec gives: its elements' address and how many there are, with the length the type already knows. A fixed array's length is part of its type, so without lending a function taking `arr[5, i8u]` would take only five-byte strings.
+- **Copying for writers** keeps a function from ever writing read-only data.
+- **Bytes show their text** in gdb as well as their numbers, since bytes are also binary data.
 
-## Modules and Attributes
+## Implementation
 
-`export [List, push, Result[dist, prev]];` and `import [Allocator] <- std.mem;` share an item list. Each item is a name with optional fields in brackets, and a name can be an operator, so `export [Vec2, <+>]` exports the overload. Imports end with a dotted module path.
+### Sema
 
-An attribute is `@name(args)` followed by what it applies to. One `AttrStmt` covers all three uses: `@tier(strict);` applies to the whole file and has no target, `@extern("c") let ...;` targets the function after it, and `@tier(strict) { ... }` targets the block after it. Attributes stack, since the target is just the next statement.
+- **Literals.** `codePoints` decodes a literal's characters with `decodeCharacter`. `stringElement` gives the kind of string a type holds, chars, `i8u`, or runes, from a fixed array's or an array on the heap's elements. `stringLiteral` types a literal as a fixed array of the expected kind, sized by its code points for chars and runes and by `stringLiteralValue`'s UTF-8 bytes for bytes, and otherwise chars or bytes by whether it's all ASCII. `checkPack` takes the element type from an expected array on the heap too, so a pack lent to an `arr[T]` input knows its elements.
+- **Widening.** `isWidening` holds when one type already is another bit for bit: the same type, a char where an `i8u` is wanted, or arrays of the same size and handles of the same kind whose elements widen. `isCompatible` accepts a widening.
+- **Lending.** `isLendable` holds for a fixed array whose elements widen into an array on the heap's. When checking a call, an argument going to an input that writes its elements, read through `mutabilityOf` and `isUnscoped`, is a mismatch if it only fits by widening chars into bytes, and otherwise a lendable argument to a scoped input is recorded in `lent`, which codegen reads through `isLent`.
+- **Comparisons.** `isComparableArrays` lets an array on the heap and a fixed one, or chars and bytes, compare, and `binaryType` accepts them for equality.
+- **Patterns.** A literal pattern that's a fixed array of the subject's elements and a different length gets the warning, one that compares with the subject passes, and `checkMatch` requires a catch-all on an array subject.
+- **Conversions.** `checkMake` treats a call of an array type on a string of another kind as a conversion, which takes exactly one value, and its error for anything else becomes `cherimoya expected a fixed array or another kind of string in the call to ...`. `madeCount`, which knows how many elements a made handle holds when the program compiles, only takes a fixed source's size when its elements are the handle's, since a conversion between kinds can change the count.
+- **Codegen's view.** `runeType` and `intType` let codegen tell the kinds of string apart.
 
-## The Round-Trip Printer
+### Codegen
 
-The printer lives with its tests in `tests/unit/parser/test_printer.cpp`. It isn't `cheri fmt`. It keeps no comments and aligns nothing. It's here to check the parser: print a tree, parse the output, and print it again. If anything is lost or misread on the way, the two printings differ.
+- **Literals.** A string literal is a `ConstantDataArray` of its runes when sema made it runes, and otherwise of its UTF-8 bytes from `stringLiteralValue`, which for an ASCII string of chars are its chars. A string of chars widens into bytes with no code at all, since both lower to the same bytes.
+- **Lending.** `emitArguments` calls `lend` for every argument sema lent, passing whether the input can write its elements. `lend` makes an array on the heap's handle from the address of the elements, a binding's or an element's through `placeAddress`, or a slot of their own for a value that isn't a place, or for an input that writes a binding whose elements can't be written, and the length the type knows. Nothing frees it, since it's borrowed.
+- **Comparisons.** `compareAny` compares two values sema let a comparison have. The same type goes to `compare`. Two fixed arrays of the same size compare as one type, chars and bytes being the same bytes, and of different sizes are false, which only a string pattern can reach. A heap array and a fixed one put the fixed one in a slot and compare it as a handle to that slot through `compareHeapArrays`. Equality operators and literal patterns in `emitMatch` both go through it.
+- **Conversions.** `emitMake` tries `convertString` on a call with no length. It puts a fixed source in a slot or takes a heap source's data and length, copies chars into bytes with a `memcpy`, and calls the runtime for the rest, with an out-of-memory message and, for decoding or ASCII, the trap message. `arrayElement` gives the elements of either kind of array. Whether a make is sized is now read from the written type, so `arr[rune](s)` isn't mistaken for one.
 
-Printing the same text twice isn't proof that the parse was right, though. If the printer dropped needed parentheses, `a - (b - c)` would come out as `a - b - c`, which parses to a different tree that prints the same way. So the printer also has a full mode that parenthesizes every operand of every operator. Full mode is unambiguous, so two trees print the same in full mode only if they have the same shape. The round-trip check compares the normal printing for stability and the full printing for shape.
+### Runtime
 
-Getting the normal printing right means putting back only the parentheses the grammar needs, which turns out to be most of the parser's rules in reverse:
+`runtime/runtime.c` adds `cheri_decode_utf8`, which decodes bytes into runes and traps on anything that isn't valid UTF-8, checking overlong encodings against the smallest code point each length holds, `cheri_encode_utf8`, which encodes runes into bytes and can't fail, and `cheri_to_ascii`, which copies bytes or runes, by their width, into chars and traps on one past `7F`. Each makes its array through `cheri_alloc`, and the first two report how many elements they made through a count.
 
-- An operand needs parentheses when it binds looser than its operator, or ties on level without the same associativity on its side. Built-in comparisons inside a chain, and anything non-associative, always tie badly. That one rule covers precedence, associativity, and the mixing rule.
-- An operand that's the other pipe always needs parentheses, even though the pipes sit on different levels.
-- A prefix operator gets a space before an operand that starts with an operator symbol, so `- -a` doesn't print as the extra operator `--`, and `< -1` doesn't print as `<-1`.
-- At the top of a statement or comprehension clause, a construction would be read as an assignment or a membership clause, so it gets parentheses. So does an unnamed construction from a name inside a pack, which would read back as a named element.
-- An expression statement that starts with a scope but isn't one gets parentheses, since a scope at the start of a statement ends it.
-- A filter clause or a membership clause's source in a comprehension gets parentheses from `&&`'s level down, since clauses are parsed just above it.
+### Debug Info
 
-The layout is fixed: 4-space indentation, one statement per line, and a brace list kept on one line when it holds exactly one item that fits on one line. That's what makes `{ x + 1 -| }` and `match { (n > 100) -> { 100 -| early } }` stay compact while a match with several arms gets one line each.
+`src/codegen/printers.py` adds `stringText`, which renders the elements of a string kind, `i8u`, `i8uw`, `char`, or `rune`, as cherimoya writes them, quoted with cherimoya's escapes and `\u{...}` for anything unprintable, or gives nothing when bytes aren't valid UTF-8 or runes aren't scalar values. `TextPrinter` prints that one line. `lookup` uses it for fixed arrays and for arrays on the heap, whose line starts with the array's type and length, and falls back to the byte and heap printers otherwise.
 
-## What Was Built
+## Tests
 
-`src/parser/decl.hpp` defines `FnDecl`, `TypeDecl`, `ExportDecl`, `ImportDecl`, and `ErrorDecl`, with `GenericParam`, `Variant`, and `ModuleItem`. `src/parser/stmt.hpp` gained `DeclStmt` and `AttrStmt`. The parser gained `parseProgram`, `parseFnDecl`, `parseGenericParams`, `parseTypeDecl`, `parseExport`, `parseImport`, and `parseAttr`, and `parseLet` now hands functions off instead of skipping them.
-
-`tests/unit/parser/test_parser.cpp` gained `dumpDecl` and `programDump`, with test cases for functions, type definitions, modules, attributes, and two whole files: a reference program and a module header. `tests/unit/parser/test_printer.cpp` has the printer and test cases for parentheses, normalization, statement and clause contexts, statements and scopes, closures and folds, declarations, and a round trip of the reference program with its comments and alignment. 3125 assertions across lexer, parser, and printer, 0 failures.
+`tests/unit/sema/test_sema.cpp` checks literals and their kinds, widening, conversions, lending, comparing, and patterns. `tests/features/strings.toya` runs them, including writing through a lent array and the copy a read-only one gets, and `tests/debug/strings.moya` prints every kind in gdb. 14706 unit assertions, 9 programs, the run of `tests/test/`, 190 feature tests, 8 debug programs, all under valgrind, and the grammar's corpus, 0 failures.
 
 ## Current Limitations
 
-Comments and blank lines don't survive printing, and nothing is aligned. That's the job of `cheri fmt`, which gets its own commit once the driver does more than dump tokens.
-
-Macros (`macro`, `moya`, `$x`) aren't parsed. They come later, and the lexer still reserves their tokens.
-
-## What's Next
-
-Commit 4 adds name resolution and core type checking: monomorphic primitives, three passes over every statement list (signatures, then the other statements, then bodies), the yield-target stack with label resolution, error poisoning, place and mutability checks, and discard enforcement.
+- **No output.** Programs can't print yet, so a string can only be compared, matched, and passed around until output comes with the standard library.
+- **No joining.** Strings can't be joined until array math chooses its operator, so a joined string is built with `arr[n, mut i8u](_)` and a loop.
+- **Walking characters.** Walking a string of bytes by its characters, without converting it to runes first, waits for for-each loops.
+- **Writable lending.** A binding passed to an input that writes its elements isn't checked to be writable until modes arrive, where the check covers arrays on the heap and pointers too.
+- **No order.** Nothing orders strings until protocols can give text an order.
+- **Names.** Bytes get a name of their own once type aliases arrive, and `string` and `cstring`, text with its functions and C's null-terminated strings, come with the standard library and FFI.

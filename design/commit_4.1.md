@@ -1,95 +1,68 @@
-# Commit 4.1: Names, Types & Expressions
+# Commit 4.1: Fixed-Width Arrays
 
-## The Problem
+## The Feature
 
-After commit 3, the parser accepts any program that's shaped right. `let x <- y + true;` parses fine: nothing knows that `y` was never declared, or that `+` can't add a bool. Sema is the pass that knows what names mean and what values are. Commit 4 builds its core in two parts. This first part resolves every name to its declaration and gives every expression a type, over the core types `int`, `float`, and `bool`. Commit 4.2 adds control flow: yields and their targets, `match`, `repeat`, function results, mutability, and discards.
+- **Fixed arrays.** `arr[N, T]` holds `N` values of type `T` inline, copied when bound, passed, or returned, like an `int`. Arrays nest, `arr[2, arr[3, int]]`.
+- **Sizes known when compiling.** `N` is an integer literal or an immutable binding whose initializer folds to one through `+ - * / %`, even one declared after the signature that uses it.
+- **Literals.** `[1, 2, 3]`, whose elements share one type, picked the way an operator picks its operands'.
+- **Indexing.** `xs[i]` by any unsigned integer, checked when compiling if the index folds, and at run time otherwise.
+- **Mutability per level.** `arr[3, mut int]` writes elements, `mut arr[3, int]` replaces the whole, and a bare `mut` on an inferred type allows both at every level.
+- **`len`.** `xs.len()`, `xs |> .len`, or `len(xs)`, a method from the built-in protocol `Sized`.
+- **Equality.** `=` and `==` compare element by element, each with the same operator.
 
-## Sema Types
+## Why
 
-The parser's `Type` nodes are syntax: `mut int {a >= 0}` is a tree with spans. A `SemaType` is meaning: this value is an `int`. The hierarchy is small: `PrimitiveSemaType` (`int`, `bool`, `float`, `void`, and `never`), `FunctionSemaType` (parameter types and a return type), and `ErrorSemaType`. Sema types have no spans, since one `int` is shared by every `int` value in the program.
+Every value so far is one scalar, so a program working on a list has to keep each element in a binding of its own. A fixed array is the smallest step past that: its elements sit inline, so it needs no memory management and reuses the existing value machinery, slots, copies, and stores. Heap arrays, pointers, and strings all build on it.
 
-Types are interned. The `TypeContext` creates each distinct type exactly once, owns all of them in a `vector<unique_ptr<SemaType>>`, and hands out raw pointers. Primitives are made up front, and a function type is made the first time it's asked for and cached in a map keyed by its parameter and return types. Since each type exists once, type equality is pointer equality, and no rule ever compares two types structurally.
+- **Copying** means nothing aliases and nothing is freed, which keeps ownership out of this commit.
+- **Folded sizes** make the type fully known when compiling. Signatures are resolved before any `let` is checked, so constants are hoisted per scope ahead of functions.
+- **Mutability on the binding, not the type,** keeps `arr[3, mut int]` and `mut arr[3, int]` the same type, so type comparison stays a pointer comparison instead of stripping qualifiers everywhere.
+- **Unsigned indices** make a negative index impossible to write, so only the upper bound needs checking.
+- **`len` as a method** settles the dispatch rules now, a method winning over a function of the same name, before protocols can be written.
 
-Two types are special:
+## Implementation
 
-- **`error`** is the type of anything whose checking failed. Every rule treats it as fitting anywhere and reports nothing about it, so one mistake produces one diagnostic instead of a cascade. `let x <- y + 1 + 2.5;` with `y` undeclared reports `y` and nothing else.
-- **`never`** is the type of a yield, since control doesn't continue past one. It fits anywhere too, so a `match` arm that yields elsewhere still typechecks. 4.2 is where yields produce it.
+### Parser
 
-## Symbols and Lexical Scopes
+`parseExpr` reads a prefix `.name` with no object, giving a `MemberExpr` whose `object` is null, which is what a pipe's right side is in `xs |> .len`. Array literals and indexing already parsed as `PackExpr` and `IndexExpr`.
 
-A `Symbol` is one declared name: its type, whether it's `mut`, its span, its kind (binding, parameter, or function), and its owner, the function body that declared it. Sema owns every symbol in a `std::deque`, which never moves an element once it's added, so a `Symbol*` stays valid for as long as sema does.
+### Sema
 
-A `Scope` is one lexical scope: a map from names to symbols and a pointer to the enclosing scope. Lookup walks outward, so an inner `x` shadows an outer one, and declaring a name twice in one scope is an error. Scopes live on the C++ stack for exactly as long as the code they cover, while the symbols they point at outlive them. That split matters, because the AST keeps pointing at symbols after their scope is gone.
+- **Types.** `src/sema/type.hpp` adds `ArraySemaType`, its element and size, and `asArray`. `src/sema/context.hpp` interns array types in `arrayTypes`, keyed by element and size, so two `arr[3, int]`s are the same pointer and type equality stays a pointer comparison.
+- **Constants.** `Scope` gains `constants`, filled by `insertConstant` in the first pass over a block, before functions are declared. `lookupConstant` stops at a scope that declares the name as an ordinary symbol, so shadowing works. `fold` evaluates literals, constant names, and `+ - * / %`, finding names through their symbol once checked and by name while hoisting, and refuses anything below zero. `arraySize` turns the `N` of `arr[N, T]` into a number, or reports `cherimoya requires an array's size to be known when the program compiles, please use an integer literal or an immutable binding of one`.
+- **Mutability.** `Symbol::isMutable` becomes `Symbol::mutability`, a vector with the binding first and then each level of elements, and `isMutable()` reads `mutability[0]`. `mutabilityOf` builds it from where `mut` sits in the written type, and a bare `mut` on an inferred type sets every level. `checkElementPlace` checks `xs[i]` and `m[i][j]` as assignment targets against the flag at that depth, and the error names the type to declare, `arr[3, mut int]`, with a fix adding `:: mut` when the binding has no written type.
+- **Literals.** `checkPack` picks the element type the way binary operators pick theirs: the expected element type, else the first non-literal element's, else a float literal's. A mismatched element reports that packs of different types, tuples, aren't supported yet, and an empty literal needs an expected type.
+- **Indexing.** `checkIndex` requires an unsigned index, with a fix wrapping a signed one in `i64u(...)`, and checks a folded index against the size: `cherimoya expected an index below 3 into 'xs', got 5 instead`.
+- **Methods.** `hasMethod` answers from `Sized` alone. `checkMethod` checks a method call on its object, and `checkCall` tries a call by a method's name as a method on its first argument before looking for a function, so `len(xs)` finds the method beside a function named `len`. `checkMember` rejects `xs.len` without parentheses, since a bare member will be a field once records exist, and a pipe hands its value to an object-less `.len`.
 
-Lexical scopes are sema's, and they're separate from the scopes in the grammar (blocks, `match`, `repeat`, `chunk`). A block, a function, and a refinement's binder each get a lexical scope.
+### Codegen
 
-## Annotating the AST
+- **Types.** An array lowers to LLVM's `[N x T]`, a first-class aggregate that slots, arguments, returns, and globals hold directly.
+- **Literals.** `emitPack` makes a `ConstantArray` when every element is constant, which lets a global start out holding it, and otherwise builds the value with `insertvalue`.
+- **Places.** `placeAddress` gives the address of a binding, an element, or, for a value that isn't a place such as a call's result, a fresh slot it's stored into first, so anything can be indexed. `elementAddress` checks the index with `icmp uge` against the size and does a `getelementptr`, and LLVM folds the check away for a constant index. Assignment now goes through `placeAddress`, so elements and bindings share one path, and the place is evaluated before the value, the order they're written.
+- **Traps.** `trapIf` takes a callback that emits the report, so a check can call a trap with run-time arguments. The bounds check calls `cheri_trap_index` with the index, the length, the array's source text, and the line.
+- **Equality.** `compareArrays` stores both sides in slots and loops over the elements with a phi, calling `compare` with `=` or `==` on each pair and leaving at the first that differs. The pair's result is taken from whatever block comparing it ended in, since a nested array's comparison adds blocks of its own.
+- **`len`.** `isLen` recognizes the method in all three call forms, where a callee with no symbol named `len` is the method, and `emitLen` evaluates the array for its effects and gives its size as a constant `i64`.
 
-Sema writes its results straight into the tree. Every `Expr` has a `SemaType* type`, and every `IdentifierExpr` has a `Symbol* decl`. After checking, each identifier knows exactly which declaration it means, and each expression knows its type, so later passes read the answers instead of recomputing them. `AnnExpr` and `TypeExprExpr` call their parsed types `annotation` and `typeExpr`, so they don't hide the base class's `type`.
+### Runtime
 
-## Diagnostics with Notes
+`runtime/runtime.c` adds `cheri_trap_index`, which prints `trap at line 6: index 7 is past the end of 'xs', which holds 3` and aborts.
 
-A diagnostic can carry notes: a message and a span each, rendered as their own block with carets under the error. A redeclaration points at the first declaration, a call with the wrong number of arguments points at the function, and a type mismatch between two operands shows each side's type:
+### Debug Info
 
-```
-error at line 1:
-let x <- 1 + 2.5;
-         ^^^^^^^
-cherimoya requires both sides of '+' to have the same type, please convert one of them
-note at line 1:
-let x <- 1 + 2.5;
-         ^
-this side is 'int'
-note at line 1:
-let x <- 1 + 2.5;
-             ^^^
-this side is 'float'
-```
+`typeOf` in `src/codegen/debug.hpp` describes an array as a DWARF array type with one subrange from 0, so gdb prints `{{1, 2, 3}, {4, 5, 6}}`. `src/codegen/printer.hpp` becomes `src/codegen/printers.py`, embedded through `printers.hpp.in`, and prints an array of 1-byte integers as numbers, `{-1, 0, 1}`, where gdb would print a C string.
 
-The ownership passes will lean on the same mechanism for "moved here" and "borrowed here".
+### Language Server
 
-## The Passes
+`src/lsp/features.hpp` gives `arr` its hover text.
 
-A list of statements is checked in three passes, and the top of a file is just the outermost list:
+## Tests
 
-1. Every function's signature is declared, so functions can call each other in any order, including mutual recursion.
-2. Every other statement is checked in order, so a `let` is only visible after it.
-3. Every function's body is checked, so a body sees every name declared around it, wherever it is. A function can use a constant declared below it.
-
-Functions defined inside a body follow the same passes within their block. They can't use the enclosing function's locals: each function body gets an owner number, and an identifier whose symbol belongs to a different function's body is an error that points at closures, the way to capture. Globals and functions are visible everywhere.
-
-A function's parameters are declared in its own scope, with each refinement checked right after its parameter. Outputs get an inner scope that only the output refinements and the `wit` obligations are checked in. The body is outside it, since outputs are produced by yields, not read. Parameters and outputs need types, outputs give the function's type (`()` is `void`, and one output is that output's type), and a function's type is written `(int, int) : bool`. A signature is resolved once, when its function is declared, and its body's check reuses it, so a mistake in a signature is reported once.
-
-## Bindings
-
-A `let`'s type comes from its annotation, its initializer, or both when they agree. A bare `mut` leaves the type to the initializer. `<- _` needs an annotation, since there's nothing to infer from. A binding can't hold `void`. The initializer is checked before the name is declared, so `let x <- x + 1;` sees an outer `x` or nothing.
-
-Refinements, `wit` obligations, and assertions are type-checked but not proven: their names have to resolve and they have to be bools, so a typo in a contract is caught now. Proving them is Z3's job in a later commit. A refinement on a parameter or a `let` refers to it by its own name, since the name is declared before its refinement is checked, and one with a binder (`{p : p > 0}`) gets a scope with the binder in it.
-
-## Expressions
-
-Each expression's type is worked out from its parts:
-
-- **Literals:** integers are `int`, floats are `float`, and `true` and `false` are `bool`.
-- **Operators** read their rule from the operator table's category. Arithmetic takes ints or floats and gives the same type, comparisons take ints or floats and give `bool`, bitwise operators take ints, logical operators take bools, and equality takes any two values and gives `bool`. Both sides must have the same type, since conversions are explicit. A chain checks each neighboring pair.
-- **Calls** must name a function. The argument count and each argument's type are checked against the signature, and the call's type is the function's return type. A function's name can only be called for now, since function values arrive with closures.
-- **Pipes** are calls: `x |> f` and `f <| x` both check as `f(x)`.
-- **Assignments** must fit the place's type. A compound assignment applies its base operator, so `x +<- 2` checks as `x + 2` and has to give back `x`'s type. `_ <- v` takes any value.
-
-## What 4.1 Doesn't Check Yet
-
-Anything sema can't check yet is reported once with `cherimoya doesn't support <x> yet` and given the error type, so the rest of the program still checks without a cascade. That covers types other than the core ones, handles, modes, tuples and records, type definitions, modules, generics, operator overloading, extra operators, conversions, strings and chars, packs, ranges, comprehensions, folds, closures, `match`, `repeat`, and `chunk`. Each one names what it is, so the message says which feature is missing.
-
-## What Was Built
-
-`src/sema/type.hpp` defines `SemaType`, `PrimitiveSemaType`, `FunctionSemaType`, and `ErrorSemaType`. `src/sema/context.hpp` has the `TypeContext` arena. `src/sema/scope.hpp` has `Symbol` and `Scope`. `src/sema/sema.hpp` is the `Sema` class: type resolution, the passes, functions, bindings, refinements, and expression typing. `src/diagnostics/diagnostics.hpp` gained notes, and `src/parser/expr.hpp` gained the `type` and `decl` annotations.
-
-`tests/unit/sema/test_sema.cpp` has `semaErrors` and `symbolType` helpers that run the whole pipeline, with test cases for binding types, name resolution and lexical scopes, the passes, nested functions, refinements and contracts, operators, calls and pipes, assignments, and unsupported forms. 3214 assertions across lexer, parser, printer, and sema, 0 failures.
+`tests/unit/sema/test_sema.cpp` covers literals and their element types, sizes, including a constant declared after the signature using it, indexing, equality, every position of `mut`, every call form of a method and every way to misuse one, and the fixes. `tests/unit/parser/` covers `.len` with no object. `tests/run/` adds `arrays.moya`, `array_returns.moya`, which passes arrays in and out of functions as copies, and `array_trap.moya`, an index past the end. `tests/debug/arrays.moya` prints arrays in gdb. 14560 unit assertions, 64 programs, 6 debug programs, and the run of `tests/test/`, 0 failures.
 
 ## Current Limitations
 
-Yields check their value but don't resolve their target, function bodies aren't checked against their outputs, blocks are typed `void`, and conditionals and loops aren't checked at all. Mutability is recorded but not enforced, and a call's unused result doesn't need a discard. Those are commit 4.2.
-
-## What's Next
-
-Commit 4.2 adds the yield-target stack and label resolution, the never type, `match` and `repeat` as typed expressions, function results, place and mutability checks, and discard enforcement.
+- **Copies.** Every copy of an array copies all of it, until views can lend one without copying.
+- **Bounds checks.** An index that can't be folded is always checked at run time, until contracts can prove it in range.
+- **Methods.** `len` is the only method until protocols can be written, and the language server doesn't complete methods after a dot.
+- **Later features.** Slicing needs ranges, walking an array needs for-each loops, and an array of mixed types needs tuples.

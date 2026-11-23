@@ -1,117 +1,78 @@
-# Commit 2.1: Pratt Parser & Expression AST
+# Commit 2.1: Integers
 
-## The Problem
+## The Feature
 
-The lexer produces a flat stream of tokens. `a + b * c` comes out as five tokens in order: `Identifier Plus Identifier Star Identifier`. But that sequence is ambiguous without precedence rules. Does `+` bind first, giving `(a + b) * c`? Or does `*` bind first, giving `a + (b * c)`? The token stream doesn't say. The parser's job is to impose structure, turning a flat sequence into a tree that makes precedence and associativity explicit.
+- **Twenty integer types.** Every width from 8 to 128 bits, signed or unsigned, trapping or wrapping, named by those three facts: `i32` is 32 bits, signed, and trapping, `i32u` is unsigned, `i32w` wraps, and `i32uw` is both. `int` is `i64`, and `i64` prints as `int`.
+- **No mixing.** `x + y` with an `i8` and an `i16` is the same `cherimoya requires both sides of '+' to have the same type, please convert one of them` as an `int` and a `float`. Bitwise operators take any integer, and comparisons and arithmetic take any number.
+- **Negation.** `-x` takes a signed or a wrapping integer. Negating a trapping unsigned one is `cherimoya requires negation to be on a signed or wrapping integer, please use an 'i32' or an 'i32uw' instead of 'i32u'`.
+- **Literals take the type around them.** A literal has the type its context wants, and `int` when the context wants nothing in particular:
+  - a binding's annotation: `let x :: i8 <- 5;`
+  - an assignment's place: `x <- 5`, and a compound one: `x +<- 1`
+  - a call's parameter: `f(5)`
+  - a function's output: `5 -| f`
+  - the other side of an operator: `x + 1` and `1 + x`, and in a chain, its first operand that isn't a literal
+  - a match's subject: `0 -> { }`
+- **Literals have to fit.** `cherimoya requires 300 to fit in 'i8', please use a wider type or convert it explicitly`, for wrapping types too. A negated literal is checked as a whole, so `-128` fits in an `i8`.
+- **Conversions.** `i8(x)`, `i128u(n)`, or `x |> i8` converts between integers. Into a trapping type it traps if the value didn't survive, and into a wrapping type it keeps the low bits, so `i8w(300)` is `44`.
+- **Run-time traps.** Overflow, division by zero, a shift out of range, and a conversion that doesn't fit stop the program, quoting the code that failed:
 
-## Why Pratt Parsing
+```
+trap at line 3: 'x * 2' overflowed i8
+trap at line 4: 'a / b' divided by zero
+trap at line 4: 'x << n' shifted by an amount outside 0 to 31
+trap at line 4: 'i8(x)' doesn't fit in i8
+```
 
-The standard approach for parsing expressions in a hand-written compiler is recursive descent: one function per precedence level, each calling the next tighter level for its operands. For 17 precedence levels, that's 17 mutually recursive functions that are almost identical, differing only in which operator tokens they match. It works, but it's tedious, error-prone to extend, and buries the precedence relationships in call structure rather than making them explicit.
+- **Windows.** The driver builds `.exe` files with `clang`, and `--target x86_64-pc-windows-msvc -c` writes a Windows object file from Linux.
 
-Pratt parsing (also called precedence climbing) replaces all of those functions with a single recursive function parameterized by a *binding power*, a number that says "only parse things that bind at least this tightly." Each operator token carries a binding power derived from the precedence table, and the parser uses it to decide whether to keep consuming tokens or return what it has. The result is a single function that handles all 17 levels, with the precedence table expressed as a data lookup rather than code structure.
+## Why
 
-The key insight is the split between *NUD* (null denotation) and *LED* (left denotation). A NUD handler fires when a token appears at the start of an expression or after an operator: literals, identifiers, prefix operators, opening parentheses and brackets. A LED handler fires when a token appears after a complete sub-expression: binary operators, call parentheses, indexing brackets, member dots, construction arrows. The parser alternates between the two: parse a NUD to get an initial `left`, then loop through LEDs that bind tightly enough, wrapping `left` each time.
+After commit 1.9, cherimoya has one integer type: `int` is 64 bits, its arithmetic wraps silently on overflow, and dividing by zero is undefined. This commit builds the full set of integers in sema and codegen, with literals that adapt to them, conversions, and the run-time checks that make trapping integers trap. Floats and FP8 follow the same way.
 
-Associativity falls out of one detail. The LED loop breaks when the next operator's binding power is `<=` the current threshold. A left-associative operator recurses with its own binding power *p*, so another operator at the same level hits `<=` and breaks out, becoming the parent. A right-associative operator recurses with *p - 1*, so the same-level operator on the right passes the check and gets consumed as a child. `a - b - c` becomes `(- (- a b) c)`. `a ** b ** c` becomes `(** a (** b c))`. One integer controls the difference.
+- **Three facts in the name,** so a type says how it behaves where it's written, and wrapping is something a program asks for.
+- **Interned like every type,** so two integers have the same type exactly when they're the same pointer.
+- **No implicit conversions.** Integers of different types never mix, and the fix is a conversion that says what happens to a value that doesn't fit.
+- **Negating a trapping unsigned value** overflows for every value but zero, so it's a compile error that suggests the signed or wrapping type instead.
+- **Only literals use the expected type.** Checking is told what type the context wants, and a literal is the one thing with no type of its own, so the type flows from wherever it's known without any other rule changing.
+- **A literal that doesn't fit is a compile error,** since its value is known while compiling, even for a wrapping type, since a literal is written on purpose. Literals are read with 128 bits of headroom, so every value of every type can be written, up to `i128u`'s maximum.
+- **Signedness lives in the instructions.** LLVM integers have no sign: whether `0xFF` is 255 or -1 depends on the instruction that reads it, so codegen picks `sdiv` or `udiv`, `srem` or `urem`, `ashr` or `lshr`, signed or unsigned comparisons, and sign or zero extension by the type.
+- **Wrapping is free.** Two's complement is what the hardware does already, so a wrapping type's `+`, `-`, and `*` are plain instructions, and a trapping type's go through LLVM's overflow intrinsics.
+- **Division by zero traps for every integer,** wrapping ones included, since there's no value to wrap to. The other overflowing division, a signed minimum divided by -1, is undefined in LLVM, so codegen handles it: a trapping type traps, and a wrapping one gives the minimum for `/` and zero for `%`, which is exactly what dividing by 1 gives.
+- **Out-of-range shifts are undefined in LLVM too.** A trapping type traps on an amount outside 0 to the width minus one, and a wrapping type takes the amount modulo the width, so `1 << 33` as an `i32w` is `1 << 1`.
+- **A conversion checks by converting back.** If the round trip doesn't give the original value, the conversion lost bits. That misses a change of sign, since -1 as an `i8` and 255 as an `i8u` are the same bits, so a conversion that changes signedness also checks that the value is at least zero on the signed side.
+- **One place for platform differences,** so the rest of the driver reads the same everywhere. Code generation already worked for any target.
 
-## The Binding Power Table
+## Implementation
 
-The parser keeps no binding power table of its own. The lexer's operator table already records each operator's level (1 tightest through 17 loosest) and associativity, and every operator token carries a pointer to its entry. The parser turns a level into a binding power with `(18 - level) * 10`, so level 1 gets 170 and level 17 gets 10. The spacing leaves room between levels, though nothing needs it: moving an operator is an edit to its table entry, not a renumbering.
+### Sema
 
-The only tokens the parser places by hand are the postfix ones that aren't operators: `(` for calls, `[` for indexing, and `.` for members, all at level 1. Construction's `<-` is in the table at level 1 too. Flow tokens other than `<-` and every compound have no level, so they always stop the loop. Assignment and yields are statements, and those arrive in commit 3.
+- **Types.** `src/sema/type.hpp` adds `IntSemaType`, kind `SemaTypeKind::Int`, with `bits`, `isSigned`, `isWrapping`, and the `name` it prints as, and `int` stops being a `PrimitiveKind`. `TypeContext::makeInts` in `src/sema/context.hpp` makes all twenty up front into `table`, keyed by the name they're written with, `semaInt` is `table.at("i64")`, and `intType` finds one by name. `resolveType` resolves `int` and every name in the table.
+- **Expected types.** `checkExpr` and `typeOf` take `expected`, the type the context wants. `checkLet` passes the annotation, an assignment checks its place first and passes its type, `checkCall` passes each parameter's type, `checkPattern` passes the subject's, and `checkYield` passes a function's output or the type an earlier yield gave a scope. Arithmetic and bitwise operators pass what they're expected to give into their operands, and `checkOperands` checks the side that isn't a literal first, so a literal on either side takes the other's type. A chain checks its first operand that isn't a literal, then the rest against it.
+- **Literals.** `intLiteral` takes the expected type when it's an integer, and `int` otherwise. `literalValue` reads the raw text into an `unsigned __int128`, skipping separators, reading the radix from its prefix, and giving nothing past 128 bits. `isInRange` checks the value against the type's largest magnitude in the direction the literal points. `isIntLiteral` recognizes a literal, negated or not, and a negated one is checked as a whole.
+- **Operators.** `isInt` and `isNumeric` admit every integer type, `unaryType` rejects negating a trapping unsigned integer, and equality takes any value that isn't a function.
+- **Conversions.** `checkConversion` handles a type in the callee's place: one value, `cherimoya expected 1 value to convert in the call to 'i8', got 2 instead`, between two integers, `cherimoya requires a conversion to be between integers, please convert 'bool' to 'i8' some other way`, and a float on either side is unsupported until floats have conversions.
+- **Yield targets.** `checkYield` resolves its target before checking the value, to know the type it wants, then again after, since a value that holds scopes pushes targets of its own and can move the stack.
 
-Prefix operators read their prefix level from the same table. `-`, `!`, and `~` sit at level 3, and `old` is parsed at that level too. Since `**` is level 2, `-a ** b` is `-(a ** b)`, and `a ** -b` still works because the right side starts with a NUD.
+### Codegen
 
-## Calls Are Postfix
+- **Types and literals.** `lower` gives an integer `llvm::Type::getIntNTy` of its width, and a literal's `APInt` is as wide as its type. `asInt` and `isUnsigned` read a sema type, and `compare` takes `unsignedInts` to pick unsigned comparisons, from the left operand's type or a chain's first operand's.
+- **Traps.** `trapIf` branches on a bool that says something's wrong to a block calling `cheri_trap` with a message and the line, and carries on in a fresh block otherwise. Every run-time check goes through it, `assert` included. `quoted` gives a span's source text in quotes for the message.
+- **Arithmetic.** `arithmetic` takes the operands' sema type and the span. A trapping integer's `+`, `-`, and `*` go through `checked`, which calls `sadd_with_overflow`, `uadd_with_overflow`, and their `sub` and `mul` siblings, then traps on the overflow bit with `'x * 2' overflowed i8`. A compound assignment's span runs from the place to the value, so it traps as `'x +<- 100' overflowed i8`.
+- **Negation.** Negating a trapping signed integer is `0 - x` through `ssub_with_overflow`, since only the minimum overflows. A negated literal is a constant sema already checked, so `-128` as an `i8` never negates a `128` that would overflow on the way.
+- **Division.** `divide` traps on a zero divisor with `divided by zero`, then, for a signed type, tests for the minimum over -1: a trapping type traps, and a wrapping one swaps the divisor for 1 with a `select`. It then emits the signed or unsigned instruction.
+- **Shifts.** `shift` ands a wrapping type's amount with the width minus one, since every width is a power of two, and traps a trapping type's amount that's `uge` the width, where comparing as unsigned also catches a negative amount, which reads as enormous. `>>` is `ashr` for a signed type and `lshr` for an unsigned one.
+- **Conversions.** `convert` truncates, sign-extends, or zero-extends by the source's signedness. A wrapping target keeps the result. A trapping one converts back, compares with the original, and when the signedness changes, also requires the signed side to be at least zero, trapping with `'i8(x)' doesn't fit in i8`. A call or either pipe with a type in the function's place converts.
 
-A call is just `(` in LED position, at level 1. It binds tighter than every prefix and infix operator, so `f(g(x))` nests as written, `len(xs) - 1` subtracts from the result, and `-f(x)` negates the call. Postfix forms chain onto results with no special rule: `slot(xs, i)[]`, `get(l, i).name`, `f(a)(b)`.
+### Driver
 
-Indexing is the same `[` LED for four jobs. `xs[i]` indexes, `xs[a, ..., <b]` slices, `p[]` dereferences, and `Map[K, V]` or `alloc[T](n)` instantiates. The parser can't tell an index from an instantiation without knowing what the name is, so it builds one `IndexExpr` holding whatever was in the brackets, and sema decides. An empty argument list is the dereference.
+`tools/cheri/main.cpp` keeps everything that differs between platforms in the `platform` namespace: executables are `.exe` and objects `.obj` on Windows, the default linker there is `clang`, since there's no `cc`, `exitCode` passes Windows' exit code on directly instead of decoding a wait status, and `quote` and `shell` quote arguments the way `cmd` reads them, in double quotes, with one more pair around the whole command, since `cmd` strips the outermost pair.
 
-## Construction
+## Tests
 
-`T <- [pack]` builds an aggregate, and it binds at level 1 like the other postfix forms. That's what lets `Vec2 <- [1.0, 2.0] <+> Vec2 <- [3.0, 4.0]` work without parentheses. In an expression, an infix `<-` is only ever construction, so it must be followed by `[`, and anything else is an error. Whether the left side is really a type or a variant is sema's call.
-
-## Comparisons, Mixing, and Pipes
-
-Built-in comparisons chain. `a < b <= c` is a single `ChainExpr` holding three operands and two operators, so `b` is evaluated once. The chain LED keeps consuming comparisons at its level until it sees something else.
-
-The mixing rule is one check, driven by the table: two operators on the same level next to each other need parentheses when their associativities differ or either one is non-associative. `a = b = c` is an error because equality is non-associative. `a <=> b <= 0` is an error because `<=>` is non-associative and sits with the comparisons, so it never joins a chain. `a >>= b =<< c` is an error because one is left-associative and the other is right-associative. To see the operator on the other side of a right-associative recursion, `parseExpr` takes the operator whose right side it's parsing as its second argument, and the LED loop starts its "previous operator" from there.
-
-Pipes need a second check, since `|>` and `<|` sit on different levels. `x |> f` is a left-associative level 16, `f <| x` is a right-associative level 17, and mixing them without parentheses is an error. The loop tracks the last pipe it applied at the current depth, seeded from the parent the same way. Only pipes can recurse low enough to contain other pipes, so that's enough to catch `f <| a + x |> g`. Parentheses, brackets, and arguments start fresh, so `f <| (x |> g)` is fine.
-
-Extra operators build an `ExtraBinaryExpr` instead of a `BinaryExpr`. They parse exactly like built-ins, but they mean nothing until a user defines them, and keeping them apart saves sema from asking every binary node whether its operator is built in.
-
-## The Prefix Parenthesis
-
-A `(` in NUD position could start a grouping, a fold, or a closure, and the parser can't know which until it sees the end. So it scans ahead to the matching `)` and looks at what's inside and what follows:
-
-- followed by `->`: a closure. `->` has no other meaning in an expression, so this is unambiguous. Closures need parameter types and scope bodies, so they arrive with commit 3, and for now this is an error.
-- a top-level comma, followed by `[`: a fold.
-- a top-level comma otherwise: an error, since tuples are packs.
-- nothing inside: an error, since `()` only comes before `->`, and an empty pack is `[]`.
-- a single operator, like `(+)`: an error, since `(op)` is reserved for operators as values.
-- anything else: a grouping. `(x)[0]` then indexes the grouped value.
-
-A fold is `(reducer, seed)[sequence]`. The reducer may be a bare operator, which becomes an `OpRefExpr`. The brackets are parsed like any pack, and a one-element pack is unwrapped, so `(max, MIN_INT)[scores]` folds over `scores`, `(+, 0)[[1, 2, 3]]` folds over the inner pack, and `(*, 1)[1, ..., n]` folds over the range.
-
-## Packs, Ranges, and Comprehensions
-
-A `[` in NUD position parses a list of elements first and decides what it was afterward. An element is a value, a named value (`x <- 1.0`), `...`, or a value with an exclusivity marker, `>` or `<`.
-
-- If any element is `...`, it's a `RangeExpr`. A range has exactly one `...`, at most two values before it (the second sets the stride) and one after, and only its endpoints can have exclusivity markers. An endpoint's exclusivity marker is a comparison on the bound, not a fixed start or end symbol: `>0` means "stay above 0", so `[0, ..., <n]` counts up to just below `n`, and `[n, n - 1, ..., >0]` counts down to just above `0`. The parser keeps the marker as written. Whether it agrees with the stride's direction, and the stride's magnitude, are sema's job, since they need the endpoint type.
-- If a `:` follows the first element, it's a `ComprExpr`.
-- Otherwise it's a `PackExpr`.
-
-Inside a pack, `name <- value` is always a named element, even when the value is a pack. `[x <- [1, 2]]` is a field `x` holding a pack, not a construction of `x`. When `name` turns out to be a type, sema reinterprets it.
-
-After the colon of a comprehension, `<-` changes meaning. `x <- [1, ..., 10]` has exactly the same shape as a construction, but here it's a membership clause. So while the parser reads the top of a clause, a flag makes `<-` stop the LED loop instead of constructing, and the clause parser picks it up as `pattern <- source`. The pattern is parsed as an expression for now, which covers `x`, `[x, y]`, and `Some[d]`. Nested brackets and parentheses clear the flag, so `f(Point <- [0, 0])` inside a filter clause still constructs. Clauses are parsed just above `&&`'s level and joined by `&&`. A `||` between them needs parentheses, since by precedence it would swallow the membership clauses on its left.
-
-Three habits from other languages get a diagnostic in the `cherimoya uses <x> for <y> instead of <z>` form, with an example of the right way:
-
-- `->` after a pack element: map literals are packs of pairs, `[key, value]`.
-- `<-` at the start of an element: `[0, ..., <-1]` lexed as a flow token, and an exclusivity marker on a negative end is written `< -1`.
-- `if (`: there is no `if`. `if` is an identifier, so it only gets the diagnostic when followed by `(`, and conditionals use `match`.
-
-## The AST
-
-Every expression becomes a node in a tree. The base class `Expr` carries an `ExprKind` discriminator and a `Span` (start and end byte offsets into the source). The kind lets later passes switch without downcasting. The span lets every pass from type checking through codegen report errors that point at the right piece of source.
-
-Derived node types:
-
-- literals: `IntLiteralExpr`, `FloatLiteralExpr`, `BoolLiteralExpr`, `StringLiteralExpr`, `CharLiteralExpr`, each holding the raw literal text or value
-- names: `IdentifierExpr`, and `WildcardExpr` for a lone `_`
-- operators: `UnaryExpr` (prefix only, since no operator is postfix), `BinaryExpr`, `ExtraBinaryExpr`, `ChainExpr`, `PipeExpr` (direction token plus both sides in source order), `OpRefExpr`, `OldExpr`
-- postfix: `CallExpr`, `IndexExpr` (object plus a list of arguments), `MemberExpr`, `ConstructExpr` (target plus pack)
-- packs: `PackExpr` (elements with optional names), `RangeExpr` (raw elements with optional markers), `ComprExpr` (head plus clauses, where a clause without a pattern is a filter clause), `FoldExpr` (reducer, seed, sequence)
-- `ErrorExpr`, a sentinel for recovery
-
-Children are held as `std::unique_ptr<Expr>`. This is the only correct option in C++. Storing derived types by value in the base class would slice them: a `BinaryExpr` whose `lhs` field is declared as `Expr` loses everything `CallExpr` adds when a `CallExpr` is assigned to it. The derived portion is simply truncated. `unique_ptr` preserves the full derived object on the heap and gives the parent exclusive ownership, which is exactly the tree's ownership model: each node owns its children.
-
-The base class has a virtual destructor. Without it, `unique_ptr<Expr>` deleting a derived object is undefined behavior: the derived destructor never runs, and nodes holding their own `unique_ptr` members leak their subtrees.
-
-Operators are stored as `Token`, not as strings. The lexer already classified every operator and attached its table entry, so later passes get the level, category, and overloadability for free.
-
-## Error Recovery
-
-When the parser hits a token it doesn't expect in the NUD position (say, a bare `+` or a stray `}`), it emits a diagnostic and returns an `ErrorExpr`. An Error token from the lexer becomes an `ErrorExpr` too, without a second diagnostic, since the lexer already reported it. The tree stays well-formed: every node is a valid `Expr`, so later passes can walk the tree without null checks. They skip `ErrorExpr` nodes and keep going, which means a single parse can report multiple independent errors instead of dying on the first one.
-
-The `expect` helper checks the token kind and consumes the token when it matches. Every call says which token it wants and where, so on a mismatch the diagnostic reads like `cherimoya expected ')' after the arguments in 'f(a, b)', got ';' instead`. A closing bracket or a semicolon is where the code around a mistake picks back up, so recovery never consumes one: `expect` and the NUD switch leave it for whoever is waiting for it, and `f(1, )` is one error instead of three. Rule violations, like mixing `=` and `!=`, use the `cherimoya requires <rule>, please <fix>` form and name both operators. `advance` never moves past `Eof`, so running off the end of an unclosed bracket can't walk out of the token vector. When a pack or fold goes wrong, the parser jumps forward to the matching close bracket it found while scanning, so one bad element doesn't cascade into errors for the rest of the line.
-
-## What Was Built
-
-`src/parser/ast.hpp` defines the `ExprKind` enum, the `Expr` base class, and all derived expression nodes. `src/parser/parser.hpp` implements the `Parser` class: the Pratt loop reading levels from the operator table, the NUD and LED switches, the mixing and pipe checks, the prefix `(` scan, folds, and packs with their ranges and comprehensions. `tests/unit/parser/test_parser.cpp` has 26 Catch2 test cases.
-
-The tests use an S-expression dump function (`dump`) that renders the tree as a string: `a + b * c` becomes `(+ a (* b c))`, `f(x)[0]` becomes `(index (call f x) 0)`, `a < b <= c` becomes `(chain a < b <= c)`, and `(+, 0)[x * x : x <- xs]` becomes `(fold (op +) 0 (compr (* x x) (in x xs)))`. Test cases cover literals, binding orders, associativity, prefix operators and `old`, postfix calls, indexing, member access, construction, chains and the mixing rule, extra operators, pipes, packs, ranges, comprehensions, folds, malformed parentheses, golden dumps of calls and pipes, extra operators, and pairs and packs, the diagnostics for mixed pipes, non-associative extra operators, `->` in a pack, `if (`, and an unspaced negative range end, error recovery, and span correctness. 2453 assertions across lexer and parser, 0 failures.
+`tests/unit/sema/test_sema.cpp` adds integer types, literal adaptation, integer negation, and integer conversions. `tests/run/` adds programs for every width at its limits, wrapping arithmetic including the division that overflows, unsigned comparisons and shifts, conversions that widen, narrow, and wrap, and a trap for each of overflow, an overflowing compound assignment, division by zero, an out-of-range shift, a conversion that doesn't fit, and an unsigned value past the signed maximum. 3362 unit assertions and 40 programs, 0 failures.
 
 ## Current Limitations
 
-The parser handles expressions only. There are no statements, no declarations, no `let`, no `match`, and no closures. The test harness feeds raw expression strings, so there's no way to parse a full program yet. That's commit 3.
-
-Anything that needs the type grammar waits for commit 3 too: closures (their parameters are typed), annotation like `(p :: Ord)`, and types in value position, such as `i32(x)`, `arr[mut T](n)`, and `size[i32]()`.
-
-Membership clause patterns are parsed as expressions. That covers every pattern a comprehension needs today, but patterns get their own hierarchy in commit 3.
-
-## What's Next
-
-Commit 3 adds the rest of the grammar: statements, bindings, yields, `match`, `repeat`, `chunk`, blocks, patterns, the type grammar, closures, every `type` definition, functions, modules, and attributes. After that, the full AST exists and commit 4 can start binding names and checking types.
+- **One float.** There's still one float type, and conversions between integers and floats aren't supported, until floats get the same treatment.
+- **Scope values don't pass a type in.** `let x :: i8 <- { 5 -| };` is an `int` and a mismatch, since a block's first yield doesn't know the type wanted of the block.
+- **Left shifts don't check what falls out.** Shifting left traps only when the amount is out of range, not when bits are shifted out the top.

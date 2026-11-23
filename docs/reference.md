@@ -1,4 +1,6 @@
-# Cherimoya Language Specification
+# Cherimoya Language Reference
+
+What every construct means and the rules it follows. To learn the language from the start, read [the book](book/); to see how the compiler implements it, read [the design docs](../design/).
 
 ## 0. Identity and context
 
@@ -1324,23 +1326,7 @@ The language server gives diagnostics with notes and quick fixes, semantic highl
 
 ---
 
-## 15. Compiler architecture
-
-- **Arena ownership for interned objects.** `TypeContext` owns every `SemaType` in a `vector<unique_ptr<SemaType>>`, and everything outside refers to types by raw pointer. Each distinct type exists once, so type equality is pointer equality.
-- **`SemaType` has no `Span`.** Source locations live on AST nodes.
-- **Generic instantiations** are interned by head, arguments, and type-level witnesses, so witness identity is still pointer equality.
-- **AST annotations are direct:** every `Expr` gets `SemaType* type`, identifiers, declarations, inputs, and binders get their resolved `Symbol*`, and later passes read the answers instead of recomputing them.
-- **Symbols** live in a `std::deque`, so a `Symbol*` stays valid after its lexical scope is gone. Each records one mutability per level.
-- **Lexical scopes** are sema's name-resolution scopes, separate from the grammar's scopes.
-- **The yield-target stack** holds, per entry, a kind (function, closure, loop, match, arm, block, chunk), an optional label, the loop's binder names, and the expected yield type. Every `-|` resolves against it, and codegen mirrors it.
-- **Error poisoning:** the error type fits anywhere and propagates silently.
-- **Codegen:** locals are entry-block allocas promoted by mem2reg. Every run-time check goes through one trap helper.
-- **Diagnostics** are structured (13). For the ownership passes, diagnostics are the product: plan about 30% of the effort for them.
-- **Testing** has three tiers: unit tests in C++ (`tests/unit/`), runtime basics that only a whole program can show (`tests/run/`, `tests/test/`), and feature tests in `.toya` files (`tests/features/`), which run at `-O0` and `-O3` only once the first two tiers pass.
-
----
-
-## 16. Reference examples
+## 15. Reference examples
 
 ```
 type Percent <- int {p : 0 <= p <= 100};
