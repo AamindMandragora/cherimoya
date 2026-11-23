@@ -231,6 +231,7 @@ TEST_CASE("Lexer: every keyword and built-in type lexes as its own kind", "[lexe
     CHECK(has(lexStr("mut"),K::KwMut,"mut"));
     CHECK(has(lexStr("ptr"),K::KwPtr,"ptr"));
     CHECK(has(lexStr("arr"),K::KwArr,"arr"));
+    CHECK(has(lexStr("addr"),K::KwAddr,"addr"));
     CHECK(has(lexStr("take"),K::KwTake,"take"));
     CHECK(has(lexStr("swap"),K::KwSwap,"swap"));
     CHECK(has(lexStr("replace"),K::KwReplace,"replace"));

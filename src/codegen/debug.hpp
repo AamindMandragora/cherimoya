@@ -70,6 +70,20 @@ class DebugInfo {
         } else if (auto view = asView(type)) {
             // a view in a signature is the address of what it views
             made = builder.createReferenceType(llvm::dwarf::DW_TAG_reference_type, typeOf(view->viewed), 64);
+        } else if (auto address = asAddress(type)) {
+            // an address is a number, named the way the source names it, which the embedded printers show in hex
+            llvm::DIType* number = builder.createBasicType(name, 64, llvm::dwarf::DW_ATE_unsigned);
+            if (!asHeapArray(address->named)) {
+                made = number;
+            } else {
+                // an array on the heap's address is paired with how many elements there are
+                llvm::DIType* length = builder.createBasicType("i64u", 64, llvm::dwarf::DW_ATE_unsigned);
+                auto members = builder.getOrCreateArray({
+                    builder.createMemberType(file, "address", file, 0, 64, 64, 0, llvm::DINode::FlagZero, number),
+                    builder.createMemberType(file, "len", file, 0, 64, 64, 64, llvm::DINode::FlagZero, length),
+                });
+                made = builder.createStructType(file, name, file, 0, 128, 64, llvm::DINode::FlagZero, nullptr, members);
+            }
         } else if (auto handle = asHandle(type)) {
             // a pointer is a pointer to its value, named the way the source names it, and an array on the heap is a structure of its elements' address and how many there are, which the embedded printers show as its elements
             llvm::DIType* element = typeOf(handle->element);

@@ -100,7 +100,7 @@ Anything else after a `\` is an error that lists the escapes. A `\u{...}` naming
 |---|---|
 | Declarations | `let` `type` `export` `import` |
 | Scopes | `match` `repeat` `chunk` |
-| Modes, qualifiers, handles | `unscoped` `peek` `mut` `ptr` `arr` |
+| Modes, qualifiers, handles, addresses | `unscoped` `peek` `mut` `ptr` `arr` `addr` |
 | Place intrinsics | `take` `swap` `replace` |
 | Verification | `wit` `assert` `old` |
 | Literals | `true` `false` |
@@ -213,8 +213,8 @@ In an expression, an infix `<-` is only ever construction, so it must be followe
 
 ### 2.5 Equality
 
-- **`=` and `!=` are shallow.** They compare the value a variable holds: handles compare by address (and, for arrays, length), floats compare bitwise, sums compare by tag plus shallow payload, and fixed arrays compare element by element with `=`.
-- **`==` and `!==` are deep.** They dereference recursively until no addresses remain, compare packs and records element by element, and compare arrays by length and then element by element, each element with `==`. Floats compare by value: IEEE equality for NaN-free floats, and the total order for NaN-carrying ones, so all NaNs are deep-equal to each other and `-0.0 == +0.0`.
+- **`=` and `!=` are shallow.** `=` is the weaker check, what's held, bit for bit: floats compare bitwise, sums compare by tag plus shallow payload, arrays, fixed or on the heap, compare by length and then element by element with `=`, and a pointer compares its pointee with `=`. Whether two handles are the same memory is a comparison of their addresses, `addr xs = addr ys` (2.9).
+- **`==` and `!==` are deep.** `==` is the stronger check, what a value means. It dereferences recursively until no addresses remain, compare packs and records element by element, and compare arrays by length and then element by element, each element with `==`. Floats compare by value: IEEE equality for NaN-free floats, and the total order for NaN-carrying ones, so all NaNs are deep-equal to each other and `-0.0 == +0.0`.
 - **The orderings** `<` `<=` `>` `>=` compare values, so the "or equal" in `<=` is deep equality: `a <= b` is exactly `a < b || a == b`. Nothing orders arrays.
 - **Arrays across lengths:** an `arr[T]` on the heap compares with a fixed `arr[N, T]` of the same elements by length and then each element, with the same operator, so `cmd == "go"` works on any `arr[i8u]`. Two fixed arrays of different lengths are different types, which don't compare.
 - **Characters and integers:** a value's bits are its value, so `==` agrees with `=`.
@@ -324,7 +324,8 @@ let variance <- m[2] / m[0] - mean * mean;
 - **Slicing:** `xs[a, ..., <b]` costs O(1): one bounds check at creation, and the result is always a `peek` view. Strided slices produce a separate strided-view type.
 - **Dereference:** `p[]` reads the pointee, and `p[] <- v;` writes through the pointer, which needs `ptr[mut T]`. `p <- q;` rebinds the pointer itself, which needs `mut ptr[T]`.
 - **Field access through pointers** auto-dereferences: `p.x`.
-- **Address-of is type-directed.** Where a `peek T` is expected and a `T` place is supplied, a view is taken automatically, and a `ptr[T]` passed where a `peek T` is expected becomes a view. An `arr[N, T]` converts to a `peek arr[T]` view for free, and is lent the same way to an input that borrows an `arr[T]`, so `(s :: arr[i8u])` takes a string of any length. There is no address-of operator.
+- **Address-of is type-directed.** Where a `peek T` is expected and a `T` place is supplied, a view is taken automatically, and a `ptr[T]` passed where a `peek T` is expected becomes a view. An `arr[N, T]` converts to a `peek arr[T]` view for free, and is lent the same way to an input that borrows an `arr[T]`, so `(s :: arr[i8u])` takes a string of any length. Taking a view never needs an address-of operator, and `addr` is for identity, not for reaching a place.
+- **Addresses:** `addr x` is the address of a place, an `addr[T]`, which says whether two places are the same one and orders them, `addr xs = addr ys`, `addr a < addr b`. A handle's address is what it holds, an array's elements and how many there are, `addr[arr[T]]`, or what a pointer points at, through every pointer, so an address never names a pointer. It can't be read or written through, has no arithmetic, and doesn't convert to an integer outside `std.unsafe`. It's checked like a view (4.7): it can't outlive what it names, so two equal addresses always name the same memory, it's never `mut`, and a function yields one only of its inputs. `==` on addresses is `=`, and an array's compares and orders by address and then length.
 - **Raw pointers:** `Raw[T]` in `std.unsafe` is a non-owning pointer with no drop glue. The unsafe-tier intrinsics that convert between pointers and integer addresses (for MMIO and page tables) produce and consume `Raw[T]`, never an owning `ptr[T]`.
 
   > Open: how `Raw[T]` relates to `ptr[void]`, in FFI (11).
@@ -544,7 +545,7 @@ match {
 - `match` is an expression whose value is what its arms yield. The subject is evaluated once.
 - **Arms** are `pattern -> { body }`, with nothing between them. They're tried in order, and the first that matches runs.
 - **Guards** must be `bool`. A `boolf` is never a condition: `cherimoya requires a guard to be a bool, please compare the boolf with a cutoff, like 'x > 0.5'`, with a fix that writes the cutoff.
-- **The equality slot:** patterns compare with deep equality by default. `match (=, x)` compares shallowly, and `match (==, x)` spells the default. For floats, deep equality lets a `0.0` arm catch `-0.0`, and shallow compares bits. For strings and handles, deep compares contents and shallow compares addresses.
+- **The equality slot:** patterns compare with deep equality by default. `match (=, x)` compares shallowly, and `match (==, x)` spells the default. For floats, deep equality lets a `0.0` arm catch `-0.0`, and shallow compares bits. For strings and handles, both compare contents, deep with `==` on each element and shallow with `=`.
 
 **Patterns** (every one is written like an expression):
 
@@ -813,7 +814,9 @@ cherimoya requires 'a' to hold a value to use it, please assign it again after m
 - **Only memory going away matters.** Any number of views can read and write the same place, so aliasing writes are allowed. While a view is live, from where it's made to its last use, nothing it points into can be freed or moved: its root can't be moved, nothing its path runs through can be replaced, and nothing past where it points can be written over where what's written owns memory, including by an input that could do any of those. A view of a place itself survives that place being replaced, since it points at the place, which holds the new value. Each conflict is an error where it happens: `cherimoya requires 'grid' to stay where it is while 'e' views it, please use 'e' for the last time before this`.
 - **Return elision:** a function may yield a view, alone or inside a type such as `Option[peek T]` or `[peek A, peek B]`, when every view in it is of one of its inputs that are views. There are no lifetime annotations. At the call site, the result views every argument passed to an input that's a view, and a view of a value that isn't a place, which is gone once its statement ends, is an error.
 - **Inputs.** An input of an owning type is a view without saying so, and `peek` makes any input one, so `(n :: peek mut int)` writes its caller's `int`.
-- **Peek-like types:** a type with a peek field is itself peek-like, and so are packs containing views and closures with implicit captures. Values of peek-like types follow the same rules.
+- **Peek-like types:** a type with a peek field is itself peek-like, and so are packs containing views or addresses and closures with implicit captures. Values of peek-like types follow the same rules, so a record holding a view lives in bindings and inputs, is yielded only when its views are of the function's inputs, and is never put on the heap or inside a type that isn't peek-like.
+- **Views are second-class.** Nothing but a peek-like type holds a view, so a view never needs a name for how long it lives, and cherimoya never has lifetime annotations. Data that points at other data, like a graph, holds indices into what owns it.
+- **Only in functions.** A top-level binding lives as long as the program, while any function can free what it would view, so a view or an address is only made in a function: `cherimoya requires 'v' to be in a function to be a view, please view it where it's used, since a top-level binding lives as long as the program`.
 
 ### 4.8 Uninitialized storage
 

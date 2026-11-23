@@ -805,3 +805,27 @@ y <- arr[std.mem.A, T];
           name: (identifier))
         type: (namedType
           name: (identifier))))))
+
+================================================================================
+address types
+================================================================================
+
+let a :: addr[int] <- b;
+let c :: addr[arr[int]] <- d;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (letStatement
+    pattern: (identifier)
+    type: (addressType
+      type: (namedType
+        name: (builtinType)))
+    value: (identifier))
+  (letStatement
+    pattern: (identifier)
+    type: (addressType
+      type: (handleType
+        type: (namedType
+          name: (builtinType))))
+    value: (identifier)))

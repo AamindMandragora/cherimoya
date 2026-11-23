@@ -112,6 +112,10 @@ class Codegen {
             case SemaTypeKind::Handle:
                 if (asPointer(type)) return lowered[type] = irbuilder.getPtrTy();
                 return lowered[type] = llvm::StructType::get(context, {irbuilder.getPtrTy(), irbuilder.getInt64Ty()});
+            // an address is the place's, paired with how many elements there are when it names an array on the heap
+            case SemaTypeKind::Address:
+                if (asHeapArray(asAddress(type)->named)) return lowered[type] = llvm::StructType::get(context, {irbuilder.getPtrTy(), irbuilder.getInt64Ty()});
+                return lowered[type] = irbuilder.getPtrTy();
             case SemaTypeKind::Function: {
                 auto& function = static_cast<FunctionSemaType&>(*type);
                 std::vector<llvm::Type*> params;
@@ -223,6 +227,9 @@ class Codegen {
                 break;
             case ExprKind::Unary:
                 collectExpr(*static_cast<UnaryExpr&>(e).operand, prefix);
+                break;
+            case ExprKind::Addr:
+                collectExpr(*static_cast<AddrExpr&>(e).operand, prefix);
                 break;
             case ExprKind::Binary: {
                 auto& binary = static_cast<BinaryExpr&>(e);
@@ -454,6 +461,33 @@ class Codegen {
         return irbuilder.CreateGEP(lower(objectType), base, {irbuilder.getInt64(0), position});
     }
 
+    // the address of a place, the way addr takes it
+    llvm::Value* emitAddress(Expr& place) {
+        llvm::Value* address = placeAddress(place);
+        SemaType* type = place.type;
+        // a pointer's address is what it points at, through every pointer to a pointer
+        for (HandleSemaType* pointer = asPointer(type); pointer; pointer = asPointer(type)) {
+            address = irbuilder.CreateLoad(irbuilder.getPtrTy(), address);
+            type = pointer->element;
+        }
+        // an array on the heap's address is its elements' and how many there are, which its handle already is
+        if (asHeapArray(type)) return irbuilder.CreateLoad(lower(type), address);
+        return address;
+    }
+
+    // compares two addresses as unsigned numbers, by address and then length, where == is the same as =
+    llvm::Value* compareAddresses(TokenKind op, llvm::Value* lhs, llvm::Value* rhs) {
+        if (!lhs->getType()->isStructTy()) return intCompare(op, irbuilder.CreatePtrToInt(lhs, irbuilder.getInt64Ty()), irbuilder.CreatePtrToInt(rhs, irbuilder.getInt64Ty()), addressBits);
+        llvm::Value* left = irbuilder.CreatePtrToInt(irbuilder.CreateExtractValue(lhs, {0}), irbuilder.getInt64Ty());
+        llvm::Value* right = irbuilder.CreatePtrToInt(irbuilder.CreateExtractValue(rhs, {0}), irbuilder.getInt64Ty());
+        // a pair compares the way its two halves would as one number, the address above the length
+        llvm::Type* wide = irbuilder.getInt128Ty();
+        auto pair = [&](llvm::Value* address, llvm::Value* handle) {
+            return irbuilder.CreateOr(irbuilder.CreateShl(irbuilder.CreateZExt(address, wide), 64), irbuilder.CreateZExt(irbuilder.CreateExtractValue(handle, {1}), wide));
+        };
+        return intCompare(op, pair(left, lhs), pair(right, rhs), addressBits);
+    }
+
     // compares two arrays on the heap element by element with = or ==, once their lengths agree, stopping at the first pair that differs
     llvm::Value* compareHeapArrays(TokenKind same, llvm::Value* lhs, llvm::Value* rhs, HandleSemaType& array) {
         llvm::Type* element = lower(array.element);
@@ -528,20 +562,16 @@ class Codegen {
         return heapArray(handle, address, irbuilder.getInt64(array.size));
     }
 
-    // compares two handles: = asks whether they're the same memory, the same address, and for arrays the same length, and == compares what they hold, element by element or value against value, with ==
+    // compares two handles by what they hold, element by element or value against value, with = or == on each, the way the whole comparison asks
     llvm::Value* compareHandles(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, HandleSemaType& handle) {
         bool isNegated = op == TokenKind::Ne || op == TokenKind::NeEq;
-        bool isDeep = op == TokenKind::EqEq || op == TokenKind::NeEq;
-        bool isArray = handle.handle == HandleKind::Array;
+        TokenKind same = op == TokenKind::Eq || op == TokenKind::Ne ? TokenKind::Eq : TokenKind::EqEq;
         llvm::Value* result;
-        if (!isDeep) {
-            result = isArray ? irbuilder.CreateAnd(irbuilder.CreateICmpEQ(irbuilder.CreateExtractValue(lhs, {0}), irbuilder.CreateExtractValue(rhs, {0})), irbuilder.CreateICmpEQ(irbuilder.CreateExtractValue(lhs, {1}), irbuilder.CreateExtractValue(rhs, {1})))
-                : irbuilder.CreateICmpEQ(lhs, rhs);
-        } else if (isArray) {
-            result = compareHeapArrays(TokenKind::EqEq, lhs, rhs, handle);
+        if (handle.handle == HandleKind::Array) {
+            result = compareHeapArrays(same, lhs, rhs, handle);
         } else {
             llvm::Type* element = lower(handle.element);
-            result = compare(TokenKind::EqEq, irbuilder.CreateLoad(element, lhs), irbuilder.CreateLoad(element, rhs), handle.element);
+            result = compare(same, irbuilder.CreateLoad(element, lhs), irbuilder.CreateLoad(element, rhs), handle.element);
         }
         return isNegated ? irbuilder.CreateNot(result) : result;
     }
@@ -758,6 +788,8 @@ class Codegen {
 
     // the unsigned byte a boolf is compared as, where 0 stands for 0 and 255 for 1, so the steps compare in order
     IntSemaType boolfBits{8, false, false, "boolf"};
+    // an address compares as an unsigned number
+    IntSemaType addressBits{64, false, false, "addr"};
 
     // a boolf's product, the byte nearest a * b / 255, worked out in 16 bits, where adding 127 before dividing rounds to the nearest step, and 255 being odd means there's never a tie
     llvm::Value* boolfProduct(llvm::Value* lhs, llvm::Value* rhs) {
@@ -937,6 +969,7 @@ class Codegen {
     llvm::Value* compare(TokenKind op, llvm::Value* lhs, llvm::Value* rhs, SemaType* type) {
         if (ArraySemaType* array = asArray(type)) return compareArrays(op, lhs, rhs, *array);
         if (HandleSemaType* handle = asHandle(type)) return compareHandles(op, lhs, rhs, *handle);
+        if (asAddress(type)) return compareAddresses(op, lhs, rhs);
         if (FloatSemaType* floating = asFloat(type)) {
             if (!isFp8(*floating)) return floatCompare(op, lhs, rhs, *floating);
             if (op == TokenKind::Eq) return irbuilder.CreateICmpEQ(lhs, rhs);
@@ -1315,6 +1348,8 @@ class Codegen {
             // an annotation only told sema the value's type, so it's the value itself
             case ExprKind::Ann:
                 return emitExpr(*static_cast<AnnExpr&>(e).expr);
+            case ExprKind::Addr:
+                return emitAddress(*static_cast<AddrExpr&>(e).operand);
             // prefix operators, where ! and ~ are both a bitwise not, which on an i1 is logical not, and on a boolf's byte is 255 - x
             case ExprKind::Unary: {
                 auto& unary = static_cast<UnaryExpr&>(e);

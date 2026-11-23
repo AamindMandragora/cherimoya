@@ -535,3 +535,33 @@ h(x |> g) <| y;
             left: (identifier)
             right: (identifier))))
       right: (identifier))))
+
+================================================================================
+addresses
+================================================================================
+
+addr x;
+addr xs[0] = addr p[];
+addr a < addr b;
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (expressionStatement
+    (addressExpression
+      operand: (identifier)))
+  (expressionStatement
+    (binaryExpression
+      left: (addressExpression
+        operand: (indexExpression
+          object: (identifier)
+          index: (integer)))
+      right: (addressExpression
+        operand: (indexExpression
+          object: (identifier)))))
+  (expressionStatement
+    (chainExpression
+      operand: (addressExpression
+        operand: (identifier))
+      operand: (addressExpression
+        operand: (identifier)))))

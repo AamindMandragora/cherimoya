@@ -56,6 +56,8 @@ static std::string dumpExpr(const Expr& e) {
             return "(op " + std::string(static_cast<const OpRefExpr&>(e).op.text) + ")";
         case ExprKind::Old:
             return "(old " + dumpExpr(*static_cast<const OldExpr&>(e).operand) + ")";
+        case ExprKind::Addr:
+            return "(addr " + dumpExpr(*static_cast<const AddrExpr&>(e).operand) + ")";
         case ExprKind::Call: {
             auto& c = static_cast<const CallExpr&>(e);
             std::string s = "(call " + dumpExpr(*c.callee);
@@ -465,10 +467,10 @@ static std::string programDump(const std::string& input) {
     return s;
 }
 
-// parses input as statements up to the end and returns how many errors lexing and parsing reported
+// parses input as statements up to the end, the way the compiler does, and returns how many errors lexing and parsing reported
 static size_t stmtErrors(const std::string& input) {
     Parsing parsed(input);
-    while (!parsed.parser->atEnd()) parsed.parser->parseStmt();
+    parsed.parser->parseProgram();
     return parsed.diag.errorCount();
 }
 
@@ -520,8 +522,8 @@ TEST_CASE("Parser: associativity", "[parser]") {
     CHECK(parseDump("a * b <*> c") == "(<*> (* a b) c)");
 }
 
-// checks prefix operators and old
-TEST_CASE("Parser: prefix operators and old", "[parser]") {
+// checks prefix operators along with old and addr
+TEST_CASE("Parser: prefix operators along with old and addr", "[parser]") {
     CHECK(parseDump("-a") == "(pre:- a)");
     CHECK(parseDump("!a") == "(pre:! a)");
     CHECK(parseDump("~a") == "(pre:~ a)");
@@ -533,6 +535,12 @@ TEST_CASE("Parser: prefix operators and old", "[parser]") {
     CHECK(parseDump("old p.x") == "(old (. p x))");
     CHECK(parseDump("old a + b") == "(+ (old a) b)");
     CHECK(parseDump("node_count(g) = node_count(old g)") == "(= (call node_count g) (call node_count (old g)))");
+    CHECK(parseDump("addr x") == "(addr x)");
+    CHECK(parseDump("addr xs[0]") == "(addr (index xs 0))");
+    CHECK(parseDump("addr p[]") == "(addr (index p))");
+    CHECK(parseDump("addr a = addr b") == "(= (addr a) (addr b))");
+    CHECK(parseDump("addr a < addr b") == "(chain (addr a) < (addr b))");
+    CHECK(stmtErrors("let a :: addr[3, int] <- b;") == 1);
     CHECK(parseKind("--a") == ExprKind::Error);
 }
 
@@ -844,6 +852,8 @@ TEST_CASE("Parser: types", "[parser][type]") {
     CHECK(typeDump("Fn[F, [S, T], S]") == "(Fn F (tuple S T) S)");
     CHECK(typeDump("ptr[T]") == "(ptr T)");
     CHECK(typeDump("arr[T]") == "(arr T)");
+    CHECK(typeDump("addr[T]") == "(addr T)");
+    CHECK(typeDump("addr[arr[int]]") == "(addr (arr int))");
     CHECK(typeDump("arr[16, T]") == "(arr [16] T)");
     CHECK(typeDump("arr[A, T]") == "(arr [A] T)");
     CHECK(typeDump("arr[Chunk, mut T]") == "(arr [Chunk] (mut@elems T))");

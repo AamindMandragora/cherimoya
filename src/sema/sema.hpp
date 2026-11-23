@@ -108,6 +108,8 @@ class Sema {
     // every call that yields a view, with the paths of the arguments it could view, or nothing when one of them isn't a place, and what of its result can be written
     std::unordered_map<const Expr*, std::optional<std::vector<Path>>> viewCalls;
     std::unordered_map<const Expr*, std::vector<bool>> viewLevels;
+    // every call that yields addresses, with the paths of the places they could name, or nothing when one of them isn't a place
+    std::unordered_map<const Expr*, std::optional<std::vector<Path>>> addressCalls;
     // the inputs written as views, peek, which unlike a borrowed handle can be written whole, through to what they view
     std::unordered_set<const Symbol*> writtenViews;
     // what can go on the stack instead of the heap: every binding in a function made straight from a handle of a size known when the program compiles, with what made it, the bindings that moved or were replaced, which can't, and what's left of the first once the whole file is checked, along with the temporaries of a known size, each within stackLimit bytes
@@ -341,6 +343,7 @@ class Sema {
             // arr[N, T] is a fixed array, and arr[T] without a size, or ptr[T], is a handle to memory on the heap, where what's in brackets on a handle names an allocator, which come later
             case TypeKind::Handle: {
                 auto& handle = static_cast<const HandleType&>(t);
+                if (handle.handle.kind == TokenKind::KwAddr) return resolveAddress(handle);
                 bool isPointer = handle.handle.kind == TokenKind::KwPtr;
                 if (isPointer && handle.arg) return unsupported("allocators", t.span);
                 std::optional<uint64_t> size;
@@ -373,6 +376,18 @@ class Sema {
             default:
                 return context.semaError;
         }
+    }
+
+    // resolves an address type, addr[T], which names a place of T
+    SemaType* resolveAddress(const HandleType& handle) {
+        SemaType* named = handle.inner ? resolveType(*handle.inner) : nullptr;
+        if (named == nullptr || isPoisoned(named)) return context.semaError;
+        // a pointer's address is what it points at, so an address never names a pointer
+        if (HandleSemaType* pointer = asPointer(named)) {
+            engine.printError("cherimoya requires an address to name what a pointer points at, please write 'addr[" + pointer->element->toString() + "]'", handle.span);
+            return context.semaError;
+        }
+        return context.addressType(named);
     }
 
     // checks every refinement predicate in a type against its subject: the subject's own name on parameters, or the binder
@@ -613,6 +628,8 @@ class Sema {
                 bool isTakenOver = isUnscoped(p) && owns(type);
                 auto param = makeSymbol(p.name.text, SymbolKind::Param, type, mutabilityOf(p.type.get(), type), tokSpan(p.name), isTakenOver);
                 if (isTakenOver) facts.mustMove.insert(param);
+                // an input holding addresses names places its caller keeps where they are, so it names itself
+                if (holdsAddress(type)) facts.views[param] = {Path{param, {}}};
                 if (asView(signature->params[i])) {
                     param->isView = true;
                     facts.views[param] = {Path{param, {}}};
@@ -703,13 +720,33 @@ class Sema {
         auto& binder = static_cast<BinderPattern&>(*let.pattern);
         // a view takes the address of the place it's made from and never owns it, so nothing moves, and it can only write what that place lets be written
         std::optional<std::vector<Path>> viewed;
+        std::string name(binder.name.text);
         if (isView && let.init->kind != ExprKind::Wildcard && !isPoisoned(type)) {
             viewed = pathsOf(*let.init);
             if (!viewed) engine.printError("cherimoya requires a view to be of a place, please bind the value first and view the binding", let.init->span);
         }
+        // a top-level view or address would outlive what any function can free, so they're only made in functions
+        bool holdsAddresses = holdsAddress(type) && !isPoisoned(type);
+        if ((viewed || holdsAddresses) && owner == 0) {
+            std::string what = viewed ? "a view, please view it" : "an address, please take it";
+            engine.printError("cherimoya requires '" + name + "' to be in a function to be " + what + " where it's used, since a top-level binding lives as long as the program", let.span);
+            viewed = std::nullopt;
+            holdsAddresses = false;
+        }
+        // what an address names has to be traced to the places it was taken of
+        std::optional<std::vector<Path>> named;
+        if (holdsAddresses && let.init->kind != ExprKind::Wildcard) {
+            named = addressesOf(*let.init);
+            if (!named) engine.printError("cherimoya requires an address to be taken of a place, please take it with 'addr' where it's bound", let.init->span);
+        }
         // the binding takes what it's given, where let _ <- value binds nothing, so the value is freed with its statement, like any it discards
         if (!isView && let.init->kind != ExprKind::Wildcard) consume(*let.init);
         auto symbol = makeSymbol(binder.name.text, SymbolKind::Binding, type, mutabilityOf(let.type.get(), type), binder.span, !isView);
+        if (named) facts.views[symbol] = *named;
+        // an address names one place for as long as it's used, so it's never mut
+        if (holdsAddresses && std::find(symbol->mutability.begin(), symbol->mutability.end(), true) != symbol->mutability.end()) {
+            engine.printError("cherimoya requires '" + name + "' to be immutable, please remove 'mut', since an address names one place for as long as it's used", let.type ? let.type->span : let.span);
+        }
         if (viewed) {
             symbol->isView = true;
             facts.views[symbol] = *viewed;
@@ -721,7 +758,6 @@ class Sema {
             auto place = placeLevels(*let.init);
             for (size_t i = 0; i < levels.size(); i++) {
                 if (!levels[i] || (i < place.size() && place[i])) continue;
-                std::string name(binder.name.text);
                 engine.printError("cherimoya requires what '" + name + "' views to be mutable to write it through '" + name + "', please make it mutable or view it with 'peek'", let.init->span);
                 break;
             }
@@ -759,8 +795,7 @@ class Sema {
             case ExprKind::Identifier: {
                 const Symbol* symbol = static_cast<const IdentifierExpr&>(e).decl;
                 if (symbol == nullptr || symbol->kind == SymbolKind::Function) return std::nullopt;
-                auto viewed = facts.views.find(symbol);
-                if (viewed != facts.views.end()) return viewed->second;
+                if (symbol->isView) return facts.views.at(symbol);
                 return std::vector<Path>{Path{symbol, {}}};
             }
             case ExprKind::Index: {
@@ -780,6 +815,91 @@ class Sema {
             default:
                 return std::nullopt;
         }
+    }
+
+    // the places a value holding addresses names, which stay where they are while it's used, or nothing when they can't be traced
+    std::optional<std::vector<Path>> addressesOf(const Expr& e) {
+        switch (e.kind) {
+            case ExprKind::Ann:
+                return addressesOf(*static_cast<const AnnExpr&>(e).expr);
+            // a handle's address names a place inside it, which replacing the handle frees
+            case ExprKind::Addr: {
+                auto& operand = *static_cast<const AddrExpr&>(e).operand;
+                auto paths = pathsOf(operand);
+                if (!paths) return std::nullopt;
+                std::vector<PathStep> inside;
+                SemaType* type = operand.type;
+                for (HandleSemaType* pointer = asPointer(type); pointer; pointer = asPointer(type)) {
+                    inside.push_back(PathStep{true, std::nullopt});
+                    type = pointer->element;
+                }
+                if (asHeapArray(type)) inside.push_back(PathStep{false, std::nullopt});
+                for (auto& path : *paths) path.steps.insert(path.steps.end(), inside.begin(), inside.end());
+                return paths;
+            }
+            // a binding or an input of addresses names what it was given
+            case ExprKind::Identifier: {
+                const Symbol* symbol = static_cast<const IdentifierExpr&>(e).decl;
+                auto named = symbol ? facts.views.find(symbol) : facts.views.end();
+                if (named == facts.views.end()) return std::nullopt;
+                if (!symbol->isView || symbol->kind == SymbolKind::Param) return named->second;
+                // a view of bindings of addresses names what they name
+                std::vector<Path> through;
+                for (auto& path : named->second) {
+                    auto held = facts.views.find(path.root);
+                    if (held == facts.views.end()) return std::nullopt;
+                    through.insert(through.end(), held->second.begin(), held->second.end());
+                }
+                return through;
+            }
+            // an element of an array of addresses could be any of them, and a pointer's holds what it was made with
+            case ExprKind::Index:
+                return addressesOf(*static_cast<const IndexExpr&>(e).object);
+            // a pack of addresses names what each of its elements does
+            case ExprKind::Pack: {
+                std::vector<Path> named;
+                for (auto& element : static_cast<const PackExpr&>(e).elems) {
+                    auto paths = addressesOf(*element.value);
+                    if (!paths) return std::nullopt;
+                    named.insert(named.end(), paths->begin(), paths->end());
+                }
+                return named;
+            }
+            // a handle made from addresses names what they do
+            case ExprKind::Call:
+            case ExprKind::Pipe: {
+                if (auto made = madeFrom(e)) return made;
+                // and a call yielding addresses names what its arguments do
+                auto named = addressCalls.find(&e);
+                if (named == addressCalls.end()) return std::nullopt;
+                return named->second;
+            }
+            default:
+                return std::nullopt;
+        }
+    }
+
+    // the places a handle made by calling its type names, through what it's made from that holds addresses, or nothing for any other call
+    std::optional<std::vector<Path>> madeFrom(const Expr& e) {
+        std::vector<const Expr*> sources;
+        if (e.kind == ExprKind::Call) {
+            auto& call = static_cast<const CallExpr&>(e);
+            if (call.callee->kind != ExprKind::TypeExpr) return std::nullopt;
+            for (auto& arg : call.args) sources.push_back(arg.value.get());
+        } else {
+            auto& pipe = static_cast<const PipeExpr&>(e);
+            if (pipe.rhs->kind != ExprKind::TypeExpr) return std::nullopt;
+            sources.push_back(pipe.lhs.get());
+        }
+        // a length isn't a place, so only what holds addresses is traced
+        std::vector<Path> named;
+        for (const Expr* source : sources) {
+            if (!holdsAddress(source->type)) continue;
+            auto paths = addressesOf(*source);
+            if (!paths) return std::nullopt;
+            named.insert(named.end(), paths->begin(), paths->end());
+        }
+        return named;
     }
 
     // what of a place can be written, itself first and then each level in, the way a binding's mutability says, or everything for a value that isn't a place, which is a copy nothing else sees
@@ -918,6 +1038,15 @@ class Sema {
                 return path.root->kind == SymbolKind::Param && path.root->owner == owner && (path.root->isView || (!path.root->isOwned && owns(path.root->type)));
             });
             if (!isInput) engine.printError("cherimoya requires '" + std::string(*target->label) + "' to yield a view of one of its inputs, please yield a view of one, or a copy", span);
+        } else if (y.value && target && target->kind == TargetKind::Function && holdsAddress(target->expected) && !isPoisoned(value)) {
+            // and one that yields addresses names only places its caller gave it, since the rest are gone once it returns
+            auto named = addressesOf(*y.value);
+            bool isInput = named && std::all_of(named->begin(), named->end(), [&](const Path& path) {
+                return path.root->kind == SymbolKind::Param && path.root->owner == owner && (path.root->isView || holdsAddress(path.root->type) || (!path.root->isOwned && owns(path.root->type)));
+            });
+            if (!isInput) engine.printError("cherimoya requires '" + std::string(*target->label) + "' to yield an address of one of its inputs, please yield the address of one", span);
+            // a handle holding them still moves out, like any it yields
+            consume(*y.value);
         } else if (y.value) {
             consume(*y.value);
         }
@@ -1068,6 +1197,19 @@ class Sema {
         r.body->type = context.semaVoid;
         if (r.cond) return target.yielded == context.semaError ? static_cast<SemaType*>(context.semaError) : context.semaVoid;
         return target.yielded ? target.yielded : context.semaNever;
+    }
+
+    // checks taking an address, which has to be of a place
+    SemaType* checkAddress(AddrExpr& a) {
+        SemaType* type = checkExpr(*a.operand);
+        if (isPoisoned(type)) return context.semaError;
+        if (!pathsOf(*a.operand)) {
+            engine.printError("cherimoya requires an address to be of a place, please bind the value first and take the binding's address", a.operand->span);
+            return context.semaError;
+        }
+        // a pointer's address is what it points at, through every pointer to a pointer
+        while (HandleSemaType* pointer = asPointer(type)) type = pointer->element;
+        return context.addressType(type);
     }
 
     // checks a chunk, which is checked like a block, since it only differs once it has an allocator
@@ -1476,7 +1618,7 @@ class Sema {
                     return isNumeric(side) || (op.spelling == "*" && side == context.semaBoolf);
                 case OpCategory::Comparison:
                     // a comparison is how a cutoff turns a boolf into a bool
-                    return isNumeric(side) || isCharacter(side) || side == context.semaBoolf;
+                    return isNumeric(side) || isCharacter(side) || side == context.semaBoolf || asAddress(side) != nullptr;
                 case OpCategory::Bitwise:
                     return asInt(side) != nullptr;
                 case OpCategory::Logical:
@@ -1492,7 +1634,7 @@ class Sema {
                 wanted = op.spelling == "*" ? "an int, a float, or a boolf" : "an int or a float";
                 break;
             case OpCategory::Comparison:
-                wanted = "an int, a float, a character, or a boolf";
+                wanted = "an int, a float, a character, a boolf, or an address";
                 break;
             case OpCategory::Bitwise:
                 wanted = "an int";
@@ -2005,6 +2147,7 @@ class Sema {
     // what passing each argument does: an unscoped input takes over what it's given, which moves once every argument is evaluated, so another argument can still read it first, and an input that's a view, written or, for an owning type, not, borrows it, where what it can write has to be writable where it comes from, and what it could free or move, by writing over what owns memory, is recorded for the views that point into it, and a call that yields a view views every argument it borrows
     void passArguments(Expr& call, const Symbol& function, FunctionSemaType& signature, const std::vector<Argument>& args, const std::vector<std::optional<size_t>>& slots) {
         std::vector<Path> viewed;
+        std::vector<Path> named;
         bool isViewOfPlaces = true;
         for (size_t i = 0; i < args.size(); i++) {
             if (!slots[i]) continue;
@@ -2021,6 +2164,10 @@ class Sema {
                 continue;
             }
             bool isView = asView(signature.params[*slots[i]]) != nullptr;
+            // an input holding addresses keeps what they name where it is for the call, and so does what a call yields from it
+            if (holdsAddress(type)) {
+                if (auto held = addressesOf(arg)) named.insert(named.end(), held->begin(), held->end());
+            }
             if (!isView && !owns(type)) continue;
             if (paths) {
                 viewed.insert(viewed.end(), paths->begin(), paths->end());
@@ -2051,6 +2198,11 @@ class Sema {
             if (isView && !levels.empty() && levels[0] && owns(type) && paths) {
                 for (auto& path : *paths) escaped.insert(path.root);
             }
+        }
+        // a call yielding addresses names any place it was given a view of or an address of
+        if (holdsAddress(signature.returns)) {
+            named.insert(named.end(), viewed.begin(), viewed.end());
+            addressCalls[&call] = isViewOfPlaces ? std::optional<std::vector<Path>>(named) : std::nullopt;
         }
         if (!asView(signature.returns)) return;
         viewCalls[&call] = isViewOfPlaces ? std::optional<std::vector<Path>>(viewed) : std::nullopt;
@@ -2115,6 +2267,8 @@ class Sema {
             case ExprKind::Wildcard:
                 engine.printError("cherimoya requires '_' to be a place or an initializer, please use a value here", e.span);
                 return context.semaError;
+            case ExprKind::Addr:
+                return checkAddress(static_cast<AddrExpr&>(e));
             // a negated literal is checked as a whole, since -128 fits in an i8 when 128 doesn't
             case ExprKind::Unary: {
                 auto& unary = static_cast<UnaryExpr&>(e);

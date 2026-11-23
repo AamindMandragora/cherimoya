@@ -13,6 +13,7 @@ class TypeContext {
     std::map<std::pair<SemaType*, uint64_t>, ArraySemaType*> arrayTypes;
     std::map<std::pair<HandleKind, SemaType*>, HandleSemaType*> handleTypes;
     std::map<SemaType*, ViewSemaType*> viewTypes;
+    std::map<SemaType*, AddressSemaType*> addressTypes;
 
     // takes ownership of a new type and returns a pointer to it that stays valid as long as the context does
     template <typename T, typename... Args>
@@ -113,6 +114,15 @@ public:
         if (it != viewTypes.end()) return it->second;
         auto made = make<ViewSemaType>(viewed);
         viewTypes.emplace(viewed, made);
+        return made;
+    }
+
+    // interns an address type keyed by what it names
+    AddressSemaType* addressType(SemaType* named) {
+        auto it = addressTypes.find(named);
+        if (it != addressTypes.end()) return it->second;
+        auto made = make<AddressSemaType>(named);
+        addressTypes.emplace(named, made);
         return made;
     }
 

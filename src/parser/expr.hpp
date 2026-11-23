@@ -33,6 +33,7 @@ enum class ExprKind {
     Pipe,
     OpRef,
     Old,
+    Addr,
 
     Call,
     Index,
@@ -198,6 +199,13 @@ class OldExpr : public Expr {
 public:
     std::unique_ptr<Expr> operand;
     OldExpr(std::unique_ptr<Expr> e, Span s) : Expr(ExprKind::Old, s), operand(std::move(e)) {}
+};
+
+// address expressions hold the place whose address they take, like the xs in addr xs
+class AddrExpr : public Expr {
+public:
+    std::unique_ptr<Expr> operand;
+    AddrExpr(std::unique_ptr<Expr> e, Span s) : Expr(ExprKind::Addr, s), operand(std::move(e)) {}
 };
 
 // a value that can be named: a pack's element, the x in [x <- 1.0], or an argument, the b in f(b <- 2)

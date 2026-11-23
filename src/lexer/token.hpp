@@ -18,8 +18,8 @@ enum class TokenKind {
     KwLet, KwType, KwExport, KwImport,
     // scope keywords
     KwMatch, KwRepeat, KwChunk,
-    // modes, qualifiers, and handles
-    KwUnscoped, KwPeek, KwMut, KwPtr, KwArr,
+    // modes, qualifiers, handles, and addresses
+    KwUnscoped, KwPeek, KwMut, KwPtr, KwArr, KwAddr,
     // place intrinsics
     KwTake, KwSwap, KwReplace,
     // verification keywords

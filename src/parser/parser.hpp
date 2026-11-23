@@ -69,6 +69,7 @@ class Parser {
             case ExprKind::Pipe: return "a pipe";
             case ExprKind::OpRef: return "an operator";
             case ExprKind::Old: return "an 'old' expression";
+            case ExprKind::Addr: return "an address";
             case ExprKind::Call: return "a call";
             case ExprKind::Index: return "an index";
             case ExprKind::Member: return "a field access";
@@ -426,6 +427,7 @@ class Parser {
             case TokenKind::Identifier:
             case TokenKind::KwPtr:
             case TokenKind::KwArr:
+            case TokenKind::KwAddr:
             case TokenKind::KwMut:
             case TokenKind::KwPeek:
             case TokenKind::KwUnscoped:
@@ -1006,9 +1008,12 @@ public:
 
             // handles take what they hold in brackets, like any generic, after a size or an allocator when there is one, arr[3, int] or arr[int], where a mut in front of what they hold applies to the elements
             case TokenKind::KwPtr:
-            case TokenKind::KwArr: {
+            case TokenKind::KwArr:
+            case TokenKind::KwAddr: {
                 auto handle = advance();
-                std::string shape = handle.kind == TokenKind::KwArr ? "'arr[T]' or 'arr[size, T]'" : "'ptr[T]'";
+                // an address takes only what it names, addr[int]
+                bool isAddress = handle.kind == TokenKind::KwAddr;
+                std::string shape = handle.kind == TokenKind::KwArr ? "'arr[T]' or 'arr[size, T]'" : "'" + std::string(handle.text) + "[T]'";
                 expect(TokenKind::LBracket, "'[' after '" + std::string(handle.text) + "' in " + shape);
                 std::optional<GenericArg> arg = std::nullopt;
                 std::unique_ptr<Type> inner;
@@ -1017,14 +1022,19 @@ public:
                     advance();
                     arg = std::move(first);
                     inner = parseType(false);
+                    // an address names a type and nothing else, which is still read whole, so what's after it parses
+                    if (isAddress) {
+                        engine.printError("cherimoya expected only the type the address names in 'addr[T]', got a size or an allocator too", arg->value ? arg->value->span : arg->type->span);
+                        arg = std::nullopt;
+                    }
                 } else if (first.type) {
                     inner = std::move(first.type);
                 } else {
                     Span at = first.value ? first.value->span : Span{start, prevEnd()};
-                    engine.printError("cherimoya expected a type for the handle to hold in " + shape + ", got a value instead", at);
+                    engine.printError("cherimoya expected a type for " + std::string(isAddress ? "the address to name" : "the handle to hold") + " in " + shape + ", got a value instead", at);
                     inner = std::make_unique<ErrorType>(at);
                 }
-                expect(TokenKind::RBracket, "']' after what the handle holds in " + shape);
+                expect(TokenKind::RBracket, "']' after " + std::string(isAddress ? "what the address names" : "what the handle holds") + " in " + shape);
                 if (inner->kind == TypeKind::Qualified) static_cast<QualifiedType&>(*inner).position = QualPosition::Elements;
                 type = std::make_unique<HandleType>(handle, std::move(arg), std::move(inner), Span{start, prevEnd()});
                 break;
@@ -1270,6 +1280,14 @@ public:
                 auto operand = parseExpr(bindingPower(3));
                 auto span = Span{tok.loc, operand->span.end};
                 left = std::make_unique<OldExpr>(std::move(operand), span);
+                break;
+            }
+
+            // a place's address, at the prefix operators' level too, so addr xs = addr ys compares two addresses
+            case TokenKind::KwAddr: {
+                auto operand = parseExpr(bindingPower(3));
+                auto span = Span{tok.loc, operand->span.end};
+                left = std::make_unique<AddrExpr>(std::move(operand), span);
                 break;
             }
 

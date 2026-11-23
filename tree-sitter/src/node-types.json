@@ -1,5 +1,173 @@
 [
   {
+    "type": "addressExpression",
+    "named": true,
+    "fields": {
+      "operand": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
+            "type": "annotationExpression",
+            "named": true
+          },
+          {
+            "type": "block",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "callExpression",
+            "named": true
+          },
+          {
+            "type": "character",
+            "named": true
+          },
+          {
+            "type": "chunkExpression",
+            "named": true
+          },
+          {
+            "type": "closure",
+            "named": true
+          },
+          {
+            "type": "comprehension",
+            "named": true
+          },
+          {
+            "type": "constructExpression",
+            "named": true
+          },
+          {
+            "type": "extraBinaryExpression",
+            "named": true
+          },
+          {
+            "type": "float",
+            "named": true
+          },
+          {
+            "type": "foldExpression",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "indexExpression",
+            "named": true
+          },
+          {
+            "type": "integer",
+            "named": true
+          },
+          {
+            "type": "intrinsic",
+            "named": true
+          },
+          {
+            "type": "matchExpression",
+            "named": true
+          },
+          {
+            "type": "memberExpression",
+            "named": true
+          },
+          {
+            "type": "methodExpression",
+            "named": true
+          },
+          {
+            "type": "oldExpression",
+            "named": true
+          },
+          {
+            "type": "pack",
+            "named": true
+          },
+          {
+            "type": "parenthesizedExpression",
+            "named": true
+          },
+          {
+            "type": "range",
+            "named": true
+          },
+          {
+            "type": "repeatExpression",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "typeExpression",
+            "named": true
+          },
+          {
+            "type": "unaryExpression",
+            "named": true
+          },
+          {
+            "type": "wildcard",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "addressType",
+    "named": true,
+    "fields": {
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "addressType",
+            "named": true
+          },
+          {
+            "type": "handleType",
+            "named": true
+          },
+          {
+            "type": "modeType",
+            "named": true
+          },
+          {
+            "type": "namedType",
+            "named": true
+          },
+          {
+            "type": "qualifiedType",
+            "named": true
+          },
+          {
+            "type": "recordType",
+            "named": true
+          },
+          {
+            "type": "tupleType",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "annotationExpression",
     "named": true,
     "fields": {
@@ -7,6 +175,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressType",
+            "named": true
+          },
           {
             "type": "handleType",
             "named": true
@@ -41,6 +213,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -177,6 +353,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "addressExpression",
+          "named": true
+        },
         {
           "type": "annotationExpression",
           "named": true
@@ -316,6 +496,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -821,6 +1005,10 @@
         "required": true,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -1033,6 +1221,10 @@
         "required": true,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -1232,6 +1424,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -1563,6 +1759,10 @@
       "required": false,
       "types": [
         {
+          "type": "addressExpression",
+          "named": true
+        },
+        {
           "type": "annotationExpression",
           "named": true
         },
@@ -1697,6 +1897,10 @@
         "multiple": true,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -1935,6 +2139,10 @@
         "required": true,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -2060,6 +2268,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -2341,6 +2553,10 @@
         "required": true,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -2493,6 +2709,10 @@
       "required": true,
       "types": [
         {
+          "type": "addressExpression",
+          "named": true
+        },
+        {
           "type": "annotationExpression",
           "named": true
         },
@@ -2623,6 +2843,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -3172,6 +3396,10 @@
         "required": true,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -3303,6 +3531,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -3437,6 +3669,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -3626,6 +3862,10 @@
         "required": false,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -3782,6 +4022,10 @@
         "required": false,
         "types": [
           {
+            "type": "addressType",
+            "named": true
+          },
+          {
             "type": "handleType",
             "named": true
           },
@@ -3811,6 +4055,10 @@
         "multiple": false,
         "required": false,
         "types": [
+          {
+            "type": "addressType",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -3985,6 +4233,10 @@
         "required": true,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -4120,6 +4372,10 @@
         "multiple": false,
         "required": false,
         "types": [
+          {
+            "type": "addressType",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -4277,6 +4533,10 @@
         "required": true,
         "types": [
           {
+            "type": "addressType",
+            "named": true
+          },
+          {
             "type": "handleType",
             "named": true
           },
@@ -4338,6 +4598,10 @@
         "multiple": true,
         "required": false,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -4654,6 +4918,10 @@
         "required": false,
         "types": [
           {
+            "type": "addressType",
+            "named": true
+          },
+          {
             "type": "handleType",
             "named": true
           },
@@ -4687,6 +4955,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -4939,6 +5211,10 @@
         "multiple": false,
         "required": false,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -5260,6 +5536,10 @@
         "required": true,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -5426,6 +5706,10 @@
         "required": false,
         "types": [
           {
+            "type": "addressType",
+            "named": true
+          },
+          {
             "type": "handleType",
             "named": true
           },
@@ -5520,6 +5804,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -5666,6 +5954,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -5949,6 +6241,10 @@
         "required": true,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -6082,6 +6378,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "addressExpression",
+          "named": true
+        },
         {
           "type": "annotationExpression",
           "named": true
@@ -6293,6 +6593,10 @@
         "required": false,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -6433,6 +6737,10 @@
         "required": false,
         "types": [
           {
+            "type": "addressType",
+            "named": true
+          },
+          {
             "type": "handleType",
             "named": true
           },
@@ -6487,6 +6795,10 @@
       "multiple": false,
       "required": true,
       "types": [
+        {
+          "type": "addressExpression",
+          "named": true
+        },
         {
           "type": "annotationExpression",
           "named": true
@@ -6690,6 +7002,10 @@
         "required": true,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -6833,6 +7149,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -6995,6 +7315,10 @@
         "required": false,
         "types": [
           {
+            "type": "addressType",
+            "named": true
+          },
+          {
             "type": "handleType",
             "named": true
           },
@@ -7030,6 +7354,10 @@
         "multiple": false,
         "required": false,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -7165,6 +7493,10 @@
         "required": false,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -7298,6 +7630,10 @@
         "multiple": false,
         "required": false,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -7435,6 +7771,10 @@
         "required": false,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -7569,6 +7909,10 @@
         "required": false,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -7702,6 +8046,10 @@
         "multiple": false,
         "required": false,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -7849,6 +8197,10 @@
         "required": true,
         "types": [
           {
+            "type": "addressType",
+            "named": true
+          },
+          {
             "type": "handleType",
             "named": true
           },
@@ -7913,6 +8265,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -8044,6 +8400,10 @@
         "required": true,
         "types": [
           {
+            "type": "addressType",
+            "named": true
+          },
+          {
             "type": "handleType",
             "named": true
           },
@@ -8089,6 +8449,10 @@
         "multiple": false,
         "required": false,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -8219,6 +8583,10 @@
         "multiple": false,
         "required": false,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -8422,6 +8790,10 @@
         "required": false,
         "types": [
           {
+            "type": "addressExpression",
+            "named": true
+          },
+          {
             "type": "annotationExpression",
             "named": true
           },
@@ -8575,6 +8947,10 @@
         "multiple": true,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -8790,6 +9166,10 @@
       "required": false,
       "types": [
         {
+          "type": "addressType",
+          "named": true
+        },
+        {
           "type": "handleType",
           "named": true
         },
@@ -8828,6 +9208,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "addressType",
+          "named": true
+        },
         {
           "type": "annotationExpression",
           "named": true
@@ -8996,6 +9380,10 @@
         "required": true,
         "types": [
           {
+            "type": "addressType",
+            "named": true
+          },
+          {
             "type": "handleType",
             "named": true
           },
@@ -9071,6 +9459,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -9228,6 +9620,10 @@
         "required": false,
         "types": [
           {
+            "type": "addressType",
+            "named": true
+          },
+          {
             "type": "handleType",
             "named": true
           },
@@ -9354,6 +9750,10 @@
         "required": false,
         "types": [
           {
+            "type": "addressType",
+            "named": true
+          },
+          {
             "type": "handleType",
             "named": true
           },
@@ -9387,6 +9787,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -9541,6 +9945,10 @@
         "multiple": false,
         "required": false,
         "types": [
+          {
+            "type": "addressExpression",
+            "named": true
+          },
           {
             "type": "annotationExpression",
             "named": true
@@ -10315,6 +10723,10 @@
   },
   {
     "type": "^^^<-",
+    "named": false
+  },
+  {
+    "type": "addr",
     "named": false
   },
   {

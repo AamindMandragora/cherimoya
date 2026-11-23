@@ -34,7 +34,7 @@ class Printer {
     int levelOf(const Expr& e) {
         if (auto op = opOf(e)) return op->level;
         if (e.kind == ExprKind::Chain) return 10;
-        if (e.kind == ExprKind::Unary || e.kind == ExprKind::Old) return 3;
+        if (e.kind == ExprKind::Unary || e.kind == ExprKind::Old || e.kind == ExprKind::Addr) return 3;
         return 1;
     }
 
@@ -223,6 +223,8 @@ public:
             }
             case ExprKind::Old:
                 return "old " + operand(*static_cast<const OldExpr&>(e).operand, 3, depth, arrow);
+            case ExprKind::Addr:
+                return "addr " + operand(*static_cast<const AddrExpr&>(e).operand, 3, depth, arrow);
             case ExprKind::Binary:
             case ExprKind::ExtraBinary:
             case ExprKind::Pipe: {

@@ -11,6 +11,7 @@ enum class SemaTypeKind {
     Array,
     Handle,
     View,
+    Address,
     Function,
     Error
 };
@@ -183,6 +184,29 @@ inline ViewSemaType* asView(SemaType* type) {
 }
 inline SemaType* unview(SemaType* type) {
     return asView(type) ? asView(type)->viewed : type;
+}
+
+// an address names a place without reaching it, so it can only say whether two places are the same one
+class AddressSemaType : public SemaType {
+public:
+    SemaType* named;
+    AddressSemaType(SemaType* n) : SemaType(SemaTypeKind::Address), named(n) {}
+    std::string toString() const override {
+        return "addr[" + named->toString() + "]";
+    }
+};
+
+// the address type a sema type is, or null if it isn't one
+inline AddressSemaType* asAddress(SemaType* type) {
+    return type != nullptr && type->kind == SemaTypeKind::Address ? static_cast<AddressSemaType*>(type) : nullptr;
+}
+
+// whether a value holds addresses, an address or an array or a pointer holding them, which keeps the places they name where they are while it's used
+inline bool holdsAddress(SemaType* type) {
+    if (asAddress(type)) return true;
+    if (ArraySemaType* array = asArray(type)) return holdsAddress(array->element);
+    if (HandleSemaType* handle = asHandle(type)) return holdsAddress(handle->element);
+    return false;
 }
 
 // a function type is its parameters' types and the type it yields

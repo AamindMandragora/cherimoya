@@ -1,9 +1,12 @@
-# checks arrays on the heap and pointers: every way to make one, and that a length known when the program compiles makes a fixed array, indexing, len, dereferencing and writing through them, = and == on them, deep copies of a fill, moving them in and out of functions, freeing what a binding held when it's replaced, in a match, and in a loop, temporaries, a global, and the traps for an index past the end and for running out of memory
+# checks arrays on the heap and pointers
+
 # lengths the program only knows at run time, since a length it knows when it compiles makes a fixed array
 let two :: mut i64u <- 2;
 let three :: mut i64u <- 3;
 let four :: mut i64u <- 4;
+# a global array on the heap
 let table <- arr[four, mut int](7);
+# reads a borrowed array
 let (xs :: arr[int]) -> total -> (r :: int) {
     let sum :: mut <- 0;
     let i :: mut i64u <- 0;
@@ -13,6 +16,7 @@ let (xs :: arr[int]) -> total -> (r :: int) {
     }
     sum -|
 }
+# takes an array over and yields a bigger one
 let (xs :: unscoped arr[mut int]) -> grow -> (r :: arr[mut int]) {
     let given <- xs;
     let bigger <- arr[given.len() + 1, mut int](0);
@@ -23,6 +27,7 @@ let (xs :: unscoped arr[mut int]) -> grow -> (r :: arr[mut int]) {
     }
     bigger -|
 }
+# writes a borrowed array's elements
 let (xs :: arr[mut int]) -> double -> () {
     let i :: mut i64u <- 0;
     repeat (i < xs.len()) {
@@ -30,8 +35,16 @@ let (xs :: arr[mut int]) -> double -> () {
         i +<- 1;
     }
 }
+# makes an array on the heap and yields it
 let (n :: i64u) -> zeros -> (r :: arr[int]) { arr[n, int]() -| }
+# whether two borrowed arrays are the same memory
+let (a :: arr[int], b :: arr[int]) -> sameArray -> (r :: bool) { addr a = addr b -| }
+# yields the address of an input's first element
+let (xs :: arr[int]) -> head -> (r :: addr[int]) { addr xs[0] -| }
+# yields a pointer holding an address it was given
+let (a :: addr[int]) -> keep -> (r :: ptr[addr[int]]) { ptr[addr[int]](a) -| }
 
+# made with defaults
 @test
 let () -> defaults -> () {
     let xs <- arr[three, mut int]();
@@ -44,6 +57,7 @@ let () -> defaults -> () {
     assert (empty.len() = 0);
 }
 
+# a length known when the program compiles makes a fixed array
 @test
 let () -> constantLengthIsFixed -> () {
     let xs <- arr[3, int](7);
@@ -53,15 +67,17 @@ let () -> constantLengthIsFixed -> () {
     ys[1] <- 2;
     assert (ys == [1, 2]);
     let zs <- arr[2, arr[int]](arr[int]([1]));
-    assert (zs[0] == zs[1] && !(zs[0] = zs[1]));
+    assert (zs[0] = zs[1] && addr zs[0] != addr zs[1]);
 }
 
+# filled with one value
 @test
 let () -> filled -> () {
     let xs <- arr[four, int](5);
     assert (total(xs) = 20);
 }
 
+# made from a fixed array
 @test
 let () -> fromFixed -> () {
     let xs <- arr[int]([1, 2, 3]);
@@ -69,6 +85,7 @@ let () -> fromFixed -> () {
     assert (xs[2] = 3);
 }
 
+# left uninitialized and filled by index
 @test
 let () -> uninitializedFilledByIndex -> () {
     let xs <- arr[three, mut int](_);
@@ -78,12 +95,14 @@ let () -> uninitializedFilledByIndex -> () {
     assert (total(xs) = 6);
 }
 
+# made through a pipe
 @test
 let () -> madeThroughPipe -> () {
     let xs <- [1, 2, 3] |> arr[int];
     assert (xs.len() = 3);
 }
 
+# writing elements through a handle
 @test
 let () -> writeInPlace -> () {
     let xs <- arr[mut int]([1, 2, 3]);
@@ -91,6 +110,7 @@ let () -> writeInPlace -> () {
     assert (total(xs) = 12);
 }
 
+# dereferencing and writing through a pointer, and replacing one
 @test
 let () -> pointers -> () {
     let p <- ptr[mut int](5);
@@ -101,30 +121,59 @@ let () -> pointers -> () {
     assert (q[] = 2);
 }
 
+# = and == compare what handles hold, while their addresses differ
 @test
 let () -> equality -> () {
     let a <- arr[int]([1, 2]);
     let b <- arr[int]([1, 2]);
     let c <- arr[int]([1, 3]);
     let d <- arr[int]([1]);
-    assert (a == b && !(a = b));
-    assert (a !== c && a !== d);
+    assert (a = b && a == b && addr a != addr b);
+    assert (a != c && a !== c && a !== d);
     let p <- ptr[int](4);
     let q <- ptr[int](4);
-    assert (p == q && p != q);
+    assert (p = q && p == q && addr p != addr q);
+    let negative <- arr[float]([-0.0]);
+    let positive <- arr[float]([0.0]);
+    assert (negative == positive && negative != positive);
+    let n <- ptr[float](-0.0);
+    let m <- ptr[float](0.0);
+    assert (n == m && n != m);
 }
 
+# addresses of bindings, elements, and what pointers point at, held in arrays and pointers, and through functions
+@test
+let () -> addresses -> () {
+    let xs <- arr[int]([1, 2, 3]);
+    let p <- ptr[int](4);
+    let pp <- ptr[ptr[int]](ptr[int](5));
+    let n <- 5;
+    assert (addr xs = addr xs && addr xs[0] < addr xs[1] && addr xs[1] <= addr xs[2]);
+    assert (addr p = addr p[] && addr pp = addr pp[][]);
+    assert (addr n = addr n && addr n != addr p);
+    let both <- [addr n, addr p];
+    assert (both[0] = addr n && !(both[1] < both[1]));
+    assert (sameArray(xs, xs) && !sameArray(xs, arr[int]([1, 2, 3])));
+    assert (head(xs) = addr xs[0]);
+    let held <- arr[two, addr[int]](addr n);
+    let pointed <- addr xs[1] |> ptr[addr[int]];
+    assert (held[0] = held[1] && held[1] = addr n && pointed[] = addr xs[1]);
+    assert (keep(addr n)[] = addr n);
+}
+
+# a fill of handles is copied deeply
 @test
 let () -> deepCopiedFill -> () {
     let row <- arr[int]([1, 2]);
     let grid <- arr[three, mut arr[int]](row);
     assert (grid.len() = 3);
-    assert (grid[0] == grid[2] && !(grid[0] = grid[2]));
+    assert (grid[0] = grid[2] && addr grid[0] != addr grid[2]);
     assert (total(row) = 3);
     let ps <- arr[two, ptr[int]](ptr[int](8));
     assert (ps[0][] + ps[1][] = 16);
 }
 
+# handles in handles
 @test
 let () -> nested -> () {
     let q <- ptr[arr[int]](arr[int]([9, 1]));
@@ -136,6 +185,7 @@ let () -> nested -> () {
     assert (total(grid[0]) = 4);
 }
 
+# moved into a function and back out
 @test
 let () -> movedThroughUnscoped -> () {
     let xs :: mut <- arr[mut int]([1, 2, 3]);
@@ -144,12 +194,14 @@ let () -> movedThroughUnscoped -> () {
     assert (total(xs) = 6);
 }
 
+# returned from a function
 @test
 let () -> returned -> () {
     let xs <- zeros(5);
     assert (xs.len() = 5);
 }
 
+# temporaries are freed with their statement
 @test
 let () -> temporaries -> () {
     assert (total(zeros(3)) = 0);
@@ -157,6 +209,7 @@ let () -> temporaries -> () {
     _ <- arr[two, int]();
 }
 
+# moved in some arms of a match
 @test
 let () -> movedInSomeArms -> () {
     let xs <- arr[int]([1, 2]);
@@ -171,6 +224,7 @@ let () -> movedInSomeArms -> () {
     }
 }
 
+# what a binding held is freed when it's replaced in a loop
 @test
 let () -> replacedInLoop -> () {
     let xs :: mut <- arr[mut int]([1]);
@@ -182,6 +236,7 @@ let () -> replacedInLoop -> () {
     assert (xs.len() = 4);
 }
 
+# freed when a loop is left early
 @test
 let () -> leavesEarly -> () {
     let xs <- arr[int]([1, 2]);
@@ -197,12 +252,14 @@ let () -> leavesEarly -> () {
     assert (i = 3 && xs.len() = 2);
 }
 
+# a global
 @test
 let () -> global -> () {
     table[0] <- 1;
     assert (total(table) = 22);
 }
 
+# the trap for an index past the end
 @test(traps <- "index 3 is past the end of 'xs', which holds 3")
 let () -> indexPastEnd -> () {
     let xs <- arr[three, int]();
@@ -210,6 +267,7 @@ let () -> indexPastEnd -> () {
     _ <- xs[i];
 }
 
+# the trap for running out of memory
 @test(traps <- "out of memory making 'arr[n, int]()'")
 let () -> outOfMemory -> () {
     let n :: mut i64u <- 2305843009213693952;

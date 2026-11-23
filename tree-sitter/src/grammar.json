@@ -2550,6 +2550,27 @@
         }
       ]
     },
+    "_goAddr": {
+      "type": "PREC_DYNAMIC",
+      "value": 1,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "addr"
+          },
+          {
+            "type": "FIELD",
+            "name": "operand",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_goLevel2"
+            }
+          }
+        ]
+      }
+    },
     "_goExtra2Right": {
       "type": "SEQ",
       "members": [
@@ -2612,6 +2633,15 @@
           },
           "named": true,
           "value": "oldExpression"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_goAddr"
+          },
+          "named": true,
+          "value": "addressExpression"
         },
         {
           "type": "ALIAS",
@@ -4532,6 +4562,27 @@
         }
       ]
     },
+    "_stopAddr": {
+      "type": "PREC_DYNAMIC",
+      "value": 1,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "addr"
+          },
+          {
+            "type": "FIELD",
+            "name": "operand",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_stopLevel2"
+            }
+          }
+        ]
+      }
+    },
     "_stopExtra2Right": {
       "type": "SEQ",
       "members": [
@@ -4594,6 +4645,15 @@
           },
           "named": true,
           "value": "oldExpression"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_stopAddr"
+          },
+          "named": true,
+          "value": "addressExpression"
         },
         {
           "type": "ALIAS",
@@ -6509,6 +6569,15 @@
           },
           "named": true,
           "value": "oldExpression"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_stopAddr"
+          },
+          "named": true,
+          "value": "addressExpression"
         },
         {
           "type": "ALIAS",
@@ -13844,6 +13913,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "addressType"
+        },
+        {
+          "type": "SYMBOL",
           "name": "tupleType"
         },
         {
@@ -14301,6 +14374,31 @@
         }
       ]
     },
+    "addressType": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "addr"
+        },
+        {
+          "type": "STRING",
+          "value": "["
+        },
+        {
+          "type": "FIELD",
+          "name": "type",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_unrefinedType"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "]"
+        }
+      ]
+    },
     "tupleType": {
       "type": "SEQ",
       "members": [
@@ -14535,6 +14633,10 @@
               },
               {
                 "type": "SYMBOL",
+                "name": "addressType"
+              },
+              {
+                "type": "SYMBOL",
                 "name": "tupleType"
               },
               {
@@ -14615,6 +14717,14 @@
       "_goAtom",
       "parameter",
       "_parenthesizedPlace"
+    ],
+    [
+      "_goAtom",
+      "_bareNamedType"
+    ],
+    [
+      "pack",
+      "tupleType"
     ],
     [
       "_patternBase",
@@ -14797,6 +14907,10 @@
       {
         "type": "STRING",
         "value": "arr"
+      },
+      {
+        "type": "STRING",
+        "value": "addr"
       },
       {
         "type": "STRING",

@@ -117,7 +117,7 @@ const BINARY_LEVELS = [2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const KEYWORDS = [
   'let', 'type', 'export', 'import',
   'match', 'repeat', 'chunk',
-  'unscoped', 'peek', 'mut', 'ptr', 'arr',
+  'unscoped', 'peek', 'mut', 'ptr', 'arr', 'addr',
   'take', 'swap', 'replace',
   'wit', 'assert', 'old',
   'true', 'false',
@@ -139,7 +139,7 @@ const FAMILIES = [
   {name: 'go', base: 'go', isStop: false, excluded: ['conversion', 'calledPath']},
   {name: 'stop', base: 'stop', isStop: true, excluded: ['plainClosure', 'conversion', 'calledPath']},
   {name: 'lead', base: 'stop', isStop: true, excluded: ['plainClosure', 'scope', 'conversion', 'calledPath']},
-  {name: 'argument', base: 'go', isStop: false, excluded: ['type', 'bracket']},
+  {name: 'argument', base: 'go', isStop: false, excluded: ['type', 'bracket', 'address']},
 ];
 
 // what an expression can start with, cheri's null denotations, each tagged with what a family might leave out, where a name can come after the token that tells the scanner an expression starts there, so it can report if (
@@ -208,10 +208,11 @@ function expressionRules(family) {
     rules[`_${f}Construct`] = ($) => seq(field('target', ref($, `${f}Postfix`)), '<-', field('value', choice($.pack, $.range, $.comprehension)));
   }
 
-  // the prefix operators and old, whose operand is read at level 3, so it takes in postfix forms and **, and a family that only changes how an expression starts shares its base's, since these start with their own token
+  // the prefix operators, old, and addr, whose operand is read at level 3, so it takes in postfix forms and **, and a family that only changes how an expression starts shares its base's, since these start with their own token
   if (!isSpine) {
     rules[`_${f}Unary`] = ($) => seq(field('operator', choice(...PREFIX_OPERATORS)), field('operand', ref($, `${f}Level2`)));
     rules[`_${f}Old`] = ($) => seq('old', field('operand', ref($, `${f}Level2`)));
+    rules[`_${f}Addr`] = ($) => prec.dynamic(1, seq('addr', field('operand', ref($, `${f}Level2`))));
   }
 
   // each level is the level below it or an operation on this one, where a left-associative group recurses on its left, a right-associative group on its right, a non-associative group on neither, and a chain collects every comparison at once, and only groups that group the same way can sit next to each other, which is cheri's needsParens
@@ -253,7 +254,7 @@ function expressionRules(family) {
         rules[`_${f}${assoc === 'left' ? 'Left' : 'Right'}${level}`] = ($) => choice(lowerRule($), ...same.map((node) => alias(ref($, node.name), $[node.node])));
       }
     }
-    const prefixed = level === 2 ? ($) => [alias(ref($, `${b}Unary`), $.unaryExpression), alias(ref($, `${b}Old`), $.oldExpression)] : () => [];
+    const prefixed = level === 2 ? ($) => [alias(ref($, `${b}Unary`), $.unaryExpression), alias(ref($, `${b}Old`), $.oldExpression)].concat(family.excluded.includes('address') ? [] : [alias(ref($, `${b}Addr`), $.addressExpression)]) : () => [];
     rules[`_${f}Level${level}`] = ($) => choice(lowerRule($), ...prefixed($), ...nodes.map((node) => alias(ref($, node.name), $[node.node])));
     lower = level;
   }
@@ -306,6 +307,9 @@ module.exports = grammar({
     [$._parenthesizedPlace, $._goAtom],
     [$._parenthesizedPlace, $._goPostfix],
     [$._goAtom, $.parameter, $._parenthesizedPlace],
+    // addr [ starts an address of a pack or an address type, which only a generic argument reads as a type, and everywhere else is an address, as cheri reads it
+    [$._goAtom, $._bareNamedType],
+    [$.pack, $.tupleType],
     // let [ opens a function's generics or a pattern, which the ( after the ] settles, where a fallback after a generic parameter's <- reads like a named pattern element
     [$._patternBase, $.genericParameter],
     [$._goAtom, $._patternBase, $.genericParameter],
@@ -801,6 +805,7 @@ module.exports = grammar({
       $.modeType,
       $.qualifiedType,
       $.handleType,
+      $.addressType,
       $.tupleType,
       $.recordType,
     ),
@@ -850,6 +855,9 @@ module.exports = grammar({
     // ptr or arr, then in brackets what it holds, after a size or an allocator when there is one: arr[16, T], arr[Chunk, T], arr[T], ptr[T]
     handleType: ($) => seq(field('handle', choice('ptr', 'arr')), '[', optional(seq(field('argument', $._genericArgument), ',')), field('type', $._unrefinedType), ']'),
 
+    // an address type names the type of the place it's the address of: addr[int]
+    addressType: ($) => seq('addr', '[', field('type', $._unrefinedType), ']'),
+
     // [int, f64]
     tupleType: ($) => seq('[', commaSeparatedTrailing($._type), ']'),
 
@@ -875,6 +883,7 @@ module.exports = grammar({
       $.modeType,
       $.qualifiedType,
       $.handleType,
+      $.addressType,
       $.tupleType,
       $.recordType,
     )), $._refinement),

@@ -542,6 +542,49 @@ TEST_CASE("Sema: views", "[sema]") {
     CHECK(semaErrors(body + "let buf :: unscoped arr[int] <- arr[k, int](); let kept <- buf; }") == 0);
     CHECK(semaErrors(body + "let buf :: unscoped arr[int] <- arr[k, int](); }") == 1);
     CHECK(semaErrors(body + "let n :: unscoped int <- 1; }") == 1);
+    // a view is only made in a function, since a top-level one would outlive what any function can free
+    CHECK(semaErrors("let g <- 1; let v :: peek <- g;") == 1);
+}
+
+// checks addresses: what they're of, their types, comparing them, and where they can go
+TEST_CASE("Sema: addresses", "[sema]") {
+    const std::string body = "let () -> f -> () { let k :: mut i64u <- 2; ";
+    // an address is of a place, and a handle's is what it holds, through every pointer
+    CHECK(symbolType(body + "let n <- 1; let a <- addr n; }", "a") == "addr[int]");
+    CHECK(symbolType(body + "let xs <- arr[k, int](); let a <- addr xs; }", "a") == "addr[arr[int]]");
+    CHECK(symbolType(body + "let p <- ptr[ptr[int]](ptr[int](1)); let a <- addr p; }", "a") == "addr[int]");
+    CHECK(symbolType(body + "let xs <- [1, 2]; let a <- addr xs[1]; }", "a") == "addr[int]");
+    CHECK(semaErrors(body + "let a <- addr 5; }") == 1);
+    CHECK(semaErrors(body + "let a :: addr[ptr[int]] <- _; }") >= 1);
+    // addresses compare and order, and nothing else
+    CHECK(semaErrors(body + "let n <- 1; let m <- 2; let same <- addr n = addr m; let less <- addr n < addr m; }") == 0);
+    CHECK(semaErrors(body + "let n <- 1; let a <- addr n + addr n; }") == 1);
+    CHECK(semaErrors(body + "let n <- 1; let xs <- arr[k, int](); let same <- addr n = addr xs; }") == 1);
+    // an address names one place for as long as it's used, so it's never mut, and never at the top
+    CHECK(semaErrors(body + "let n <- 1; let a :: mut <- addr n; }") == 1);
+    CHECK(semaErrors("let g <- 1; let a <- addr g;") == 1);
+    // nothing an address names can be freed or moved while it's used, where an array's address names its elements
+    CHECK(semaErrors(body + "let xs :: mut <- arr[k, int](); let a <- addr xs; xs <- arr[k, int](); let b <- a = a; }") == 1);
+    CHECK(semaErrors(body + "let xs :: mut <- arr[k, int](); let a <- addr xs; let b <- a = a; xs <- arr[k, int](); }") == 0);
+    CHECK(semaErrors(body + "let xs <- arr[k, int](); let a <- addr xs; let ys <- xs; let b <- a = a; }") == 1);
+    CHECK(semaErrors(body + "let x :: mut <- 1; let a <- addr x; x <- 2; let b <- a = a; }") == 0);
+    CHECK(semaErrors(body + "let ys <- arr[k, int](); let both <- [addr ys, addr ys]; let zs <- ys; let b <- both[0] = both[1]; }") == 1);
+    // a handle holding addresses names what it was made from, so nothing it names moves while it's used
+    CHECK(semaErrors(body + "let xs :: mut <- arr[k, int](); let hs <- arr[k, addr[int]](addr xs[0]); xs <- arr[k, int](); let b <- hs[0] = hs[1]; }") == 1);
+    CHECK(semaErrors(body + "let xs :: mut <- arr[k, int](); let p <- addr xs[0] |> ptr[addr[int]]; xs <- arr[k, int](); let b <- p[] = p[]; }") == 1);
+    CHECK(semaErrors(body + "let xs :: mut <- arr[k, int](); let hs <- arr[addr[int]]([addr xs[0]]); let b <- hs[0] = hs[0]; xs <- arr[k, int](); }") == 0);
+    CHECK(semaErrors(body + "let n <- 1; let hs :: mut <- arr[k, addr[int]](addr n); }") == 1);
+    CHECK(semaErrors("let g <- 1; let p <- ptr[addr[int]](addr g);") >= 1);
+    // an address goes into a function and back out only when it names one of the inputs
+    const std::string head = "let (xs :: arr[int]) -> head -> (a :: addr[int]) { addr xs[0] -| head } ";
+    CHECK(semaErrors(head + body + "let xs <- arr[k, int](); let a <- head(xs); let b <- a = a; }") == 0);
+    CHECK(semaErrors(head + body + "let xs <- arr[k, int](); let a <- head(xs); let ys <- xs; let b <- a = a; }") == 1);
+    CHECK(semaErrors("let () -> own -> (a :: addr[int]) { let n <- 1; addr n -| own }") == 1);
+    CHECK(semaErrors("let (n :: int) -> copy -> (a :: addr[int]) { addr n -| copy }") == 1);
+    CHECK(semaErrors("let (a :: addr[int]) -> same -> (r :: addr[int]) { a -| same }") == 0);
+    const std::string keep = "let (a :: addr[int]) -> keep -> (r :: ptr[addr[int]]) { ptr[addr[int]](a) -| keep } ";
+    CHECK(semaErrors(keep + body + "let xs :: mut <- arr[k, int](); let p <- keep(addr xs[0]); xs <- arr[k, int](); let b <- p[] = p[]; }") == 1);
+    CHECK(semaErrors("let () -> own -> (r :: ptr[addr[int]]) { let n <- 1; ptr[addr[int]](addr n) -| own }") == 1);
 }
 
 // checks that what sema can't check yet is reported once and poisons silently from there

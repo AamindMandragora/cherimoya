@@ -17,12 +17,13 @@ inline const std::unordered_map<std::string_view, TokenKind>& keywordTable() {
         {"match",     TokenKind::KwMatch},
         {"repeat",    TokenKind::KwRepeat},
         {"chunk",     TokenKind::KwChunk},
-        // modes, qualifiers, and handles
+        // modes, qualifiers, handles, and addresses
         {"unscoped",  TokenKind::KwUnscoped},
         {"peek",      TokenKind::KwPeek},
         {"mut",       TokenKind::KwMut},
         {"ptr",       TokenKind::KwPtr},
         {"arr",       TokenKind::KwArr},
+        {"addr",      TokenKind::KwAddr},
         // place intrinsics
         {"take",      TokenKind::KwTake},
         {"swap",      TokenKind::KwSwap},

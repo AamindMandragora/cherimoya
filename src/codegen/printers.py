@@ -146,6 +146,16 @@ class HeapArrayPrinter:
             element = (data + i).dereference()
             yield "[%d]" % i, int(element) if isByte else element
 
+# an address, as hex, with how many elements there are when it names an array on the heap
+class AddressPrinter:
+    def __init__(self, value):
+        self.value = value
+
+    def to_string(self):
+        if self.value.type.strip_typedefs().code == gdb.TYPE_CODE_STRUCT:
+            return "addr 0x%x of %d" % (int(self.value["address"]), int(self.value["len"]))
+        return "addr 0x%x" % int(self.value)
+
 # finds the printer for a value, by its type's name without const, or none for every type gdb already prints right
 def lookup(value):
     name = value.type.strip_typedefs().unqualified().name
@@ -157,6 +167,8 @@ def lookup(value):
         return RunePrinter(value)
     # a structure is named by its tag, the way C names it
     stripped = value.type.strip_typedefs().unqualified()
+    if (stripped.tag or name or "").startswith("addr["):
+        return AddressPrinter(value)
     if stripped.code == gdb.TYPE_CODE_STRUCT and (stripped.tag or "").startswith("arr["):
         data = value["data"]
         element = data.type.target().strip_typedefs().unqualified().name

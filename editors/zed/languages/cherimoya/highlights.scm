@@ -16,7 +16,7 @@
 [
   "let" "type" "export" "import"
   "match" "repeat" "chunk"
-  "unscoped" "peek" "mut" "ptr" "arr"
+  "unscoped" "peek" "mut" "ptr" "arr" "addr"
   "wit" "assert" "old"
 ] @keyword
 (intrinsic) @function.builtin

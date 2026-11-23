@@ -55,7 +55,7 @@ public:
     QualifiedType(Token q, QualPosition p, std::unique_ptr<Type> i, Span s) : Type(TypeKind::Qualified, s), qualifier(q), position(p), inner(std::move(i)) {}
 };
 
-// handles hold ptr or arr, the optional size or allocator in brackets, and the element type: arr[16, T], arr[Chunk, T], ptr[T]
+// handles hold ptr, arr, or addr, the optional size or allocator in brackets, and the element type: arr[16, T], arr[Chunk, T], ptr[T], addr[T]
 class HandleType : public Type {
 public:
     Token handle;

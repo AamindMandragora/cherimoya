@@ -123,9 +123,9 @@ class Ownership {
         return step;
     }
 
-    // whether a binding owns what it holds, which only a binding in a function does, where a view never owns anything
+    // whether a binding owns what it holds, which only a binding in a function does, where a view never owns anything, while a handle holding addresses owns its memory
     bool isOwner(const Symbol* symbol) {
-        return symbol->isOwned && owns(symbol->type) && symbol->owner != 0 && !facts.views.count(symbol);
+        return symbol->isOwned && owns(symbol->type) && symbol->owner != 0 && !symbol->isView;
     }
 
     // the owners of every scope from depth in, innermost first and last declared first, which is the order they're freed in
@@ -161,6 +161,9 @@ class Ownership {
             }
             case ExprKind::Unary:
                 expr(*static_cast<UnaryExpr&>(e).operand);
+                return;
+            case ExprKind::Addr:
+                expr(*static_cast<AddrExpr&>(e).operand);
                 return;
             case ExprKind::Binary: {
                 auto& binary = static_cast<BinaryExpr&>(e);
@@ -261,9 +264,9 @@ class Ownership {
                 if (let.pattern->kind != PatternKind::Binder) return;
                 Symbol* symbol = static_cast<BinderPattern&>(*let.pattern).decl;
                 if (symbol == nullptr) return;
-                if (facts.views.count(symbol)) {
-                    add(stepOf(Step::View, symbol, symbol->span));
-                } else if (isOwner(symbol) && !scopes.empty()) {
+                // a handle holding addresses keeps what they name in place and owns its memory too, so it's both
+                if (facts.views.count(symbol)) add(stepOf(Step::View, symbol, symbol->span));
+                if (isOwner(symbol) && !scopes.empty()) {
                     scopes.back().push_back(symbol);
                     add(stepOf(Step::Bind, symbol, symbol->span));
                 }
@@ -571,7 +574,8 @@ class Ownership {
                             if (!isHit) continue;
                             std::string root(viewed.root->name);
                             std::string name(view->name);
-                            engine.printError("cherimoya requires '" + root + "' to stay where it is while '" + name + "' views it, please use '" + name + "' for the last time before this", step.span, {{"'" + name + "' is used here, after it", use}});
+                            std::string how = view->isView ? "views it" : "holds its address";
+                            engine.printError("cherimoya requires '" + root + "' to stay where it is while '" + name + "' " + how + ", please use '" + name + "' for the last time before this", step.span, {{"'" + name + "' is used here, after it", use}});
                             break;
                         }
                     }
