@@ -39,7 +39,7 @@ No operator token contains a bracket. The language keeps keywords to a minimum.
 - Source is UTF-8. A byte-order mark is an error.
 - A non-ASCII character outside a literal is an error, and so is any character no token starts with, and reading carries on past each one.
 
-**Comments** start with `#` and run to the end of the line. There are no block comments. Comments are kept for the formatter and for documentation (14.3).
+**Comments** start with `#` and run to the end of the line, and a `##` comment documents every declaration below it at its level, up to a blank line. There are no block comments. Comments are kept for the formatter and for documentation (14.3).
 
 **Every operator** has a spelling, a category (flow, arithmetic, bitwise, logical, comparison, equality, pipe, compound, extra), whether it can be overloaded, its binary level, its prefix level, its associativity (none, left, right, or chain), and, for a compound, its base operator.
 
@@ -1320,7 +1320,7 @@ Either works at any optimization level. Names are the source's: `clamp`, `outer.
 
 ### 14.3 Editors
 
-The language server gives diagnostics with notes and quick fixes, semantic highlighting (immutable names marked readonly), hover, definition, references, rename (refusing clashes and changes of meaning), an outline, completion ranked by the expected type, signature help, inlay hints (inferred types, input names, pipe steps, the names of long scopes), documentation from comments, and a Run test lens on every test. A name's documentation is the run of comments directly above its declaration, or the comment at the end of its line, rendered as markdown. Clients exist for VS Code, Emacs (eglot and lsp-mode), and Zed, and a tree-sitter grammar reads programs exactly as `cheri` does.
+The language server gives diagnostics with notes and quick fixes, semantic highlighting (immutable names marked readonly), hover, definition, references, rename (refusing clashes and changes of meaning), an outline, completion ranked by the expected type, signature help, inlay hints (inferred types, input names, pipe steps, the names of long scopes), documentation from comments, and a Run test lens on every test. A name's documentation is every `##` above its declaration at its level up to a blank line, then the run of `#` comments directly above it, reaching over its attributes, then the comment at the end of its line, rendered as markdown, and hovering an attribute like `@test` says what it does. Clients exist for VS Code, Emacs (eglot and lsp-mode), and Zed, and a tree-sitter grammar reads programs exactly as `cheri` does.
 
 ---
 

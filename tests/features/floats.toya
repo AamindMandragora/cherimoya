@@ -1,14 +1,25 @@
-# checks float arithmetic in several widths, literals in other bases, integer literals standing for floats, conversions between floats and to and from integers, the total order on a NaN-carrying float, matches on floats, and the traps for NaNs and values that don't fit
+# checks floats
+
+# converts a half to a brain float
 let (x :: f16) -> toBrain -> (r :: f16e8m7) { f16e8m7(x) -| }
+# converts an unsigned integer to an f32
 let (x :: i8u) -> toSingle -> (r :: f32) { f32(x) -| }
+# converts an int, which can be past what a half holds
 let (x :: int) -> toHalf -> (r :: f16) { f16(x) -| }
+# narrows an f32 to a half
 let (x :: f32) -> toHalfFloat -> (r :: f16) { f16(x) -| }
+# converts a half to an int, which can be past what it holds
 let (x :: f16) -> narrowHalf -> (r :: i32) { i32(x) -| }
+# converts a NaN-carrying float to a float that can't hold a NaN
 let (x :: f64n) -> strict -> (r :: f64) { f64(x / x) -| }
+# yields a NaN-carrying float as it is
 let (x :: f64n) -> same -> (r :: f64n) { x -| }
+# divides on a float that can't hold a NaN
 let (x :: f64) -> broken -> (r :: f64) { x / x -| }
+# converts a float to an i8, which can be past what it holds
 let (x :: f64) -> narrow -> (r :: i8) { i8(x) -| }
 
+# arithmetic on an f32, with integer literals standing for floats
 @test
 let () -> singleArithmetic -> () {
     let a :: f32 <- 1.5;
@@ -16,24 +27,28 @@ let () -> singleArithmetic -> () {
     assert (b == 3.25);
 }
 
+# a float literal in hex
 @test
 let () -> hexLiteral -> () {
     let h :: f16 <- 0x1.8;
     assert (h == 1.5);
 }
 
+# a float literal in binary, on an f128
 @test
 let () -> binaryLiteral -> () {
     let q :: f128 <- 0b10.1;
     assert (q == 2.5);
 }
 
+# arithmetic on a brain float
 @test
 let () -> brainArithmetic -> () {
     let bf :: f16e8m7 <- 3.0;
     assert (bf * 2 == 6.0);
 }
 
+# a negated integer literal standing for a float
 @test
 let () -> negatedIntegerLiteral -> () {
     let a :: f32 <- 1.5;
@@ -41,6 +56,7 @@ let () -> negatedIntegerLiteral -> () {
     assert (negative * a == -4.5);
 }
 
+# widened to an f64 and converted to an int
 @test
 let () -> widenToDouble -> () {
     let a :: f32 <- 1.5;
@@ -55,16 +71,19 @@ let () -> halfToBrain -> () {
     assert (toBrain(1.5) == 1.5);
 }
 
+# an f32 made from an unsigned integer
 @test
 let () -> fromUnsigned -> () {
     assert (toSingle(200) == 200.0);
 }
 
+# an int past what a half holds becomes infinity
 @test
 let () -> fromIntPastRange -> () {
     assert (toHalf(100000) > 65504.0);
 }
 
+# an f32 rounded to the nearest half
 @test
 let () -> singleToHalf -> () {
     assert (toHalfFloat(0.1) == 0.0999755859375);
@@ -75,16 +94,19 @@ let () -> truncatePositive -> () {
     assert (i32(2.7) = 2);
 }
 
+# converting to an integer truncates toward zero
 @test
 let () -> truncateNegative -> () {
     assert (i32(-2.7) = -2);
 }
 
+# converting into a wrapping integer saturates
 @test
 let () -> saturateHigh -> () {
     assert (i8w(1000.0) = 127);
 }
 
+# converting into a wrapping unsigned integer saturates at 0
 @test
 let () -> saturateLow -> () {
     assert (i8uw(-5.0) = 0);
@@ -95,11 +117,13 @@ let () -> truncateUnsigned -> () {
     assert (i8u(7.9) = 7);
 }
 
+# a value between -1 and 0 truncates to 0 in an unsigned integer
 @test
 let () -> truncateUnsignedAboveMinusOne -> () {
     assert (i64u(-0.5) = 0);
 }
 
+# the total order on a NaN-carrying float puts a NaN below everything
 @test
 let () -> nanBelowEverything -> () {
     let zero :: f64n <- 0.0;
@@ -109,6 +133,7 @@ let () -> nanBelowEverything -> () {
     assert (!(low < nan));
 }
 
+# a NaN is == itself
 @test
 let () -> nanEqualsItself -> () {
     let zero :: f64n <- 0.0;
@@ -116,6 +141,7 @@ let () -> nanEqualsItself -> () {
     assert (nan == nan);
 }
 
+# -0.0 is == 0.0 but not = it
 @test
 let () -> negativeZeroDeepEquals -> () {
     let zero :: f64n <- 0.0;
@@ -124,6 +150,7 @@ let () -> negativeZeroDeepEquals -> () {
     assert (!(negative = zero));
 }
 
+# a match compares with == by default, so -0.0 matches 0.0
 @test
 let () -> matchDeep -> () {
     let negative <- -0.0;
@@ -134,6 +161,7 @@ let () -> matchDeep -> () {
     assert (deep = 11);
 }
 
+# a match on = compares bits, so -0.0 doesn't match 0.0
 @test
 let () -> matchBits -> () {
     let negative <- -0.0;
@@ -144,22 +172,26 @@ let () -> matchBits -> () {
     assert (shallow = 3);
 }
 
+# the trap for converting infinity to an int
 @test(traps <- "'i32(x)' doesn't fit in i32")
 let () -> infinityToInt -> () {
     let zero :: f16 <- 0.0;
     _ <- narrowHalf(-1.0 / zero);
 }
 
+# the trap for converting a NaN to a float that can't hold one
 @test(traps <- "'f64(x / x)' is a NaN, which float can't hold")
 let () -> nanConvert -> () {
     _ <- strict(0.0);
 }
 
+# the trap for making a NaN in a float that can't hold one
 @test(traps <- "'x / x' made a NaN, which float can't hold")
 let () -> nanMade -> () {
     _ <- broken(0.0);
 }
 
+# the trap for a float that doesn't fit an int
 @test(traps <- "'i8(x)' doesn't fit in i8")
 let () -> floatToIntOutOfRange -> () {
     _ <- narrow(300.0);

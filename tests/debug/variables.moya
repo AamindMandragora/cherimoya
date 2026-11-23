@@ -1,7 +1,7 @@
 # dwarf: DW_TAG_lexical_block
 # dwarf: DW_ATE_unsigned_fixed
 # dwarf: "const int"
-# gdb: break variables.moya:46
+# gdb: break variables.moya:60
 # gdb: run
 # gdb: info locals
 # gdb: print limit
@@ -26,23 +26,37 @@
 # expect: type = int
 # expect: type = const char
 # expect: $2 = 7
-# checks that every kind of value prints right: integers, bools, characters, a boolf as its fraction, floats gdb decodes itself, the ones the embedded printers decode, an immutable binding as const, a mutable one as not, a top-level binding, and a match arm's binder only inside its arm
+# checks that every kind of value prints right in gdb
+
+# a top-level binding prints like a local one
 let limit :: i8u <- 200;
 let (n :: int) -> show -> (r :: int) {
+    # a 1-byte integer prints as a number, not a C char
     let small :: i8 <- -5;
+    # a bool prints as true or false
     let flag <- true;
+    # a character prints as its number and itself, and its type is const since it's immutable
     let letter <- 'q';
+    # a rune prints as its number and itself too
     let symbol :: rune <- '\u{3BB}';
+    # a boolf prints as its fraction
     let fuzzy :: boolf <- 0.7;
+
+    ## floats gdb decodes itself
     let half :: f16 <- 1.5;
     let single :: f32 <- 2.25;
     let double <- 3.5;
+
+    ## floats the embedded printers decode from their bits
     let tiny :: f8 <- 1.75;
     let wide :: f8e5m2n <- -0.5;
     let brain :: f16e8m7 <- 0.375;
     let quad :: f128 <- 6.125;
+
+    # a mutable binding's type isn't const
     let counter :: mut <- 0;
     counter +<- n;
+    # a match arm's binder is only in scope inside its arm
     match (n) {
         found -> { found + counter -| show }
     }

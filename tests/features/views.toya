@@ -1,11 +1,15 @@
-# checks views: reading and writing through one as the place it views, inputs that are views, written or of an owning type, a function yielding a view of one of its inputs, views of elements and of what a pointer points at, and unscoped bindings
+# checks views
+
+# writes through an input that's a view
 let (n :: peek mut int) -> bump -> () { n +<- 1; }
+# yields a view of one of its inputs
 let (a :: arr[int], b :: arr[int]) -> longest -> (r :: peek arr[int]) {
     match (a.len() >= b.len()) {
         true -> { a -| longest }
         false -> { b -| longest }
     }
 }
+# reads a borrowed array
 let (xs :: arr[int]) -> total -> (r :: int) {
     let sum :: mut <- 0;
     let i :: mut i64u <- 0;
@@ -15,9 +19,12 @@ let (xs :: arr[int]) -> total -> (r :: int) {
     }
     sum -|
 }
+# replaces what an input view of an owning type holds
 let (r :: peek mut arr[int]) -> renew -> () { r <- arr[int]([9, 9]); }
+# a length the program only knows at run time
 let two :: mut i64u <- 2;
 
+# reading through a view reads the place it views
 @test
 let () -> readThrough -> () {
     let x <- 4;
@@ -25,6 +32,7 @@ let () -> readThrough -> () {
     assert (v + 1 = 5);
 }
 
+# writing through a view writes the place it views
 @test
 let () -> writeThrough -> () {
     let x :: mut <- 1;
@@ -33,6 +41,7 @@ let () -> writeThrough -> () {
     assert (x = 11);
 }
 
+# a view input the function writes
 @test
 let () -> outParameter -> () {
     let x :: mut <- 1;
@@ -41,6 +50,7 @@ let () -> outParameter -> () {
     assert (x = 3);
 }
 
+# views of elements, written through
 @test
 let () -> elementView -> () {
     let grid <- arr[two, mut arr[mut int]](arr[two, mut int](1));
@@ -52,6 +62,7 @@ let () -> elementView -> () {
     assert (grid[0][1] = 7);
 }
 
+# a view of an element sees what replaces it
 @test
 let () -> viewSeesReplacement -> () {
     let grid <- arr[two, mut arr[mut int]](arr[two, mut int](1));
@@ -60,6 +71,7 @@ let () -> viewSeesReplacement -> () {
     assert (row.len() = 3 && row[2] = 6);
 }
 
+# a view of what a pointer points at
 @test
 let () -> pointerView -> () {
     let p <- ptr[mut int](3);
@@ -68,6 +80,7 @@ let () -> pointerView -> () {
     assert (p[] = 8);
 }
 
+# a function yielding a view of one of its inputs
 @test
 let () -> yieldsAView -> () {
     let one <- arr[int]([1]);
@@ -77,6 +90,7 @@ let () -> yieldsAView -> () {
     assert (total(longest(two, one)) = 5);
 }
 
+# an input view of an owning type, replaced whole
 @test
 let () -> writtenWhole -> () {
     let xs :: mut <- arr[int]([1]);
@@ -84,6 +98,7 @@ let () -> writtenWhole -> () {
     assert (xs == [9, 9]);
 }
 
+# an unscoped binding moved into another
 @test
 let () -> unscopedBinding -> () {
     let buf :: unscoped arr[int] <- arr[int]([4, 5]);

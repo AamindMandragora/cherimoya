@@ -1,4 +1,6 @@
-# checks boolf literals, && || ^^ ! and *, comparisons, matches, short-circuiting, conversions to and from floats, bytes, and bools, and the traps for values outside 0 to 1
+# checks boolf
+
+# matches a boolf on 0, 1, and anything else
 let (x :: boolf) -> level -> (r :: int) {
     match (x) {
         0 -> { 0 -| }
@@ -8,9 +10,12 @@ let (x :: boolf) -> level -> (r :: int) {
 }
 # divides by n, so it traps when it's called with 0
 let (n :: int) -> bad -> (x :: boolf) { boolf(f64(1 / n)) -| }
+# converts a NaN-carrying float, which can hold a NaN a boolf can't
 let (t :: f64n) -> toBoolfNan -> (x :: boolf) { boolf(t) -| }
+# converts a float, which can be outside 0 to 1
 let (t :: float) -> toBoolf -> (x :: boolf) { boolf(t) -| }
 
+# && takes the smaller side
 @test
 let () -> andIsSmaller -> () {
     let warm :: boolf <- 0.8;
@@ -19,6 +24,7 @@ let () -> andIsSmaller -> () {
     assert (both = humid);
 }
 
+# || takes the larger side
 @test
 let () -> orIsLarger -> () {
     let warm :: boolf <- 0.8;
@@ -27,6 +33,7 @@ let () -> orIsLarger -> () {
     assert (either = warm);
 }
 
+# ! takes the complement, read here as a byte
 @test
 let () -> notComplements -> () {
     let warm :: boolf <- 0.8;
@@ -34,6 +41,7 @@ let () -> notComplements -> () {
     assert (i8u(neither) = 51);
 }
 
+# * multiplies the two
 @test
 let () -> product -> () {
     let warm :: boolf <- 0.8;
@@ -42,6 +50,7 @@ let () -> product -> () {
     assert (int(i8u(product)) = 82);
 }
 
+# ^^ on boolfs, read here as a byte
 @test
 let () -> exactlyOne -> () {
     let warm :: boolf <- 0.8;
@@ -50,18 +59,21 @@ let () -> exactlyOne -> () {
     assert (i8u(exactly) = 153);
 }
 
+# made from an f32
 @test
 let () -> fromSingle -> () {
     let back <- boolf(f32(0.25));
     assert (i8u(back) = 64);
 }
 
+# made from a bool and converted to an f64
 @test
 let () -> fromBoolToDouble -> () {
     let whole <- f64(boolf(true));
     assert (whole = 1.0);
 }
 
+# compared with a float literal
 @test
 let () -> compare -> () {
     let warm :: boolf <- 0.8;
@@ -79,26 +91,31 @@ let () -> shortCircuit -> () {
     assert ((always || bad(0)) = 1);
 }
 
+# 0 matches the arm for 0
 @test
 let () -> matchZero -> () {
     assert (level(0) = 0);
 }
 
+# true matches the arm for 1
 @test
 let () -> matchTrue -> () {
     assert (level(true) = 2);
 }
 
+# a value between 0 and 1 falls to the _ arm
 @test
 let () -> matchFallback -> () {
     assert (level(0.5) = 1);
 }
 
+# the trap for a NaN
 @test(traps <- "'boolf(t)' doesn't fit in boolf")
 let () -> nanTrap -> () {
     _ <- toBoolfNan(0.0 / 0.0);
 }
 
+# the trap for a value outside 0 to 1
 @test(traps <- "'boolf(t)' doesn't fit in boolf")
 let () -> outOfRangeTrap -> () {
     _ <- toBoolf(1.5);

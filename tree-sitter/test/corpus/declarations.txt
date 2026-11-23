@@ -752,3 +752,25 @@ import [Raw] <- std.unsafe;
     module: (modulePath
       (identifier)
       (identifier))))
+
+================================================================================
+documentation comments
+================================================================================
+
+## lengths the program only knows at run time
+# the smallest
+let two <- 2;
+let three <- 3;  ## a trailing ## is a doc comment too
+
+--------------------------------------------------------------------------------
+
+(sourceFile
+  (docComment)
+  (comment)
+  (letStatement
+    pattern: (identifier)
+    value: (integer))
+  (letStatement
+    pattern: (identifier)
+    value: (integer))
+  (docComment))

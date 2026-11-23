@@ -1,8 +1,10 @@
 # exit: 3
-# checks that a binding inside a top-level loop starts over each time round, even when its initializer is a constant
+# checks that a binding inside a top-level loop starts over each time round
+
 let count :: mut <- 0;
 let total :: mut <- 0;
 repeat (count < 3) {
+    # starts over even though its initializer is a constant
     let step :: mut <- 0;
     step +<- 1;
     total +<- step;

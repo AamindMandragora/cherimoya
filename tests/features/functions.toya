@@ -1,42 +1,54 @@
-# checks calls with parameters, named arguments in any order, defaults that read the inputs before them, a default that calls its own function, pipes into calls with the rest of the arguments, and that arguments run in the order they're written
+# checks calls
+
+# its defaults read the inputs before them
 let (a :: int, b :: int <- a * 2, c :: int <- a + b) -> sum -> (r :: int) { a + b + c -| }
+# its default calls the function itself
 let (n :: int, m :: int <- inc(n, 1)) -> inc -> (r :: int) { n + m -| }
+# yields only b, but both its arguments still run
 let (a :: i8, b :: int) -> pick -> (r :: int) { b -| }
+## used in calls given as arguments
 let (a :: int, b :: int) -> add -> (r :: int) { a + b -| }
 let (n :: int) -> double -> (r :: int) { n * 2 -| }
 
+# every default used
 @test
 let () -> defaults -> () {
     assert (sum(1) = 6);
 }
 
+# named arguments in a different order
 @test
 let () -> reordered -> () {
     assert (sum(c <- 10, a <- 2) = 16);
 }
 
+# a positional argument and then a named one
 @test
 let () -> mixed -> () {
     assert (sum(1, b <- 5) = 12);
 }
 
+# a default that calls its own function
 @test
 let () -> recursiveDefault -> () {
     assert (inc(5) = 11);
 }
 
+# a pipe gives the first argument and the call gives the rest
 @test
 let () -> forwardPipeWithArguments -> () {
     let forward <- 3 |> sum(c <- 0);
     assert (forward = 9);
 }
 
+# a backward pipe with the rest of the arguments in the call
 @test
 let () -> backwardPipeWithArguments -> () {
     let backward <- sum(b <- 1) <| 4;
     assert (backward = 10);
 }
 
+# a pipe into a bare name, which takes its defaults
 @test
 let () -> barePipe -> () {
     let bare <- 5 |> inc;
@@ -49,6 +61,7 @@ let () -> callAsArgument -> () {
     assert (add(double(30), 1) = 61);
 }
 
+# arguments run in the order they're written, not the order of the inputs
 @test(traps <- "'1 / z' divided by zero")
 let () -> argumentOrder -> () {
     let z <- 0;

@@ -1,4 +1,6 @@
-# checks that a directory's .toya files are found in the directories under it too, and that helpers, functions without @test, aren't run as tests
+# checks that a directory's .toya files are found in the directories under it too
+
+# a helper, a function without @test, isn't run as a test
 let (n :: int) -> fails -> () { assert (n = 0); }
 
 @test

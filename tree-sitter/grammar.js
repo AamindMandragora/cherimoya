@@ -279,8 +279,8 @@ module.exports = grammar({
   // identifiers are the words keywords and type spellings are pulled out of, so i64 is a type but i64x is a name
   word: ($) => $.identifier,
 
-  // cheri skips the whitespace isspace accepts, which is ASCII only, and # comments
-  extras: ($) => [/[ \t\n\r\f\v]/, $.comment],
+  // cheri skips the whitespace isspace accepts, which is ASCII only, and # and ## comments
+  extras: ($) => [/[ \t\n\r\f\v]/, $.comment, $.docComment],
 
   // src/scanner.c lexes the operators that could split, taking the longest spelling in the table whether or not the parser can take it there, as cheri's lexer does, and lexes one the parser can't take, an operator touching another when either needs spacing, or an if before a ( where an expression starts as the invalid operator, which no rule takes, and lexes the empty token that says an attribute's name isn't followed by (, while the last four are never lexed and only tell the scanner where it is: where a yield's target can come next, where what can't be finished is, where an expression can start, and where a signature's first -> goes, which the name of a function named after an operator could touch, and which no other external token would make the scanner see, since tree-sitter only lets two parse states share a lexer when they agree on every external token, which is why the rest of the operators aren't external
   externals: ($) => [...SPLITTABLE_OPERATORS, $._invalidOperator, $._noArguments, $._yieldTargetPosition, $._neverLexed, $._expressionStart, $._signatureArrow],
@@ -336,6 +336,9 @@ module.exports = grammar({
 
     // a comment runs from # to the end of the line, and there are no block comments
     comment: (_) => token(seq('#', /[^\n]*/)),
+
+    // a ## comment documents every declaration below it at its level, up to a blank line, and outranks a # comment, which would read it too
+    docComment: (_) => token(prec(1, seq('##', /[^\n]*/))),
 
     // statements, where an expression comes first and decides between assignment, yield, and expression statement, and every declaration can sit wherever a statement can
     _statement: ($) => choice(

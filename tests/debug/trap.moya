@@ -2,11 +2,13 @@
 # gdb: backtrace
 # gdb: frame function square
 # gdb: info args
-# expect: trap at line 11: 'n * n' overflowed int
+# expect: trap at line 13: 'n * n' overflowed int
 # expect: in square (n=4294967296) at
-# expect: trap.moya:11
+# expect: trap.moya:13
 # expect: n = 4294967296
-# checks that a trap stops the program where a debugger can see it, with the backtrace reaching the line that trapped and the values that made it trap
+# checks that a trap stops the program where a debugger can see it
+
+# the backtrace reaches the line that trapped, with the input that made it trap
 let (n :: int) -> square -> (r :: int) {
     n * n -|
 }

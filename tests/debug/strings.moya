@@ -1,4 +1,4 @@
-# gdb: break strings.moya:28
+# gdb: break strings.moya:36
 # gdb: run
 # gdb: print word
 # gdb: print greeting
@@ -14,16 +14,24 @@
 # expect: $5 = {104, 105}
 # expect: $6 = U"héllo"
 # expect: $7 = arr[char] of 2 = "go"
-# checks that each kind of string shows as cherimoya writes it, on the heap or not, with cherimoya's escapes: chars as their text, runes as theirs after a U, and bytes as their numbers then the text they spell, while bytes that aren't valid UTF-8, or that are signed, show only their numbers
+# checks that each kind of string shows in gdb the way cherimoya writes it
+
+# bytes show as their numbers then the text they spell, with cherimoya's escapes
 let greeting <- "hé\n";
 let () -> start -> (code :: int) {
+    # chars show as their text
     let word <- "abc";
     let k :: mut i64u <- 2;
+    # bytes on the heap spell their text too
     let made <- arr[k, mut i8u](103);
     made[1] <- 111;
+    # bytes that aren't valid UTF-8 show only their numbers
     let bytes :: arr[2, i8u] <- [255, 1];
+    # signed bytes show only their numbers too
     let offsets :: arr[2, i8] <- [104, 105];
+    # runes show as their text after a U
     let runes :: arr[5, rune] <- "héllo";
+    # chars on the heap show as their text too
     let chars <- arr[char](made);
     int(word.len() + made.len() + runes.len() + chars.len()) + int(bytes[0]) + int(offsets[0]) -|
 }

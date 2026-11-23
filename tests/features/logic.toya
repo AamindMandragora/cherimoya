@@ -1,27 +1,33 @@
-# checks && || and ^^ on bools, their compound assignments on bools and boolfs, and that && and || skip their right side, and &&<- and ||<- their value, once the answer is decided
+# checks bool logic and its compound assignments
+
+# takes a remainder by n, so it traps when it's called with 0
 let (n :: int) -> divides -> (r :: bool) { 84 % n = 0 -| }
-# each divides by n, so it traps when it's called with 0
+## each divides by n, so it traps when it's called with 0
 let (n :: int) -> bad -> (b :: bool) { 1 / n = 1 -| }
 let (n :: int) -> badf -> (x :: boolf) { boolf(f64(1 / n)) -| }
 
+# && doesn't run its right side once its left is false
 @test
 let () -> andSkipsRight -> () {
     let a <- false && divides(0);
     assert (!a);
 }
 
+# || doesn't run its right side once its left is true
 @test
 let () -> orSkipsRight -> () {
     let b <- true || divides(0);
     assert (b);
 }
 
+# ^^ on bools
 @test
 let () -> exclusiveOr -> () {
     let c <- true ^^ false;
     assert (c);
 }
 
+# &&<- doesn't run its value once the binding is false
 @test
 let () -> andAssignSkips -> () {
     let ok :: mut <- false;
@@ -29,6 +35,7 @@ let () -> andAssignSkips -> () {
     assert (!ok);
 }
 
+# ||<- on bools
 @test
 let () -> orAssign -> () {
     let ok :: mut <- false;
@@ -36,6 +43,7 @@ let () -> orAssign -> () {
     assert (ok);
 }
 
+# ||<- doesn't run its value once the binding is true
 @test
 let () -> orAssignSkips -> () {
     let ok :: mut <- true;
@@ -43,6 +51,7 @@ let () -> orAssignSkips -> () {
     assert (ok);
 }
 
+# ^^<- on bools
 @test
 let () -> exclusiveOrAssign -> () {
     let ok :: mut <- true;
@@ -50,6 +59,7 @@ let () -> exclusiveOrAssign -> () {
     assert (!ok);
 }
 
+# ||<- on a boolf keeps the larger
 @test
 let () -> boolfOrAssign -> () {
     let best :: mut boolf <- 0.2;
@@ -59,6 +69,7 @@ let () -> boolfOrAssign -> () {
     assert (i8u(best) = 153);
 }
 
+# &&<- on a boolf keeps the smaller
 @test
 let () -> boolfAndAssign -> () {
     let trust :: mut boolf <- 1;
@@ -66,6 +77,7 @@ let () -> boolfAndAssign -> () {
     assert (i8u(trust) = 204);
 }
 
+# &&<- on a boolf doesn't run its value once the binding is 0
 @test
 let () -> boolfAndAssignSkips -> () {
     let none :: mut boolf <- 0;
@@ -73,6 +85,7 @@ let () -> boolfAndAssignSkips -> () {
     assert (i8u(none) = 0);
 }
 
+# ||<- on a boolf doesn't run its value once the binding is 1
 @test
 let () -> boolfOrAssignSkips -> () {
     let all :: mut boolf <- 1;
@@ -80,6 +93,7 @@ let () -> boolfOrAssignSkips -> () {
     assert (i8u(all) = 255);
 }
 
+# ^^<- on a boolf
 @test
 let () -> boolfExclusiveOrAssign -> () {
     let flip :: mut boolf <- 0.8;

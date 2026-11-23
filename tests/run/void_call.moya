@@ -1,6 +1,9 @@
 # exit: 9
-# checks calling void functions as statements, including one that returns early with a bare -| and one that yields a void call
+# checks calling void functions as statements
+
 let () -> tick -> () { }
+# returns early with a bare -|
 let () -> stop -> () { -| }
+# yields a void call
 let () -> run -> () { tick() -| }
 let () -> start -> (code :: int) { tick(); stop(); run(); 9 -| }

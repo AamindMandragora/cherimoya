@@ -14,11 +14,14 @@
 # expect: in start () at
 # expect: clamp (n=150, lo=0) at
 # expect: Value returned is $1 = 100
-# checks that functions go by their source names, that a breakpoint on one stops once its inputs are stored, that a default's function is clamp.lo<- so it doesn't catch breakpoints on clamp, and that a backtrace reaches the program's start
+# checks that gdb knows functions by their source names
+
 let limit <- 100;
+# a breakpoint on it stops once its inputs are stored, and its default's function is clamp.lo<- so it doesn't catch clamp's breakpoints
 let (n :: int, lo :: int <- 0) -> clamp -> (r :: int) {
     match { (n > limit) -> { limit -| clamp } }
     match { (n < lo) -> { lo -| clamp } }
     n -|
 }
+# a backtrace from clamp reaches the program's start
 let () -> start -> (code :: int) { clamp(150) - 100 -| }

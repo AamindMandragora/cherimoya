@@ -7,6 +7,9 @@
 # expect: twice () at
 # expect: No locals.
 # expect: in start () at
-# checks that a line table alone is enough for breakpoints by name and a backtrace with lines, though it has no variables
+# checks what gdb can do with only a line table
+
+# a breakpoint by name still works, though there are no variables
 let (n :: int) -> twice -> (r :: int) { n * 2 -| }
+# a backtrace from twice reaches here with its lines
 let () -> start -> (code :: int) { twice(21) - 42 -| }

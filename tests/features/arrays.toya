@@ -1,5 +1,8 @@
-# checks fixed arrays: literals, nested ones, a size from a constant declared after the function using it, indexing, len every way it can be called, writing elements at each level, an uninitialized array filled by index, comparing whole arrays, passing and returning them as copies, and the trap past the end
+# checks fixed arrays
+
+# a global array literal
 let primes <- [2, 3, 5, 7];
+# its size comes from a constant declared after it
 let (xs :: arr[N, int]) -> total -> (r :: int) {
     let sum :: mut <- 0;
     let i :: mut i64u <- 0;
@@ -9,17 +12,22 @@ let (xs :: arr[N, int]) -> total -> (r :: int) {
     }
     sum -|
 }
+# declared after total, which uses it for a size
 let N <- 2 + 1;
+# takes an array as a copy, writes it, and yields it
 let (xs :: arr[3, mut int]) -> bumped -> (r :: arr[3, int]) {
     xs[0] +<- 10;
     xs -|
 }
+# yields a fixed array, so a call's result can be indexed
 let () -> squares -> (r :: arr[4, i8u]) { [0, 1, 4, 9] -| }
+# indexes a local array with an index from its caller
 let (i :: i64u) -> pick -> (r :: int) {
     let xs <- [10, 20, 30];
     xs[i] -|
 }
 
+# writing an element of a nested array
 @test
 let () -> nestedWrite -> () {
     let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
@@ -28,6 +36,7 @@ let () -> nestedWrite -> () {
     assert (grid = [[1, 2, 3], [4, 5, 60]]);
 }
 
+# a compound assignment to an element
 @test
 let () -> compoundAssignElement -> () {
     let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
@@ -35,6 +44,7 @@ let () -> compoundAssignElement -> () {
     assert (grid[0] = [10, 2, 3]);
 }
 
+# writing a row copied out of a grid leaves the grid alone
 @test
 let () -> writeCopiedRow -> () {
     let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
@@ -45,11 +55,13 @@ let () -> writeCopiedRow -> () {
     assert (grid[1] = [4, 5, 60]);
 }
 
+# indexing a global
 @test
 let () -> globalIndex -> () {
     assert (primes[3] = 7);
 }
 
+# passed to a function whose size comes from a constant declared after it
 @test
 let () -> sizeFromLaterConstant -> () {
     let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
@@ -78,12 +90,14 @@ let () -> lenAsBackwardPipe -> () {
     assert ((.len <| primes) = 4);
 }
 
+# len called as a method, and its i64u converted to an int
 @test
 let () -> lenAsMethod -> () {
     assert (primes.len() = 4);
     assert (int(primes.len()) = 4);
 }
 
+# len called every way it can be, in one expression
 @test
 let () -> lenCombined -> () {
     let grid <- [[1, 2, 3], [4, 5, 6]];
@@ -91,6 +105,7 @@ let () -> lenCombined -> () {
     assert (count = 5);
 }
 
+# left uninitialized and filled by index
 @test
 let () -> uninitializedFilledByIndex -> () {
     let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
@@ -102,6 +117,7 @@ let () -> uninitializedFilledByIndex -> () {
     assert (flags[1]);
 }
 
+# = and != on whole arrays
 @test
 let () -> compareWholeArrays -> () {
     let grid :: mut <- [[1, 2, 3], [4, 5, 6]];
@@ -111,11 +127,13 @@ let () -> compareWholeArrays -> () {
     assert (grid[0] != grid[1]);
 }
 
+# == on float arrays, where 2 stands for 2.0
 @test
 let () -> compareFloatArraysDeeply -> () {
     assert ([1.5, 2] == [1.5, 2.0]);
 }
 
+# a function writing its copy leaves the original alone
 @test
 let () -> passedAsCopy -> () {
     let original <- [1, 2, 3];
@@ -124,6 +142,7 @@ let () -> passedAsCopy -> () {
     assert (copy[0] = 11);
 }
 
+# yielded from a function as a value
 @test
 let () -> returnedAsValue -> () {
     let original <- [1, 2, 3];
@@ -132,12 +151,14 @@ let () -> returnedAsValue -> () {
     assert (copy[0] + copy[1] = 13);
 }
 
+# indexing what a call yields
 @test
 let () -> indexCallResult -> () {
     assert (squares()[3] = 9);
     assert (int(squares()[3]) = 9);
 }
 
+# the trap for an index past the end
 @test(traps <- "index 7 is past the end of 'xs', which holds 3")
 let () -> indexPastEnd -> () {
     _ <- pick(7);

@@ -16,9 +16,9 @@ using llvm::json::Value;
 enum class TokenType : uint32_t { Keyword, Type, Number, String, Comment, Operator, Function, Parameter, Variable };
 inline const std::vector<std::string> tokenTypes = {"keyword", "type", "number", "string", "comment", "operator", "function", "parameter", "variable"};
 
-// the modifiers a token can have, as bits: where a name is declared, and a name that can't be assigned to, which is every binding and parameter that isn't mut
-enum TokenModifier : uint32_t { Declaration = 1, Readonly = 2 };
-inline const std::vector<std::string> tokenModifiers = {"declaration", "readonly"};
+// the modifiers a token can have, as bits: where a name is declared, a name that can't be assigned to, which is every binding and parameter that isn't mut, and a ## comment, which documents what's below it
+enum TokenModifier : uint32_t { Declaration = 1, Readonly = 2, Documentation = 4 };
+inline const std::vector<std::string> tokenModifiers = {"declaration", "readonly", "documentation"};
 
 // an offset in a document as the editor's position
 inline Value positionAt(const Document& document, size_t offset) {
@@ -119,13 +119,16 @@ inline std::string render(const Document& document, const Symbol& symbol) {
     return "let (" + inputs + ") -> " + name + " -> (" + outputs + ")";
 }
 
-// what a user wrote to document a symbol: the run of comment lines directly above its declaration, with no blank line between, then a comment at the end of the line it's declared on, as long as no other declaration sits between the two, each without its # and the space after it
+// what a user wrote to document a symbol: every ## above its declaration at its level, then the # comments right above it, then a comment at the end of the line it's declared on, each without its marks and the space after them
 inline std::string docOf(const Document& document, const Symbol& symbol) {
     std::string_view text = document.manager.text();
     auto lineOf = [&](size_t offset) { return document.lines->position(offset).line; };
-    // a comment's words, and whether it's alone on its line, with only whitespace before it
+    // a ## documents a group of declarations, where a # documents one
+    auto isGroup = [&](Span comment) { return comment.length() >= 2 && text[comment.start + 1] == '#'; };
+    // a comment's words, without its # or ## and the space after it
     auto words = [&](Span comment) {
-        std::string_view body = text.substr(comment.start + 1, comment.length() - 1);
+        size_t marks = isGroup(comment) ? 2 : 1;
+        std::string_view body = text.substr(comment.start + marks, comment.length() - marks);
         if (!body.empty() && body.front() == ' ') body.remove_prefix(1);
         while (!body.empty() && (body.back() == '\r' || body.back() == ' ')) body.remove_suffix(1);
         return std::string(body);
@@ -136,24 +139,58 @@ inline std::string docOf(const Document& document, const Symbol& symbol) {
         }
         return true;
     };
+    // the first thing on a line other than whitespace, or nothing for a blank line, which ends a run of comments
+    auto firstOn = [&](uint32_t line) {
+        for (size_t i = document.lines->offset(Position{line, 0}); i < text.size() && text[i] != '\n'; i++) {
+            if (!std::isspace(static_cast<unsigned char>(text[i]))) return text[i];
+        }
+        return '\0';
+    };
+    // a comment is at a declaration's level when every bracket opened between them closes there too, so a ## over a function isn't its locals' and one in an earlier body isn't a later declaration's
+    auto isLevelWith = [&](Span comment, size_t at) {
+        int depth = 0;
+        for (auto& token : document.tokens) {
+            if (token.loc < comment.end) continue;
+            if (token.loc >= at) break;
+            if (token.kind == TokenKind::LParen || token.kind == TokenKind::LBracket || token.kind == TokenKind::LBrace) depth++;
+            if (token.kind == TokenKind::RParen || token.kind == TokenKind::RBracket || token.kind == TokenKind::RBrace) depth--;
+            if (depth < 0) return false;
+        }
+        return depth == 0;
+    };
+    std::map<uint32_t, Span> alone;
+    for (Span comment : document.comments) {
+        if (isAlone(comment)) alone[lineOf(comment.start)] = comment;
+    }
     // a function is declared from its let, and anything else from its name
     size_t start = symbol.function ? symbol.function->span.start : symbol.span.start;
-    uint32_t wanted = lineOf(start);
-    std::vector<std::string> above;
-    const auto& comments = document.comments;
-    for (size_t i = comments.size(); i > 0; i--) {
-        Span comment = comments[i - 1];
-        if (comment.start >= start) continue;
-        uint32_t line = lineOf(comment.start);
-        if (wanted == 0 || line != wanted - 1 || !isAlone(comment)) break;
-        above.push_back(words(comment));
-        wanted = line;
+    uint32_t startLine = lineOf(start);
+    // every ## above it up to a blank line, where ## lines one after another are one comment
+    std::string groups;
+    uint32_t previous = 0;
+    for (uint32_t line = startLine; line > 0 && firstOn(line - 1) != '\0'; line--) {
+        auto found = alone.find(line - 1);
+        if (found == alone.end() || !isGroup(found->second) || !isLevelWith(found->second, start)) continue;
+        std::string piece = words(found->second);
+        groups = groups.empty() ? piece : piece + (previous == line ? "\n" : "\n\n") + groups;
+        previous = line - 1;
     }
-    std::string doc;
-    for (size_t i = above.size(); i > 0; i--) doc += (doc.empty() ? "" : "\n") + above[i - 1];
+    // the # lines right above it, reaching over its attributes, like @test
+    std::vector<std::string> above;
+    for (uint32_t line = startLine; line > 0; line--) {
+        auto found = alone.find(line - 1);
+        if (found != alone.end() && !isGroup(found->second)) {
+            above.push_back(words(found->second));
+        } else if (found != alone.end() || firstOn(line - 1) != '@') {
+            break;
+        }
+    }
+    std::string own;
+    for (size_t i = above.size(); i > 0; i--) own += (own.empty() ? "" : "\n") + above[i - 1];
+    std::string doc = groups.empty() ? own : own.empty() ? groups : groups + "\n\n" + own;
     // the trailing comment is on the name's line, after it, with no other declaration in between, so a parameter's comment isn't its function's too, where a function's own outputs and locals are part of its declaration
     uint32_t nameLine = lineOf(symbol.span.start);
-    for (Span comment : comments) {
+    for (Span comment : document.comments) {
         if (comment.start < symbol.span.end || lineOf(comment.start) != nameLine) continue;
         bool isTheirs = false;
         for (auto& use : document.sema.allUses()) {
@@ -217,7 +254,11 @@ inline Array semanticTokens(const Document& document) {
         uint32_t modifiers;
     };
     std::vector<Piece> pieces;
-    for (auto& comment : document.comments) pieces.push_back({comment, TokenType::Comment, 0});
+    std::string_view text = document.manager.text();
+    for (auto& comment : document.comments) {
+        bool isGroup = comment.length() >= 2 && text[comment.start + 1] == '#';
+        pieces.push_back({comment, TokenType::Comment, isGroup ? static_cast<uint32_t>(TokenModifier::Documentation) : 0});
+    }
     // a name is colored by what sema says it is, and a name sema couldn't resolve is just a variable
     std::map<size_t, const Use*> uses;
     for (auto& use : document.sema.allUses()) uses[use.span.start] = &use;
@@ -337,16 +378,26 @@ inline std::string builtinHelp(std::string_view word) {
     return *kind == TokenKind::TypeName ? typeHelp(word) : keywordHelp(word);
 }
 
+// what an attribute does, the name after an @, or "" for one cheri doesn't know
+inline std::string attributeHelp(std::string_view name) {
+    if (name == "test") return "Marks a function in a `.toya` file as a test, which `cheri test` runs in its own process. `traps <- \"text\"` makes it pass by trapping with a message that holds the text, and `timeout <- 5` fails it after that many seconds.";
+    return "";
+}
+
 // what a name under the cursor is, shown as its declaration in a cherimoya code block and its documentation under it, or what a built-in type or keyword means, or null where there's neither
 inline Value hover(const Document& document, size_t offset) {
     const Use* use = useAt(document, offset);
     if (use == nullptr) {
-        for (auto& token : document.tokens) {
+        for (size_t i = 0; i < document.tokens.size(); i++) {
+            auto& token = document.tokens[i];
             Span span{token.loc, token.loc + token.text.size()};
             if (span.start > offset || offset > span.end) continue;
-            std::string help = builtinHelp(token.text);
+            // a name right after an @ is an attribute, shown with its @
+            bool isAttribute = i > 0 && document.tokens[i - 1].kind == TokenKind::At && document.tokens[i - 1].loc + 1 == token.loc;
+            std::string help = isAttribute ? attributeHelp(token.text) : builtinHelp(token.text);
             if (help.empty()) continue;
-            return Object{{"contents", Object{{"kind", "markdown"}, {"value", "```cherimoya\n" + std::string(token.text) + "\n```\n" + help}}}, {"range", rangeOf(document, span)}};
+            std::string shown = (isAttribute ? "@" : "") + std::string(token.text);
+            return Object{{"contents", Object{{"kind", "markdown"}, {"value", "```cherimoya\n" + shown + "\n```\n" + help}}}, {"range", rangeOf(document, span)}};
         }
         return nullptr;
     }

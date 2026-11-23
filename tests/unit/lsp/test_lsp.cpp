@@ -104,6 +104,12 @@ TEST_CASE("LSP: semantic tokens", "[lsp]") {
     CHECK(tokenAt(offsetOf(text, "n;")) == std::make_pair(int64_t(TokenType::Parameter), int64_t(Readonly)));
     CHECK(tokenAt(offsetOf(text, "x -|")) == std::make_pair(int64_t(TokenType::Variable), int64_t(0)));
     CHECK(tokenAt(offsetOf(text, "<-")) == std::make_pair(int64_t(TokenType::Operator), int64_t(0)));
+    // a ## comment is marked as documentation
+    std::string grouped = "## a group\nlet a <- 1;";
+    Document groupedDocument("file:///t.moya", grouped);
+    auto groupedData = semanticTokens(groupedDocument);
+    CHECK(groupedData[3].getAsInteger() == static_cast<int64_t>(TokenType::Comment));
+    CHECK(groupedData[4].getAsInteger() == static_cast<int64_t>(Documentation));
 }
 
 // checks that hover shows a name as it's declared, that definition jumps there, and that references find every use
@@ -175,6 +181,46 @@ TEST_CASE("LSP: documentation comments", "[lsp]") {
     auto& parameters = *signature.getArray("parameters");
     CHECK(stringOf(*parameters[0].getAsObject()->get("documentation"), "value") == "the first");
     CHECK(parameters[1].getAsObject()->get("documentation") == nullptr);
+}
+
+// checks that a ## documents every declaration below it at its level up to a blank line, joined with the # right above each, and that a declaration's comments reach over its attributes
+TEST_CASE("LSP: group documentation comments", "[lsp]") {
+    std::string text =
+        "## lengths the program\n"
+        "## only knows at run time\n"
+        "# the smallest\n"
+        "let two <- 2;\n"
+        "let three <- 3;\n"
+        "## big enough for a table\n"
+        "let four <- 4;\n"
+        "\n"
+        "let five <- 5;\n"
+        "## helpers that read numbers\n"
+        "let (n :: int) -> twice -> (r :: int) {\n"
+        "    let doubled <- n * 2;\n"
+        "    doubled -|\n"
+        "}\n"
+        "# checks twice\n"
+        "@test\n"
+        "let () -> checks -> () { assert (twice(1) = 2); }";
+    Document document("file:///t.toya", text);
+    auto docAt = [&](size_t offset) {
+        std::string shown = stringOf(*hover(document, offset).getAsObject()->get("contents"), "value");
+        size_t end = shown.find("\n```", 3);
+        return end + 4 >= shown.size() ? std::string() : shown.substr(end + 5);
+    };
+    CHECK(docAt(offsetOf(text, "two")) == "lengths the program\nonly knows at run time\n\nthe smallest");
+    CHECK(docAt(offsetOf(text, "three")) == "lengths the program\nonly knows at run time");
+    CHECK(docAt(offsetOf(text, "four")) == "lengths the program\nonly knows at run time\n\nbig enough for a table");
+    // a blank line ends the group, and a ## over a function isn't its inputs' or its locals'
+    CHECK(docAt(offsetOf(text, "five")).empty());
+    CHECK(docAt(offsetOf(text, "twice ->")) == "helpers that read numbers");
+    CHECK(docAt(offsetOf(text, "n ::")).empty());
+    CHECK(docAt(offsetOf(text, "doubled <-")).empty());
+    // a test's comment reaches over its @test, and the group reaches over the body before it
+    CHECK(docAt(offsetOf(text, "checks ->")) == "helpers that read numbers\n\nchecks twice");
+    // an attribute has help of its own
+    CHECK(stringOf(*hover(document, offsetOf(text, "test\n")).getAsObject()->get("contents"), "value").find("```cherimoya\n@test\n```\nMarks a function") == 0);
 }
 
 // checks that a diagnostic's fixes come back as quick fixes on the range it touches, where a diagnostic's only fix is preferred and one with two choices has neither preferred

@@ -1,4 +1,6 @@
-# checks blocks and chunks and labeled yields out of them, matches with literal, negative, binder, and guard arms, functions nested in bodies, blocks, and conditions, bindings, assignment, and pipes
+# checks blocks, chunks, matches, nested functions, bindings, and pipes
+
+# matches on a literal, a negative literal, and a binder
 let (n :: int) -> classify -> (r :: int) {
     match (n) {
         0 -> { 10 -| }
@@ -6,11 +8,13 @@ let (n :: int) -> classify -> (r :: int) {
         m -> { m * 3 -| }
     } -|
 }
+# guard arms that yield out of the function early
 let (n :: int) -> clamp -> (r :: int) {
     match { (n > 100) -> { 100 -| clamp } }
     match { (n < 0) -> { 0 -| clamp } }
     n -|
 }
+# has functions nested in its body and in a block, and calls one declared after it
 let (n :: int) -> outer -> (r :: int) {
     let (x :: int) -> square -> (r :: int) { x * x -| }
     let total <- {
@@ -19,10 +23,12 @@ let (n :: int) -> outer -> (r :: int) {
     };
     square(n) + total + helper(n) -|
 }
+# its nested square doesn't clash with the one in outer
 let (x :: int) -> helper -> (r :: int) {
     let (y :: int) -> square -> (r :: int) { y + 1 -| }
     square(x) -|
 }
+# has functions nested in an assert's condition and in a match guard
 let (n :: int) -> f -> (r :: int) {
     assert ({ let () -> two -> (t :: int) { 2 -| } two() = 2 -| });
     match {
@@ -30,27 +36,32 @@ let (n :: int) -> f -> (r :: int) {
         _ -> { 0 -| f }
     }
 }
+## used by the pipes
 let (a :: int) -> succ -> (r :: int) { a + 1 -| }
 let (n :: int) -> double -> (r :: int) { n * 2 -| }
 
+# a block yields its value
 @test
 let () -> blockValue -> () {
     let x <- { let a <- 25; a * 2 -| };
     assert (x = 50);
 }
 
+# a labeled yield out of a nested block
 @test
 let () -> labeledYieldFromBlock -> () {
     let y <- { outer { { 2 -| outer } } -| };
     assert (y = 2);
 }
 
+# a chunk yields its value
 @test
 let () -> chunkValue -> () {
     let a <- chunk { 6 -| };
     assert (a = 6);
 }
 
+# a labeled yield out through a chunk
 @test
 let () -> labeledYieldThroughChunk -> () {
     let b <- { scratch { chunk { 7 -| scratch } } -| };
@@ -74,21 +85,25 @@ let () -> matchNegativeLiteral -> () {
     assert (classify(-1) = 20);
 }
 
+# a binder arm binds the value
 @test
 let () -> matchBinder -> () {
     assert (classify(6) = 18);
 }
 
+# the guard for values above 100
 @test
 let () -> guardAbove -> () {
     assert (clamp(500) = 100);
 }
 
+# the guard for values below 0
 @test
 let () -> guardBelow -> () {
     assert (clamp(-5) = 0);
 }
 
+# a match used as a value
 @test
 let () -> matchBool -> () {
     let flag <- true;
@@ -99,17 +114,20 @@ let () -> matchBool -> () {
     assert (bonus = 2);
 }
 
+# functions nested in bodies and blocks
 @test
 let () -> nestedInBody -> () {
     assert (helper(4) = 5);
     assert (outer(4) = 29);
 }
 
+# functions nested in conditions
 @test
 let () -> nestedInConditions -> () {
     assert (f(3) = 6);
 }
 
+# bindings with and without a type
 @test
 let () -> bindings -> () {
     let x <- 13;
@@ -133,6 +151,7 @@ let () -> compoundAssignment -> () {
     assert (x = 37);
 }
 
+# discarding a value with _
 @test
 let () -> discard -> () {
     let x :: mut <- 37;

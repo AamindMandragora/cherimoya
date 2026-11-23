@@ -1,33 +1,40 @@
-# checks every outcome a test can have: passing, trapping as expected, failing an assert, finishing when it should have trapped, running past its timeout, and a nested test named after the function around it
+# checks every outcome a test can have
+
 let (a :: int, b :: int) -> add -> (r :: int) { a + b -| }
 let (n :: int) -> square -> (r :: int) { n * n -| }
 
+# passes
 @test
 let () -> adds_negatives -> () {
     assert (add(-1, -2) = -3);
 }
 
+# traps as expected
 @test(traps <- "overflowed int")
 let () -> overflows -> () {
     _ <- square(4294967296);
 }
 
+# fails an assert
 @test
 let () -> wrong -> () {
     assert (add(2, 2) = 5);
 }
 
+# finishes when it should have trapped
 @test(traps <- "overflowed")
 let () -> no_trap -> () {
     _ <- square(3);
 }
 
+# runs past its timeout
 @test(timeout <- 1)
 let () -> stuck -> () {
     repeat { }
 }
 
 let () -> outer -> () {
+    # a nested test is named after the function around it
     @test
     let () -> inner -> () { assert (square(3) = 9); }
 }

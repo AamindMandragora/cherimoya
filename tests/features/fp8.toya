@@ -1,24 +1,33 @@
-# checks FP8 arithmetic in both encodings, rounding to nearest even, subnormals, overflowing into infinity, negation, conversions to and from other numbers, a NaN-carrying f8 and its order, and the traps for NaNs and overflow
+# checks FP8 floats
+
+# rounds an f32 to an f8
 let (x :: f32) -> toF8 -> (r :: f8) { f8(x) -| }
+# doubles an f8, which can overflow
 let (x :: f8) -> twice -> (r :: f8) { x * 2 -| }
+# yields a NaN-carrying f8 as it is
 let (x :: f8e4m3n) -> same -> (r :: f8e4m3n) { x -| }
+# converts a NaN-carrying float to an f8, which can't hold a NaN
 let (x :: f32n) -> strict -> (r :: f8) { f8(x / x) -| }
 
+# a tie rounds down to the even value
 @test
 let () -> roundTieToEven -> () {
     assert (toF8(17.0) == 16.0);
 }
 
+# a tie rounds up to the even value
 @test
 let () -> roundTieUpToEven -> () {
     assert (toF8(19.0) == 20.0);
 }
 
+# arithmetic on an f8
 @test
 let () -> multiply -> () {
     assert (twice(1.5) == 3.0);
 }
 
+# halving the smallest subnormal rounds to 0
 @test
 let () -> subnormalHalved -> () {
     let tiny :: f8 <- 0.001953125;
@@ -26,6 +35,7 @@ let () -> subnormalHalved -> () {
     assert (half == 0.0);
 }
 
+# the other encoding, f8e5m2, overflows into infinity
 @test
 let () -> overflowIntoInfinity -> () {
     let largest :: f8e5m2 <- 57344.0;
@@ -46,17 +56,20 @@ let () -> toInt -> () {
     assert (i32(three) == 3);
 }
 
+# a subnormal converted to an f64
 @test
 let () -> toDouble -> () {
     let tiny :: f8 <- 0.001953125;
     assert (f64(tiny) == 0.001953125);
 }
 
+# made from an int
 @test
 let () -> fromInt -> () {
     assert (f8(7) == 7.0);
 }
 
+# the order on a NaN-carrying f8 puts a NaN below everything
 @test
 let () -> nanBelowEverything -> () {
     let zero :: f8e4m3n <- 0.0;
@@ -65,6 +78,7 @@ let () -> nanBelowEverything -> () {
     assert (nan < low);
 }
 
+# a NaN is == itself
 @test
 let () -> nanEqualsItself -> () {
     let zero :: f8e4m3n <- 0.0;
@@ -72,6 +86,7 @@ let () -> nanEqualsItself -> () {
     assert (nan == nan);
 }
 
+# a NaN-carrying f8 overflows into a NaN
 @test
 let () -> overflowIntoNan -> () {
     let zero :: f8e4m3n <- 0.0;
@@ -80,6 +95,7 @@ let () -> overflowIntoNan -> () {
     assert (overflowed == nan);
 }
 
+# -0.0 is == 0.0 but not = it
 @test
 let () -> negativeZeroDeepEquals -> () {
     let zero :: f8e4m3n <- 0.0;
@@ -88,11 +104,13 @@ let () -> negativeZeroDeepEquals -> () {
     assert (!(negative = zero));
 }
 
+# the trap for converting a NaN
 @test(traps <- "'f8(x / x)' is a NaN, which f8 can't hold")
 let () -> nanConvert -> () {
     _ <- strict(0.0);
 }
 
+# the trap for overflowing
 @test(traps <- "'x * 2' overflowed f8")
 let () -> overflowTraps -> () {
     _ <- twice(448.0);

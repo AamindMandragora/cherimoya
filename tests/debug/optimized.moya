@@ -3,7 +3,9 @@
 # gdb: break collatz
 # gdb: run
 # expect: collatz (n=27) at
-# checks that debug info survives optimization: a function the optimizer keeps can still be broken on by name
+# checks that debug info survives optimization
+
+# a function the optimizer keeps can still be broken on by name
 let (n :: int) -> collatz -> (steps :: int) {
     let x :: mut <- n;
     let count :: mut <- 0;

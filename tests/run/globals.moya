@@ -1,9 +1,14 @@
 # exit: 52
-# checks top-level bindings: a folded constant, one computed before start, and a mutable one a function changes
+# checks top-level bindings
+
+## constants that fold
 let LIMIT <- 40;
 let DOUBLE <- LIMIT * 2;
+
 let (n :: int) -> bump -> (r :: int) { n + 1 -| }
+# computed before start runs
 let START <- bump(9);
+# a mutable one that tick changes
 let counter :: mut <- 0;
 let () -> tick -> () { counter +<- 1; }
 let () -> start -> (code :: int) {

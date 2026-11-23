@@ -1,12 +1,15 @@
 # exit: 77
-# checks an infinite loop yielding its value with -| repeat, and leaving a labeled loop from an inner one
+# checks leaving loops with -| repeat and -| label
+
 let () -> start -> (code :: int) {
     let n :: mut <- 0;
+    # an infinite loop yields its value with -| repeat
     let found <- repeat {
         n +<- 7;
         match { (n > 70) -> { n -| repeat } }
     };
     let count :: mut <- 0;
+    # leaving a labeled loop from an inner one
     repeat outer (true) {
         repeat {
             count +<- 1;

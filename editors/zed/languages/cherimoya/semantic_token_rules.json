@@ -3,6 +3,7 @@
     { "token_type": "type", "style": ["type"] },
     { "token_type": "number", "style": ["number"] },
     { "token_type": "string", "style": ["string"] },
+    { "token_type": "comment", "token_modifiers": ["documentation"], "style": ["comment.doc", "comment"] },
     { "token_type": "comment", "style": ["comment"] },
     { "token_type": "operator", "style": ["operator"] },
     { "token_type": "function", "style": ["function"] },

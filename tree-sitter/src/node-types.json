@@ -10759,6 +10759,11 @@
     "extra": true
   },
   {
+    "type": "docComment",
+    "named": true,
+    "extra": true
+  },
+  {
     "type": "escapeSequence",
     "named": true
   },

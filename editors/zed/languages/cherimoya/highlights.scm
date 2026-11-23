@@ -3,6 +3,7 @@
 (identifier) @variable
 (wildcard) @variable.special
 (comment) @comment
+(docComment) @comment.doc
 
 ; literals
 (integer) @number

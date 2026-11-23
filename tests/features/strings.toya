@@ -1,6 +1,10 @@
-# checks strings: a literal is chars when it's ASCII, its UTF-8 bytes when it isn't, and whatever kind of string its context wants, chars widen into bytes, every other change of kind is a written conversion that traps on what it can't hold, any fixed array lent to an input that borrows an arr[T] without copying, and writing through one, where a value that isn't a binding is written as a copy nothing else sees, arrays on the heap compared with fixed ones by length and then their elements, and a match on a string by its bytes
+# checks strings
+
+# a global string that isn't ASCII
 let greeting <- "héllo";
+# borrows bytes, which a fixed array of them is lent to without copying
 let (s :: arr[i8u]) -> count -> (r :: i64u) { s.len() -| }
+# writes through a borrowed array of bytes
 let (s :: arr[mut i8u]) -> shout -> () {
     let i :: mut i64u <- 0;
     repeat (i < s.len()) {
@@ -11,6 +15,7 @@ let (s :: arr[mut i8u]) -> shout -> () {
         i +<- 1;
     }
 }
+# matches a string by its bytes
 let (cmd :: arr[i8u]) -> code -> (r :: int) {
     match (cmd) {
         "go" -> { 1 -| code }
@@ -18,6 +23,7 @@ let (cmd :: arr[i8u]) -> code -> (r :: int) {
         _ -> { 0 -| code }
     }
 }
+# borrows an arr[int], which a fixed array is lent to without copying
 let (xs :: arr[int]) -> total -> (r :: int) {
     let sum :: mut <- 0;
     let i :: mut i64u <- 0;
@@ -28,6 +34,7 @@ let (xs :: arr[int]) -> total -> (r :: int) {
     sum -|
 }
 
+# an ASCII literal is chars
 @test
 let () -> chars -> () {
     let s <- "hi";
@@ -36,12 +43,14 @@ let () -> chars -> () {
     assert (s = ['h', 'i']);
 }
 
+# a literal is bytes when its context wants them
 @test
 let () -> bytes -> () {
     let s :: arr[2, i8u] <- "hi";
     assert (s[0] = 104 && s[1] = 105);
 }
 
+# a literal is runes when its context wants them
 @test
 let () -> runes -> () {
     let s :: arr[5, rune] <- "héllo";
@@ -49,6 +58,7 @@ let () -> runes -> () {
     assert (s[1] = 'é');
 }
 
+# a literal that isn't ASCII is its UTF-8 bytes
 @test
 let () -> utf8 -> () {
     assert (greeting.len() = 6);
@@ -68,6 +78,7 @@ let () -> empty -> () {
     assert (count("") = 0);
 }
 
+# fixed arrays lent to inputs that borrow an arr[T]
 @test
 let () -> lent -> () {
     assert (count("hello") = 5);
@@ -77,6 +88,7 @@ let () -> lent -> () {
     assert (total([1, 2, 3]) = 6);
 }
 
+# writing through a lent binding changes it
 @test
 let () -> writtenThroughLending -> () {
     let word :: arr[3, mut i8u] <- "abc";
@@ -84,12 +96,14 @@ let () -> writtenThroughLending -> () {
     assert (word == "ABC");
 }
 
+# a value that isn't a binding is written as a copy nothing else sees
 @test
 let () -> temporaryWritten -> () {
     shout("abc");
     assert (greeting == "héllo");
 }
 
+# arrays on the heap compared with fixed ones by length and then their elements
 @test
 let () -> comparedAcrossLengths -> () {
     let k :: mut i64u <- 2;
@@ -99,6 +113,7 @@ let () -> comparedAcrossLengths -> () {
     assert (made != "goo" && made !== "g");
 }
 
+# a match on a string by its bytes, including one on the heap
 @test
 let () -> matched -> () {
     assert (code("go") = 1);
@@ -113,6 +128,7 @@ let () -> matched -> () {
     assert (code(made) = 2);
 }
 
+# chars widen into bytes without a conversion
 @test
 let () -> charsWidenIntoBytes -> () {
     let word <- "hello";
@@ -122,6 +138,7 @@ let () -> charsWidenIntoBytes -> () {
     assert (word == b);
 }
 
+# every other change of kind is a written conversion
 @test
 let () -> converted -> () {
     let decoded <- arr[rune](greeting);
@@ -136,12 +153,14 @@ let () -> converted -> () {
     assert (bytes.len() = 5);
 }
 
+# the trap for bytes that aren't valid UTF-8
 @test(traps <- "'arr[rune](bad)' isn't valid UTF-8")
 let () -> invalidUtf8 -> () {
     let bad :: arr[2, i8u] <- [0xC3, 0x28];
     _ <- arr[rune](bad);
 }
 
+# the trap for bytes that aren't ASCII
 @test(traps <- "'arr[char](greeting)' isn't ASCII")
 let () -> notAscii -> () {
     _ <- arr[char](greeting);
