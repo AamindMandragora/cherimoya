@@ -125,8 +125,8 @@ class Sema {
     std::deque<std::unique_ptr<Expr>> madeNames;
 
     // reports something sema doesn't check yet, and poisons the result
-    SemaType* unsupported(std::string_view what, Span span) {
-        engine.printError("cherimoya doesn't support " + std::string(what) + " yet", span);
+    SemaType* unsupported(Code code, std::string_view what, Span span) {
+        engine.printError(code, "cherimoya doesn't support " + std::string(what) + " yet", span);
         return context.semaError;
     }
 
@@ -164,7 +164,7 @@ class Sema {
         if (e.kind == ExprKind::Ann) return consume(*static_cast<AnnExpr&>(e).expr);
         if (e.kind == ExprKind::Index) {
             std::string what = static_cast<IndexExpr&>(e).args.empty() ? "a pointer" : "an element";
-            engine.printError("cherimoya doesn't support moving out of " + what + " yet, which take will do", e.span);
+            engine.printError(codes::moveOutOfElement, "cherimoya doesn't support moving out of " + what + " yet, which take will do", e.span);
             return;
         }
         if (e.kind != ExprKind::Identifier) {
@@ -175,10 +175,10 @@ class Sema {
         if (symbol == nullptr) return;
         std::string name(symbol->name);
         if (symbol->owner == 0) {
-            engine.printError("cherimoya requires '" + name + "' to be owned by a function to move it, please use it in place, since every function can use it", e.span, {{"'" + name + "' is declared here", symbol->span}});
+            engine.printError(codes::moveGlobal, "cherimoya requires '" + name + "' to be owned by a function to move it, please use it in place, since every function can use it", e.span, {{"'" + name + "' is declared here", symbol->span}});
         } else if (!symbol->isOwned) {
             std::string fix = symbol->kind == SymbolKind::Param ? "please declare it 'unscoped' to take it over" : symbol->isView ? "please move what it views instead" : "please move what it matched instead";
-            engine.printError("cherimoya requires '" + name + "' to be owned to move it, " + fix, e.span, {{"'" + name + "' is declared here", symbol->span}});
+            engine.printError(codes::moveBorrowed, "cherimoya requires '" + name + "' to be owned to move it, " + fix, e.span, {{"'" + name + "' is declared here", symbol->span}});
         } else {
             (isAtCall ? facts.callMoves : facts.moves).insert(&e);
             escaped.insert(symbol);
@@ -306,7 +306,7 @@ class Sema {
                 size = scope->lookupConstant(named.path[0].text);
             }
         }
-        if (!size) engine.printError("cherimoya requires an array's size to be known when the program compiles, please use an integer literal or an immutable binding of one", span);
+        if (!size) engine.printError(codes::arraySizeKnown, "cherimoya requires an array's size to be known when the program compiles, please use an integer literal or an immutable binding of one", span);
         return size;
     }
 
@@ -331,7 +331,7 @@ class Sema {
                 }
                 std::string text;
                 for (size_t i = 0; i < named.path.size(); i++) text += (i ? "." : "") + std::string(named.path[i].text);
-                return unsupported("the type '" + text + "'", t.span);
+                return unsupported(codes::namedTypes, "the type '" + text + "'", t.span);
             }
             // where mut sits decides what a binding can write, which mutabilityOf reads, so the type is the same either way
             case TypeKind::Qualified: {
@@ -345,7 +345,7 @@ class Sema {
                 auto& handle = static_cast<const HandleType&>(t);
                 if (handle.handle.kind == TokenKind::KwAddr) return resolveAddress(handle);
                 bool isPointer = handle.handle.kind == TokenKind::KwPtr;
-                if (isPointer && handle.arg) return unsupported("allocators", t.span);
+                if (isPointer && handle.arg) return unsupported(codes::allocators, "allocators", t.span);
                 std::optional<uint64_t> size;
                 if (handle.arg) {
                     size = arraySize(*handle.arg, handle.arg->value ? handle.arg->value->span : handle.arg->type->span);
@@ -360,19 +360,19 @@ class Sema {
             // an input, a binding, or an output can be a view, peek, which has the type of what it views, or unscoped, which owns heap memory it has to move on, where wit's verifier-only values wait for contracts
             case TypeKind::Mode: {
                 auto& mode = static_cast<const ModeType&>(t);
-                if (mode.mode.kind == TokenKind::KwWit) return unsupported("'wit'", t.span);
-                if (holder.empty()) return unsupported("'" + std::string(mode.mode.text) + "' on anything but an input, a binding, or an output", t.span);
+                if (mode.mode.kind == TokenKind::KwWit) return unsupported(codes::witMode, "'wit'", t.span);
+                if (holder.empty()) return unsupported(codes::modePosition, "'" + std::string(mode.mode.text) + "' on anything but an input, a binding, or an output", t.span);
                 SemaType* inner = mode.inner ? resolveType(*mode.inner) : nullptr;
                 if (mode.mode.kind == TokenKind::KwUnscoped && inner && !isPoisoned(inner) && !owns(inner)) {
-                    engine.printError("cherimoya requires an unscoped " + std::string(holder) + " to hold an array or a pointer, please remove 'unscoped'", tokSpan(mode.mode));
+                    engine.printError(codes::unscopedOwns, "cherimoya requires an unscoped " + std::string(holder) + " to hold an array or a pointer, please remove 'unscoped'", tokSpan(mode.mode));
                     return context.semaError;
                 }
                 return inner;
             }
             case TypeKind::Tuple:
-                return unsupported("tuple types", t.span);
+                return unsupported(codes::tupleTypes, "tuple types", t.span);
             case TypeKind::Record:
-                return unsupported("record types", t.span);
+                return unsupported(codes::recordTypes, "record types", t.span);
             default:
                 return context.semaError;
         }
@@ -384,7 +384,7 @@ class Sema {
         if (named == nullptr || isPoisoned(named)) return context.semaError;
         // a pointer's address is what it points at, so an address never names a pointer
         if (HandleSemaType* pointer = asPointer(named)) {
-            engine.printError("cherimoya requires an address to name what a pointer points at, please write 'addr[" + pointer->element->toString() + "]'", handle.span);
+            engine.printError(codes::addressOfPointer, "cherimoya requires an address to name what a pointer points at, please write 'addr[" + pointer->element->toString() + "]'", handle.span);
             return context.semaError;
         }
         return context.addressType(named);
@@ -455,19 +455,19 @@ class Sema {
         if (type == context.semaBool || type == context.semaError) return;
         // a boolf is never a condition, since a match or a loop has to go one way, so it gets its own fix, the cutoff
         if (type == context.semaBoolf) {
-            engine.printError("cherimoya requires " + std::string(what) + " to be a bool, please compare the boolf with a cutoff, like 'x > 0.5'", e.span, {}, {cutoff(e, e.span)});
+            engine.printError(codes::conditionBool, "cherimoya requires " + std::string(what) + " to be a bool, please compare the boolf with a cutoff, like 'x > 0.5'", e.span, {}, {cutoff(e, e.span)});
             return;
         }
-        engine.printError("cherimoya requires " + std::string(what) + " to be a bool, please compare it to something", e.span);
+        engine.printError(codes::conditionBool, "cherimoya requires " + std::string(what) + " to be a bool, please compare it to something", e.span);
     }
 
     // turns a function's outputs into the type it yields: () is void, and one output is that output's type
     SemaType* outputType(const FnDecl& fn) {
         if (fn.outputs.empty()) return context.semaVoid;
-        if (fn.outputs.size() > 1) return unsupported("multiple outputs", fn.span);
+        if (fn.outputs.size() > 1) return unsupported(codes::multipleOutputs, "multiple outputs", fn.span);
         auto& output = fn.outputs[0];
         if (!output.type) {
-            engine.printError("cherimoya requires every output to have a type, please write '" + std::string(output.name.text) + " :: int'", tokSpan(output.name));
+            engine.printError(codes::signatureTyped, "cherimoya requires every output to have a type, please write '" + std::string(output.name.text) + " :: int'", tokSpan(output.name));
             return context.semaError;
         }
         modeOwner = "output";
@@ -495,10 +495,10 @@ class Sema {
             auto& fn = *found;
             // a name that's an operator is overloading it, and anything else, like a keyword, the parser already reported
             if (fn.name.kind != TokenKind::Identifier) {
-                if (fn.name.op != nullptr) unsupported("operator overloading", tokSpan(fn.name));
+                if (fn.name.op != nullptr) unsupported(codes::operatorOverloading, "operator overloading", tokSpan(fn.name));
                 continue;
             }
-            if (!fn.generics.empty()) unsupported("generic functions", fn.span);
+            if (!fn.generics.empty()) unsupported(codes::genericFunctions, "generic functions", fn.span);
             std::vector<SemaType*> signature;
             for (auto& p : fn.inputs) {
                 isResolvingInput = true;
@@ -508,7 +508,7 @@ class Sema {
                 bool isBorrowed = type && !isPoisoned(type) && owns(type) && modeOf(p.type.get()) != TokenKind::KwUnscoped;
                 if (type && !isPoisoned(type) && (modeOf(p.type.get()) == TokenKind::KwPeek || isBorrowed)) type = context.viewType(type);
                 if (type == nullptr) {
-                    engine.printError("cherimoya requires every parameter to have a type, please write '" + std::string(p.name.text) + " :: int'", tokSpan(p.name));
+                    engine.printError(codes::signatureTyped, "cherimoya requires every parameter to have a type, please write '" + std::string(p.name.text) + " :: int'", tokSpan(p.name));
                     type = context.semaError;
                 }
                 signature.push_back(type);
@@ -533,15 +533,15 @@ class Sema {
     // checks a @test: it goes in a .toya file, on a function that takes and yields nothing, and its arguments are named, traps a string the trap's message has to hold, and timeout a whole number of seconds, where a test that passes all of that is recorded
     void checkTest(AttrStmt& attr, FnDecl* fn) {
         if (role != Role::Tests) {
-            engine.printError("cherimoya requires tests to be in a .toya file, please move it to one", tokSpan(attr.name));
+            engine.printError(codes::testInToya, "cherimoya requires tests to be in a .toya file, please move it to one", tokSpan(attr.name));
             return;
         }
         if (fn == nullptr) {
-            engine.printError("cherimoya requires '@test' to be on a function, please put it before one like 'let () -> name -> ()'", tokSpan(attr.name));
+            engine.printError(codes::testOnFunction, "cherimoya requires '@test' to be on a function, please put it before one like 'let () -> name -> ()'", tokSpan(attr.name));
             return;
         }
         if (!fn->inputs.empty() || !fn->outputs.empty()) {
-            engine.printError("cherimoya doesn't support tests with inputs and outputs yet, which it will fuzz against their contracts", tokSpan(fn->name));
+            engine.printError(codes::testWithSignature, "cherimoya doesn't support tests with inputs and outputs yet, which it will fuzz against their contracts", tokSpan(fn->name));
             return;
         }
         std::string name;
@@ -551,19 +551,19 @@ class Sema {
         std::vector<std::string_view> seen;
         for (auto& arg : attr.args) {
             if (!arg.name) {
-                engine.printError("cherimoya requires '@test' arguments to be named, please write 'traps <- \"message\"' or 'timeout <- 5'", arg.value->span);
+                engine.printError(codes::testArgument, "cherimoya requires '@test' arguments to be named, please write 'traps <- \"message\"' or 'timeout <- 5'", arg.value->span);
                 isValid = false;
                 continue;
             }
             std::string_view key = arg.name->text;
             bool isTraps = key == "traps";
             if (!isTraps && key != "timeout") {
-                engine.printError("cherimoya requires '@test' arguments to be 'traps' or 'timeout', please remove '" + std::string(key) + " <-'", tokSpan(*arg.name));
+                engine.printError(codes::testArgument, "cherimoya requires '@test' arguments to be 'traps' or 'timeout', please remove '" + std::string(key) + " <-'", tokSpan(*arg.name));
                 isValid = false;
                 continue;
             }
             if (std::find(seen.begin(), seen.end(), key) != seen.end()) {
-                engine.printError("cherimoya requires each '@test' argument once, please remove the second '" + std::string(key) + "'", tokSpan(*arg.name));
+                engine.printError(codes::testArgument, "cherimoya requires each '@test' argument once, please remove the second '" + std::string(key) + "'", tokSpan(*arg.name));
                 isValid = false;
                 continue;
             }
@@ -572,7 +572,7 @@ class Sema {
                 if (arg.value->kind == ExprKind::StringLiteral) {
                     test.traps = stringLiteralValue(static_cast<StringLiteralExpr&>(*arg.value).literal);
                 } else {
-                    engine.printError("cherimoya requires 'traps' to be a string, please write the text its trap's message should contain, like 'traps <- \"overflowed\"'", arg.value->span);
+                    engine.printError(codes::testArgumentValue, "cherimoya requires 'traps' to be a string, please write the text its trap's message should contain, like 'traps <- \"overflowed\"'", arg.value->span);
                     isValid = false;
                 }
                 continue;
@@ -591,7 +591,7 @@ class Sema {
             if (seconds) {
                 test.timeout = seconds;
             } else {
-                engine.printError("cherimoya requires 'timeout' to be a whole number of seconds above 0, please write one like 'timeout <- 5'", arg.value->span);
+                engine.printError(codes::testArgumentValue, "cherimoya requires 'timeout' to be a whole number of seconds above 0, please write one like 'timeout <- 5'", arg.value->span);
                 isValid = false;
             }
         }
@@ -644,7 +644,7 @@ class Sema {
                 for (auto& o : fn.outputs) {
                     if (o.fallback) {
                         size_t from = o.type ? o.type->span.end : tokSpan(o.name).end;
-                        engine.printError("cherimoya requires defaults to be on a function's inputs, please remove '<- " + textOf(o.fallback->span) + "'", o.fallback->span, {}, {{"Remove the default", {{{from, o.fallback->span.end}, ""}}}});
+                        engine.printError(codes::outputDefault, "cherimoya requires defaults to be on a function's inputs, please remove '<- " + textOf(o.fallback->span) + "'", o.fallback->span, {}, {{"Remove the default", {{{from, o.fallback->span.end}, ""}}}});
                     }
                     auto type = fn.outputs.size() == 1 ? unview(signature->returns) : context.semaError;
                     auto output = makeSymbol(o.name.text, SymbolKind::Param, type, {false}, tokSpan(o.name), false);
@@ -667,7 +667,7 @@ class Sema {
                 output = unview(output);
                 fn.body->type = output;
                 if (completes && output != context.semaVoid && !isPoisoned(output)) {
-                    engine.printError("cherimoya requires every path through '" + std::string(fn.name.text) + "' to yield '" + output->toString() + "', please end it with a yield",
+                    engine.printError(codes::everyPathYields, "cherimoya requires every path through '" + std::string(fn.name.text) + "' to yield '" + output->toString() + "', please end it with a yield",
                         Span{fn.body->span.end - 1, fn.body->span.end}, {{"'" + std::string(fn.name.text) + "' is declared to yield '" + output->toString() + "' here", name}});
                 }
             }
@@ -686,19 +686,19 @@ class Sema {
         bool isView = mode == TokenKind::KwPeek;
         if (let.init->kind == ExprKind::Wildcard) {
             if (isView) {
-                engine.printError("cherimoya requires a view to be of a place, please bind the value first and view the binding", let.span);
+                engine.printError(codes::viewOfPlace, "cherimoya requires a view to be of a place, please bind the value first and view the binding", let.span);
                 type = context.semaError;
             } else if (declared == nullptr) {
-                engine.printError("cherimoya requires an uninitialized binding to have a type, please write 'let x :: mut int <- _;'", let.span);
+                engine.printError(codes::uninitializedBindingTyped, "cherimoya requires an uninitialized binding to have a type, please write 'let x :: mut int <- _;'", let.span);
                 type = context.semaError;
             } else if (owns(declared)) {
                 // nothing can prove an uninitialized handle is written before it's freed until contracts arrive
-                engine.printError("cherimoya requires an uninitialized binding to own nothing, please give it a value", let.span);
+                engine.printError(codes::uninitializedBindingOwns, "cherimoya requires an uninitialized binding to own nothing, please give it a value", let.span);
             } else if (!isPoisoned(declared)) {
                 // an array whose elements can be written can start out uninitialized too, since that's how it gets its values
                 auto levels = mutabilityOf(let.type.get(), declared);
                 bool isWritable = levels[0] || (levels.size() > 1 && levels[1]);
-                if (!isWritable) engine.printError("cherimoya requires an uninitialized binding to be mutable, please write 'let x :: mut int <- _;'", let.span);
+                if (!isWritable) engine.printError(codes::uninitializedBindingMutable, "cherimoya requires an uninitialized binding to be mutable, please write 'let x :: mut int <- _;'", let.span);
             }
         } else {
             auto init = checkExpr(*let.init, declared);
@@ -709,12 +709,12 @@ class Sema {
             }
         }
         if (type == context.semaVoid) {
-            engine.printError("cherimoya requires a binding to hold a value, please write it as its own statement instead", let.init->span);
+            engine.printError(codes::bindingVoid, "cherimoya requires a binding to hold a value, please write it as its own statement instead", let.init->span);
             type = context.semaError;
         }
         if (let.pattern->kind == PatternKind::Wildcard) return;
         if (let.pattern->kind != PatternKind::Binder) {
-            unsupported("destructuring", let.pattern->span);
+            unsupported(codes::destructuring, "destructuring", let.pattern->span);
             return;
         }
         auto& binder = static_cast<BinderPattern&>(*let.pattern);
@@ -723,13 +723,13 @@ class Sema {
         std::string name(binder.name.text);
         if (isView && let.init->kind != ExprKind::Wildcard && !isPoisoned(type)) {
             viewed = pathsOf(*let.init);
-            if (!viewed) engine.printError("cherimoya requires a view to be of a place, please bind the value first and view the binding", let.init->span);
+            if (!viewed) engine.printError(codes::viewOfPlace, "cherimoya requires a view to be of a place, please bind the value first and view the binding", let.init->span);
         }
         // a top-level view or address would outlive what any function can free, so they're only made in functions
         bool holdsAddresses = holdsAddress(type) && !isPoisoned(type);
         if ((viewed || holdsAddresses) && owner == 0) {
             std::string what = viewed ? "a view, please view it" : "an address, please take it";
-            engine.printError("cherimoya requires '" + name + "' to be in a function to be " + what + " where it's used, since a top-level binding lives as long as the program", let.span);
+            engine.printError(codes::topLevelView, "cherimoya requires '" + name + "' to be in a function to be " + what + " where it's used, since a top-level binding lives as long as the program", let.span);
             viewed = std::nullopt;
             holdsAddresses = false;
         }
@@ -737,7 +737,7 @@ class Sema {
         std::optional<std::vector<Path>> named;
         if (holdsAddresses && let.init->kind != ExprKind::Wildcard) {
             named = addressesOf(*let.init);
-            if (!named) engine.printError("cherimoya requires an address to be taken of a place, please take it with 'addr' where it's bound", let.init->span);
+            if (!named) engine.printError(codes::addressOfPlace, "cherimoya requires an address to be taken of a place, please take it with 'addr' where it's bound", let.init->span);
         }
         // the binding takes what it's given, where let _ <- value binds nothing, so the value is freed with its statement, like any it discards
         if (!isView && let.init->kind != ExprKind::Wildcard) consume(*let.init);
@@ -745,7 +745,7 @@ class Sema {
         if (named) facts.views[symbol] = *named;
         // an address names one place for as long as it's used, so it's never mut
         if (holdsAddresses && std::find(symbol->mutability.begin(), symbol->mutability.end(), true) != symbol->mutability.end()) {
-            engine.printError("cherimoya requires '" + name + "' to be immutable, please remove 'mut', since an address names one place for as long as it's used", let.type ? let.type->span : let.span);
+            engine.printError(codes::addressImmutable, "cherimoya requires '" + name + "' to be immutable, please remove 'mut', since an address names one place for as long as it's used", let.type ? let.type->span : let.span);
         }
         if (viewed) {
             symbol->isView = true;
@@ -758,14 +758,14 @@ class Sema {
             auto place = placeLevels(*let.init);
             for (size_t i = 0; i < levels.size(); i++) {
                 if (!levels[i] || (i < place.size() && place[i])) continue;
-                engine.printError("cherimoya requires what '" + name + "' views to be mutable to write it through '" + name + "', please make it mutable or view it with 'peek'", let.init->span);
+                engine.printError(codes::viewWritable, "cherimoya requires what '" + name + "' views to be mutable to write it through '" + name + "', please make it mutable or view it with 'peek'", let.init->span);
                 break;
             }
         }
         // an unscoped binding owns heap memory it has to move before its scope ends, which a top-level one, a global every function can use, never can
         if (mode == TokenKind::KwUnscoped && owns(type)) {
             if (owner == 0) {
-                engine.printError("cherimoya requires '" + std::string(binder.name.text) + "' to be in a function to be unscoped, please remove 'unscoped', since a top-level binding is freed when the program ends", let.type->span);
+                engine.printError(codes::topLevelUnscoped, "cherimoya requires '" + std::string(binder.name.text) + "' to be in a function to be unscoped, please remove 'unscoped', since a top-level binding is freed when the program ends", let.type->span);
             } else {
                 facts.mustMove.insert(symbol);
             }
@@ -942,7 +942,7 @@ class Sema {
 
     // reports a value of the wrong type
     void mismatch(SemaType* expected, SemaType* actual, Span span) {
-        engine.printError("cherimoya expected a value of type '" + expected->toString() + "', got '" + actual->toString() + "' instead", span);
+        engine.printError(codes::typeMismatch, "cherimoya expected a value of type '" + expected->toString() + "', got '" + actual->toString() + "' instead", span);
     }
 
     // finds the function a statement declares, looking through any attributes on it, or null if it isn't one
@@ -967,7 +967,7 @@ class Sema {
                 for (size_t j = i; j < stmts.size(); j++) {
                     if (fnOf(stmts[j].get()) == nullptr) fix.edits.push_back(removal(engine.getManager().text(), stmts[j]->span));
                 }
-                engine.printWarning("cherimoya never runs this statement, since every path before it yields", s->span, {}, {fix});
+                engine.printWarning(codes::unreachableStatement, "cherimoya never runs this statement, since every path before it yields", s->span, {}, {fix});
                 warned = true;
             }
             // whatever owning value the statement made and didn't move is its temporary, freed once the statement is done with it
@@ -1003,7 +1003,7 @@ class Sema {
     SemaType* finish(const Target& target, bool completes, std::string_view what) {
         if (target.yielded == nullptr) return completes ? context.semaVoid : context.semaNever;
         if (!completes || target.yielded == context.semaVoid || isPoisoned(target.yielded)) return target.yielded;
-        engine.printError("cherimoya requires every path through " + std::string(what) + " to yield '" + target.yielded->toString() + "', please end it with a yield",
+        engine.printError(codes::everyPathYields, "cherimoya requires every path through " + std::string(what) + " to yield '" + target.yielded->toString() + "', please end it with a yield",
             Span{target.span.end - 1, target.span.end}, {{"this yield gives it '" + target.yielded->toString() + "'", target.first}});
         return context.semaError;
     }
@@ -1037,14 +1037,14 @@ class Sema {
             bool isInput = viewed && std::all_of(viewed->begin(), viewed->end(), [&](const Path& path) {
                 return path.root->kind == SymbolKind::Param && path.root->owner == owner && (path.root->isView || (!path.root->isOwned && owns(path.root->type)));
             });
-            if (!isInput) engine.printError("cherimoya requires '" + std::string(*target->label) + "' to yield a view of one of its inputs, please yield a view of one, or a copy", span);
+            if (!isInput) engine.printError(codes::yieldViewOfInput, "cherimoya requires '" + std::string(*target->label) + "' to yield a view of one of its inputs, please yield a view of one, or a copy", span);
         } else if (y.value && target && target->kind == TargetKind::Function && holdsAddress(target->expected) && !isPoisoned(value)) {
             // and one that yields addresses names only places its caller gave it, since the rest are gone once it returns
             auto named = addressesOf(*y.value);
             bool isInput = named && std::all_of(named->begin(), named->end(), [&](const Path& path) {
                 return path.root->kind == SymbolKind::Param && path.root->owner == owner && (path.root->isView || holdsAddress(path.root->type) || (!path.root->isOwned && owns(path.root->type)));
             });
-            if (!isInput) engine.printError("cherimoya requires '" + std::string(*target->label) + "' to yield an address of one of its inputs, please yield the address of one", span);
+            if (!isInput) engine.printError(codes::yieldAddressOfInput, "cherimoya requires '" + std::string(*target->label) + "' to yield an address of one of its inputs, please yield the address of one", span);
             // a handle holding them still moves out, like any it yields
             consume(*y.value);
         } else if (y.value) {
@@ -1054,10 +1054,10 @@ class Sema {
         target = resolveTarget(y);
         if (target == nullptr) {
             if (!y.target) {
-                engine.printError("cherimoya requires a yield to be inside a function or scope, please move it into one", y.span);
+                engine.printError(codes::yieldOutside, "cherimoya requires a yield to be inside a function or scope, please move it into one", y.span);
             } else {
                 std::string name(y.target->text);
-                engine.printError("cherimoya expected a function or scope named '" + name + "' around this yield, got none instead", tokSpan(*y.target));
+                engine.printError(codes::yieldTarget, "cherimoya expected a function or scope named '" + name + "' around this yield, got none instead", tokSpan(*y.target));
             }
             return;
         }
@@ -1066,13 +1066,13 @@ class Sema {
         if (target->kind == TargetKind::Function) {
             SemaType* expected = unview(target->expected);
             if (!isCompatible(expected, value)) {
-                engine.printError("cherimoya expected a yield of type '" + expected->toString() + "' to '" + std::string(*target->label) + "', got '" + value->toString() + "' instead",
+                engine.printError(codes::yieldType, "cherimoya expected a yield of type '" + expected->toString() + "' to '" + std::string(*target->label) + "', got '" + value->toString() + "' instead",
                     span, {{"'" + std::string(*target->label) + "' is declared to yield '" + expected->toString() + "' here", target->span}});
             }
             return;
         }
         if (target->kind == TargetKind::Loop && !target->isInfinite && value != context.semaVoid) {
-            unsupported("yielding a value out of a loop with a header", span);
+            unsupported(codes::loopHeaderValue, "yielding a value out of a loop with a header", span);
             contribute(*target, context.semaError, span);
             return;
         }
@@ -1086,7 +1086,7 @@ class Sema {
             target.yielded = value;
             target.first = span;
         } else if (target.yielded != value && !isPoisoned(value)) {
-            engine.printError("cherimoya requires every yield to one scope to have the same type, please make this one '" + target.yielded->toString() + "'",
+            engine.printError(codes::yieldsAgree, "cherimoya requires every yield to one scope to have the same type, please make this one '" + target.yielded->toString() + "'",
                 span, {{"this yield gives it '" + target.yielded->toString() + "'", target.first}});
         }
     }
@@ -1107,12 +1107,12 @@ class Sema {
                 auto type = checkExpr(*static_cast<LiteralPattern&>(p).literal, subject);
                 // a string matches an array of bytes of any length, which it does by length and then its bytes, where a fixed subject of another length never does
                 if (asArray(type) && asArray(subject) && asArray(type)->element == asArray(subject)->element && type != subject) {
-                    engine.printWarning("cherimoya never matches this arm, since the subject holds " + std::to_string(asArray(subject)->size) + " elements and this pattern " + std::to_string(asArray(type)->size), p.span);
+                    engine.printWarning(codes::patternNeverMatches, "cherimoya never matches this arm, since the subject holds " + std::to_string(asArray(subject)->size) + " elements and this pattern " + std::to_string(asArray(type)->size), p.span);
                     return false;
                 }
                 if (isComparableArrays(subject, type)) return false;
                 if (!isPoisoned(subject) && !isPoisoned(type) && type != subject) {
-                    engine.printError("cherimoya expected a pattern of type '" + subject->toString() + "', got '" + type->toString() + "' instead", p.span);
+                    engine.printError(codes::patternType, "cherimoya expected a pattern of type '" + subject->toString() + "', got '" + type->toString() + "' instead", p.span);
                 }
                 return false;
             }
@@ -1120,16 +1120,16 @@ class Sema {
                 expectBool(*static_cast<GuardPattern&>(p).cond, "a guard");
                 return false;
             case PatternKind::Variant:
-                unsupported("variant patterns", p.span);
+                unsupported(codes::variantPatterns, "variant patterns", p.span);
                 return false;
             case PatternKind::Pack:
-                unsupported("pack patterns", p.span);
+                unsupported(codes::packPatterns, "pack patterns", p.span);
                 return false;
             case PatternKind::Range:
-                unsupported("range patterns", p.span);
+                unsupported(codes::rangePatterns, "range patterns", p.span);
                 return false;
             case PatternKind::SetBuilder:
-                unsupported("set-builder patterns", p.span);
+                unsupported(codes::setBuilderPatterns, "set-builder patterns", p.span);
                 return false;
             default:
                 return false;
@@ -1154,7 +1154,7 @@ class Sema {
                 // every arm from here on is just as unreachable, so the fix removes them all
                 Fix fix{"Remove the arms that never run", {}};
                 for (size_t j = i; j < m.arms.size(); j++) fix.edits.push_back(removal(engine.getManager().text(), m.arms[j].span));
-                engine.printWarning("cherimoya never reaches this arm, since the arms before it match every value", arm.pattern->span, notes, {fix});
+                engine.printWarning(codes::unreachableArm, "cherimoya never reaches this arm, since the arms before it match every value", arm.pattern->span, notes, {fix});
                 warned = true;
             }
             SemaType* type = nullptr;
@@ -1178,7 +1178,7 @@ class Sema {
         bool yieldsValue = target.yielded != nullptr && target.yielded != context.semaVoid && !isPoisoned(target.yielded);
         if (isNumeric(subject) || isCharacter(subject) || subject == context.semaBoolf || asArray(subject) || asHeapArray(subject) || yieldsValue) {
             std::string what = subject ? "a match on '" + subject->toString() + "'" : "a match that yields a value";
-            engine.printError("cherimoya requires " + what + " to cover every value, please add a '_ -> { ... }' arm", Span{m.span.start, m.span.start + 5}, {}, catchAllArm(m));
+            engine.printError(codes::matchCovers, "cherimoya requires " + what + " to cover every value, please add a '_ -> { ... }' arm", Span{m.span.start, m.span.start + 5}, {}, catchAllArm(m));
             return context.semaError;
         }
         return finish(target, true, "this match");
@@ -1186,7 +1186,7 @@ class Sema {
 
     // checks a loop: one with a condition is void, and one without only ends by a yield, so it takes that yield's type
     SemaType* checkRepeat(RepeatExpr& r) {
-        if (r.binder) return unsupported("for-each loops", r.binder->span);
+        if (r.binder) return unsupported(codes::forEachLoops, "for-each loops", r.binder->span);
         if (r.cond) expectBool(*r.cond, "a loop's condition");
         if (r.invariant) expectBool(*r.invariant, "a loop's invariant");
         targets.push_back(Target{TargetKind::Loop, labelOf(r.name), nullptr, nullptr, {}, r.cond == nullptr, r.span});
@@ -1204,7 +1204,7 @@ class Sema {
         SemaType* type = checkExpr(*a.operand);
         if (isPoisoned(type)) return context.semaError;
         if (!pathsOf(*a.operand)) {
-            engine.printError("cherimoya requires an address to be of a place, please bind the value first and take the binding's address", a.operand->span);
+            engine.printError(codes::addressOfPlace, "cherimoya requires an address to be of a place, please bind the value first and take the binding's address", a.operand->span);
             return context.semaError;
         }
         // a pointer's address is what it points at, through every pointer to a pointer
@@ -1245,7 +1245,7 @@ class Sema {
                     } else if (symbol && !symbol->isOwned) {
                         std::string name(symbol->name);
                         std::string fix = symbol->kind == SymbolKind::Param ? "please declare it 'unscoped' to take it over" : "please assign what it matched instead";
-                        engine.printError("cherimoya requires '" + name + "' to be owned to replace it, " + fix, assign.place->span, {{"'" + name + "' is declared here", symbol->span}});
+                        engine.printError(codes::replaceBorrowed, "cherimoya requires '" + name + "' to be owned to replace it, " + fix, assign.place->span, {{"'" + name + "' is declared here", symbol->span}});
                     } else if (symbol) {
                         escaped.insert(symbol);
                     }
@@ -1255,7 +1255,7 @@ class Sema {
                 }
                 // place op<- value is place <- place op value, which has to give back the place's type
                 if (assign.op && assign.op->op->base->category == OpCategory::Extra) {
-                    unsupported("extra operators", Span{assign.op->loc, assign.op->loc + assign.op->text.length()});
+                    unsupported(codes::extraOperators, "extra operators", Span{assign.op->loc, assign.op->loc + assign.op->text.length()});
                 } else if (assign.op) {
                     auto result = binaryType(*assign.op->op->base, place, assign.place->span, value, assign.value->span);
                     if (!isCompatible(place, result)) mismatch(place, result, assign.value->span);
@@ -1269,7 +1269,7 @@ class Sema {
                 auto& expr = *static_cast<ExprStmt&>(s).expr;
                 auto type = checkExpr(expr);
                 if (type == context.semaVoid || isPoisoned(type)) return type == context.semaNever;
-                engine.printError("cherimoya requires a value to be used or discarded, please write '_ <- " + textOf(expr.span) + ";'", expr.span, {}, {{"Discard it with '_ <- '", {insertion(expr.span.start, "_ <- ")}}});
+                engine.printError(codes::valueDiscarded, "cherimoya requires a value to be used or discarded, please write '_ <- " + textOf(expr.span) + ";'", expr.span, {}, {{"Discard it with '_ <- '", {insertion(expr.span.start, "_ <- ")}}});
                 return false;
             }
             case StmtKind::Yield:
@@ -1278,7 +1278,7 @@ class Sema {
             case StmtKind::Wit: {
                 auto& wit = static_cast<WitStmt&>(s);
                 if (wit.bound) {
-                    unsupported("protocols", wit.span);
+                    unsupported(codes::protocolAssertions, "protocols", wit.span);
                     break;
                 }
                 expectBool(*wit.predicate, "a 'wit' obligation");
@@ -1291,11 +1291,11 @@ class Sema {
                 auto& decl = *static_cast<DeclStmt&>(s).decl;
                 switch (decl.kind) {
                     case DeclKind::Type:
-                        unsupported("type definitions", decl.span);
+                        unsupported(codes::typeDefinitions, "type definitions", decl.span);
                         break;
                     case DeclKind::Export:
                     case DeclKind::Import:
-                        unsupported("modules", decl.span);
+                        unsupported(codes::modules, "modules", decl.span);
                         break;
                     default:
                         break;
@@ -1317,18 +1317,18 @@ class Sema {
         auto symbol = scope->lookup(id.name);
         if (symbol == nullptr) {
             std::string name(id.name);
-            engine.printError("cherimoya requires names to be declared before they're used, please declare '" + name + "' with 'let " + name + " <- ...;'", id.span);
+            engine.printError(codes::undeclaredName, "cherimoya requires names to be declared before they're used, please declare '" + name + "' with 'let " + name + " <- ...;'", id.span);
             return context.semaError;
         }
         if (symbol->kind != SymbolKind::Function && symbol->owner != 0 && symbol->owner != owner) {
             std::string name(id.name);
-            engine.printError("cherimoya uses closures to capture '" + name + "' instead of nested functions as follows: let f <- [" + name + "] (...) -> { ... };",
+            engine.printError(codes::nestedCapture, "cherimoya uses closures to capture '" + name + "' instead of nested functions as follows: let f <- [" + name + "] (...) -> { ... };",
                 id.span, {{"'" + name + "' is declared here, in the function around this one", symbol->span}});
             return context.semaError;
         }
         id.decl = symbol;
         uses.push_back({id.span, symbol, false});
-        if (symbol->kind == SymbolKind::Function && !callee) return unsupported("functions as values", id.span);
+        if (symbol->kind == SymbolKind::Function && !callee) return unsupported(codes::functionValues, "functions as values", id.span);
         return symbol->type;
     }
 
@@ -1351,7 +1351,7 @@ class Sema {
         }
         auto symbol = root->kind == ExprKind::Identifier ? static_cast<IdentifierExpr&>(*root).decl : nullptr;
         if (symbol == nullptr || symbol->kind == SymbolKind::Function) {
-            if (!isPoisoned(type)) engine.printError("cherimoya requires the left side of an assignment to be a binding or its elements, please store the value in a 'let' first", place.span);
+            if (!isPoisoned(type)) engine.printError(codes::assignFunction, "cherimoya requires the left side of an assignment to be a binding or its elements, please store the value in a 'let' first", place.span);
             return type;
         }
         auto& levels = symbol->mutability;
@@ -1361,7 +1361,7 @@ class Sema {
         SemaType* holder = symbol->type;
         for (size_t i = 1; i < depth && holder; i++) holder = elementOf(holder);
         std::string what = asPointer(holder) ? "the value of '" + name + "' to be mutable to assign to it" : "the elements of '" + name + "' to be mutable to assign to them";
-        engine.printError("cherimoya requires " + what + ", please declare it as '" + writableAt(symbol->type, depth - 1) + "'",
+        engine.printError(codes::elementsImmutable, "cherimoya requires " + what + ", please declare it as '" + writableAt(symbol->type, depth - 1) + "'",
             place.span, {{"'" + name + "' is declared here", symbol->span}}, mutability(*symbol, true));
         return type;
     }
@@ -1377,11 +1377,11 @@ class Sema {
         if (symbol == nullptr || symbol->isMutable()) return type;
         std::string name(identifier.name);
         if (symbol->kind == SymbolKind::Function) {
-            engine.printError("cherimoya requires the left side of an assignment to be a binding, please assign to a 'let' instead of the function '" + name + "'", place.span);
+            engine.printError(codes::assignFunction, "cherimoya requires the left side of an assignment to be a binding, please assign to a 'let' instead of the function '" + name + "'", place.span);
             return context.semaError;
         }
         auto fix = symbol->kind == SymbolKind::Param && !isPoisoned(type) ? "declare it as '" + name + " :: mut " + type->toString() + "'" : "declare it with 'let " + name + " :: mut <- ...;'";
-        engine.printError("cherimoya requires '" + name + "' to be mutable to assign to it, please " + fix, place.span, {{"'" + name + "' is declared here", symbol->span}}, mutability(*symbol));
+        engine.printError(codes::assignImmutable, "cherimoya requires '" + name + "' to be mutable to assign to it, please " + fix, place.span, {{"'" + name + "' is declared here", symbol->span}}, mutability(*symbol));
         return type;
     }
 
@@ -1465,7 +1465,7 @@ class Sema {
         // a boolf literal is a truth value, so the only whole numbers it takes are 0 and 1
         if (expected == context.semaBoolf) {
             if (!value || *value > 1 || (negated && *value != 0)) {
-                engine.printError("cherimoya requires " + text + " to be from 0 to 1 to be a 'boolf', please use a value in that range", span);
+                engine.printError(codes::boolfLiteralRange, "cherimoya requires " + text + " to be from 0 to 1 to be a 'boolf', please use a value in that range", span);
                 literal.type = context.semaError;
                 return context.semaError;
             }
@@ -1475,7 +1475,7 @@ class Sema {
         // a whole number can stand for a float when the float holds it exactly, so x * 2 works on a float x
         if (FloatSemaType* floating = asFloat(expected)) {
             if (!value || !isExactIn(*value, *floating)) {
-                engine.printError("cherimoya requires " + text + " to be exact in '" + floating->toString() + "', please write it as a float literal or use a wider type", span);
+                engine.printError(codes::floatLiteralExact, "cherimoya requires " + text + " to be exact in '" + floating->toString() + "', please write it as a float literal or use a wider type", span);
                 literal.type = context.semaError;
                 return context.semaError;
             }
@@ -1484,7 +1484,7 @@ class Sema {
         }
         IntSemaType* integer = asInt(expected) ? asInt(expected) : context.semaInt;
         if (!value || !isInRange(*value, negated, *integer)) {
-            engine.printError("cherimoya requires " + text + " to fit in '" + integer->toString() + "', please use a wider type or convert it explicitly", span);
+            engine.printError(codes::intLiteralRange, "cherimoya requires " + text + " to fit in '" + integer->toString() + "', please use a wider type or convert it explicitly", span);
             literal.type = context.semaError;
             return context.semaError;
         }
@@ -1499,7 +1499,7 @@ class Sema {
             long double value = floatLiteralValue(literal.literal);
             if (value > 1 || (negated && value != 0)) {
                 std::string text = (negated ? "-" : "") + std::string(literal.literal);
-                engine.printError("cherimoya requires " + text + " to be from 0 to 1 to be a 'boolf', please use a value in that range", span);
+                engine.printError(codes::boolfLiteralRange, "cherimoya requires " + text + " to be from 0 to 1 to be a 'boolf', please use a value in that range", span);
                 literal.type = context.semaError;
                 return context.semaError;
             }
@@ -1509,7 +1509,7 @@ class Sema {
         FloatSemaType* floating = asFloat(expected) ? asFloat(expected) : context.semaFloat;
         if (floatLiteralValue(literal.literal) > floating->max) {
             std::string text = (negated ? "-" : "") + std::string(literal.literal);
-            engine.printError("cherimoya requires " + text + " to fit in '" + floating->toString() + "', please use a wider type", span);
+            engine.printError(codes::floatLiteralRange, "cherimoya requires " + text + " to fit in '" + floating->toString() + "', please use a wider type", span);
             literal.type = context.semaError;
             return context.semaError;
         }
@@ -1522,7 +1522,7 @@ class Sema {
         uint32_t value = charLiteralValue(literal.literal);
         if (expected == context.semaRune) return context.semaRune;
         if (expected == context.semaChar && value > 0x7F) {
-            engine.printError("cherimoya requires " + std::string(literal.literal) + " to fit in 'char', which is ASCII, please use a 'rune'", literal.span);
+            engine.printError(codes::charLiteralAscii, "cherimoya requires " + std::string(literal.literal) + " to fit in 'char', which is ASCII, please use a 'rune'", literal.span);
             return context.semaError;
         }
         return value > 0x7F ? context.semaRune : context.semaChar;
@@ -1554,7 +1554,7 @@ class Sema {
         SemaType* element = stringElement(expected);
         if (!element) element = isAscii ? static_cast<SemaType*>(context.semaChar) : context.intType("i8u");
         if (element == context.semaChar && !isAscii) {
-            engine.printError("cherimoya requires " + std::string(literal.literal) + " to be ASCII to be a string of chars, please make it 'arr[i8u]' or 'arr[rune]'", literal.span);
+            engine.printError(codes::stringLiteralAscii, "cherimoya requires " + std::string(literal.literal) + " to be ASCII to be a string of chars, please make it 'arr[i8u]' or 'arr[rune]'", literal.span);
             return context.semaError;
         }
         if (element == context.semaRune) return context.arrayType(element, points.size());
@@ -1582,7 +1582,7 @@ class Sema {
 
     // reports an operand of the wrong type for an operator
     void badOperand(std::string_view wanted, std::string_view side, const OpInfo& op, SemaType* actual, Span span) {
-        engine.printError("cherimoya expected " + std::string(wanted) + " " + std::string(side) + " '" + op.spelling + "', got '" + actual->toString() + "' instead", span);
+        engine.printError(codes::operandType, "cherimoya expected " + std::string(wanted) + " " + std::string(side) + " '" + op.spelling + "', got '" + actual->toString() + "' instead", span);
     }
 
     // works out what a prefix operator gives: - on numbers, ! on bools, and ~ on ints
@@ -1593,7 +1593,7 @@ class Sema {
         if (op.spelling == "-" && integer) {
             if (!integer->isSigned && !integer->isWrapping) {
                 std::string bits = std::to_string(integer->bits);
-                engine.printError("cherimoya requires negation to be on a signed or wrapping integer, please use an 'i" + bits + "' or an 'i" + bits + "uw' instead of '" + integer->toString() + "'", span);
+                engine.printError(codes::negateUnsigned, "cherimoya requires negation to be on a signed or wrapping integer, please use an 'i" + bits + "' or an 'i" + bits + "uw' instead of '" + integer->toString() + "'", span);
                 return context.semaError;
             }
             return operand;
@@ -1659,7 +1659,7 @@ class Sema {
         // an array on the heap compares with a fixed one by length and then each element, so cmd = "go" works
         if (op.category == OpCategory::Equality && isComparableArrays(lhs, rhs)) return result;
         if (lhs != rhs) {
-            engine.printError("cherimoya requires both sides of '" + op.spelling + "' to have the same type, please convert one of them", Span{lhsSpan.start, rhsSpan.end},
+            engine.printError(codes::operandsSameType, "cherimoya requires both sides of '" + op.spelling + "' to have the same type, please convert one of them", Span{lhsSpan.start, rhsSpan.end},
                 {{"this side is '" + lhs->toString() + "'", lhsSpan}, {"this side is '" + rhs->toString() + "'", rhsSpan}});
             return context.semaError;
         }
@@ -1691,11 +1691,11 @@ class Sema {
         if (asHandle(target)) return checkMake(callee, *asHandle(target), args, span);
         for (auto& arg : args) {
             checkExpr(*arg.value);
-            if (arg.name) engine.printError("cherimoya requires a conversion's value to be unnamed, please remove '" + std::string(arg.name->text) + " <-'", tokSpan(*arg.name), {}, {{"Remove '" + std::string(arg.name->text) + " <-'", {{{arg.name->loc, arg.value->span.start}, ""}}}});
+            if (arg.name) engine.printError(codes::conversionUnnamed, "cherimoya requires a conversion's value to be unnamed, please remove '" + std::string(arg.name->text) + " <-'", tokSpan(*arg.name), {}, {{"Remove '" + std::string(arg.name->text) + " <-'", {{{arg.name->loc, arg.value->span.start}, ""}}}});
         }
         if (target == nullptr || isPoisoned(target)) return context.semaError;
         if (args.size() != 1) {
-            engine.printError("cherimoya expected 1 value to convert in the call to '" + target->toString() + "', got " + std::to_string(args.size()) + " instead", span);
+            engine.printError(codes::conversionCount, "cherimoya expected 1 value to convert in the call to '" + target->toString() + "', got " + std::to_string(args.size()) + " instead", span);
             return context.semaError;
         }
         auto source = args[0].value->type;
@@ -1706,11 +1706,11 @@ class Sema {
         if (target == context.semaBoolf) isValid = asFloat(source) || isByte(source) || source == context.semaBool || source == context.semaBoolf;
         if (source == context.semaBoolf && target != context.semaBoolf) isValid = asFloat(target) || isByte(target);
         if (source == context.semaBoolf && target == context.semaBool) {
-            engine.printError("cherimoya requires a boolf to become a bool by a cutoff, please compare it, like 'x > 0.5'", span, {}, {cutoff(*args[0].value, span)});
+            engine.printError(codes::boolfCutoff, "cherimoya requires a boolf to become a bool by a cutoff, please compare it, like 'x > 0.5'", span, {}, {cutoff(*args[0].value, span)});
             return context.semaError;
         }
         if (!isValid) {
-            engine.printError("cherimoya requires a conversion to be between numbers, between characters and integers, or between a boolf and a float or a byte, please convert '" + source->toString() + "' to '" + target->toString() + "' some other way", span);
+            engine.printError(codes::conversionKinds, "cherimoya requires a conversion to be between numbers, between characters and integers, or between a boolf and a float or a byte, please convert '" + source->toString() + "' to '" + target->toString() + "' some other way", span);
             return context.semaError;
         }
         return callee.type;
@@ -1740,7 +1740,7 @@ class Sema {
     // checks making an array of a length in brackets, arr[n, T](...): n of T's default, n deep copies of a fill, or n uninitialized elements, where n is any unsigned integer, which makes a fixed array when the program knows it when it compiles, and one on the heap when it doesn't, and the fill is borrowed
     SemaType* checkSizedMake(TypeExprExpr& callee, const HandleType& handle, const std::vector<Argument>& args, Span span) {
         for (auto& arg : args) {
-            if (arg.name) engine.printError("cherimoya requires a conversion's value to be unnamed, please remove '" + std::string(arg.name->text) + " <-'", tokSpan(*arg.name), {}, {{"Remove '" + std::string(arg.name->text) + " <-'", {{{arg.name->loc, arg.value->span.start}, ""}}}});
+            if (arg.name) engine.printError(codes::conversionUnnamed, "cherimoya requires a conversion's value to be unnamed, please remove '" + std::string(arg.name->text) + " <-'", tokSpan(*arg.name), {}, {{"Remove '" + std::string(arg.name->text) + " <-'", {{{arg.name->loc, arg.value->span.start}, ""}}}});
         }
         SemaType* element = handle.inner ? resolveType(*handle.inner) : nullptr;
         // a lone name in the brackets is a name like any other, so sema reads it as one
@@ -1752,7 +1752,7 @@ class Sema {
         }
         if (!length) {
             for (auto& arg : args) checkExpr(*arg.value);
-            return unsupported("allocators", handle.arg->type->span);
+            return unsupported(codes::allocators, "allocators", handle.arg->type->span);
         }
         auto count = checkExpr(*length, context.intType("i64u"));
         for (auto& arg : args) {
@@ -1764,16 +1764,16 @@ class Sema {
         auto size = fold(*length);
         auto integer = asInt(count);
         if (!integer) {
-            engine.printError("cherimoya expected an unsigned integer as an array's length, got '" + count->toString() + "' instead", length->span);
+            engine.printError(codes::lengthInteger, "cherimoya expected an unsigned integer as an array's length, got '" + count->toString() + "' instead", length->span);
             return context.semaError;
         }
         if (integer->isSigned && !size) {
-            engine.printError("cherimoya requires an array's length to be unsigned, please convert it, like 'i64u(" + textOf(length->span) + ")'", length->span, {},
+            engine.printError(codes::lengthUnsigned, "cherimoya requires an array's length to be unsigned, please convert it, like 'i64u(" + textOf(length->span) + ")'", length->span, {},
                 {{"Convert it with 'i64u(...)'", {insertion(length->span.start, "i64u("), insertion(length->span.end, ")")}}});
             return context.semaError;
         }
         if (args.size() > 1) {
-            engine.printError("cherimoya expected 0 or 1 values in the call to '" + made + "', got " + std::to_string(args.size()) + " instead", span);
+            engine.printError(codes::makeCount, "cherimoya expected 0 or 1 values in the call to '" + made + "', got " + std::to_string(args.size()) + " instead", span);
             return context.semaError;
         }
         lengths[&callee] = length;
@@ -1781,7 +1781,7 @@ class Sema {
         callee.type = result;
         if (args.empty()) {
             if (!hasDefault(element)) {
-                engine.printError("cherimoya requires the elements of '" + textOf(span) + "' to have a default, please give it a fill, like '" + textOf(callee.span) + "(fill)'", span);
+                engine.printError(codes::elementsDefault, "cherimoya requires the elements of '" + textOf(span) + "' to have a default, please give it a fill, like '" + textOf(callee.span) + "(fill)'", span);
                 return context.semaError;
             }
             return result;
@@ -1792,9 +1792,9 @@ class Sema {
             fill.type = element;
             bool isWritable = handle.inner && handle.inner->kind == TypeKind::Qualified && static_cast<const QualifiedType&>(*handle.inner).position == QualPosition::Elements;
             if (owns(element)) {
-                engine.printError("cherimoya requires an uninitialized array's elements to own nothing, please give it a fill", fill.span);
+                engine.printError(codes::uninitializedOwns, "cherimoya requires an uninitialized array's elements to own nothing, please give it a fill", fill.span);
             } else if (!isWritable) {
-                engine.printError("cherimoya requires an uninitialized array's elements to be mutable, please write 'arr[" + textOf(length->span) + ", mut " + element->toString() + "](_)'", span);
+                engine.printError(codes::uninitializedMutable, "cherimoya requires an uninitialized array's elements to be mutable, please write 'arr[" + textOf(length->span) + ", mut " + element->toString() + "](_)'", span);
             }
             return result;
         }
@@ -1805,14 +1805,14 @@ class Sema {
     // checks making a handle by calling its type: ptr[T](v) puts v on the heap, and arr[T](xs) puts a fixed array's elements there, where what either is made from moves into it, and a length goes in brackets, arr[n, T](fill)
     SemaType* checkMake(TypeExprExpr& callee, HandleSemaType& handle, const std::vector<Argument>& args, Span span) {
         for (auto& arg : args) {
-            if (arg.name) engine.printError("cherimoya requires a conversion's value to be unnamed, please remove '" + std::string(arg.name->text) + " <-'", tokSpan(*arg.name), {}, {{"Remove '" + std::string(arg.name->text) + " <-'", {{{arg.name->loc, arg.value->span.start}, ""}}}});
+            if (arg.name) engine.printError(codes::conversionUnnamed, "cherimoya requires a conversion's value to be unnamed, please remove '" + std::string(arg.name->text) + " <-'", tokSpan(*arg.name), {}, {{"Remove '" + std::string(arg.name->text) + " <-'", {{{arg.name->loc, arg.value->span.start}, ""}}}});
         }
         std::string made = handle.toString();
         bool isPointer = handle.handle == HandleKind::Pointer;
         size_t most = isPointer ? 1 : 2;
         if (args.empty() || args.size() > most) {
             for (auto& arg : args) checkExpr(*arg.value);
-            engine.printError("cherimoya expected " + std::string(isPointer ? "1 value" : "1 or 2 values") + " in the call to '" + made + "', got " + std::to_string(args.size()) + " instead", span);
+            engine.printError(codes::makeCount, "cherimoya expected " + std::string(isPointer ? "1 value" : "1 or 2 values") + " in the call to '" + made + "', got " + std::to_string(args.size()) + " instead", span);
             return context.semaError;
         }
         Expr& first = *args[0].value;
@@ -1832,7 +1832,7 @@ class Sema {
         if (from && stringElement(&handle) && from != handle.element && (asArray(source) || asHeapArray(source))) {
             if (args.size() == 2) {
                 checkExpr(*args[1].value);
-                engine.printError("cherimoya expected 1 value in the call to '" + made + "', got 2 instead", span);
+                engine.printError(codes::makeCount, "cherimoya expected 1 value in the call to '" + made + "', got 2 instead", span);
                 return context.semaError;
             }
             return &handle;
@@ -1844,7 +1844,7 @@ class Sema {
                 return context.semaError;
             }
             if (args.size() == 2) {
-                engine.printError("cherimoya expected 1 value in the call to '" + made + "' from a fixed array, got 2 instead", span);
+                engine.printError(codes::makeCount, "cherimoya expected 1 value in the call to '" + made + "' from a fixed array, got 2 instead", span);
                 return context.semaError;
             }
             consume(first);
@@ -1855,12 +1855,12 @@ class Sema {
             auto& type = static_cast<const HandleType&>(*callee.typeExpr);
             size_t after = type.handle.loc + type.handle.text.size() + 1;
             size_t end = args.size() == 2 ? args[1].value->span.start : first.span.end;
-            engine.printError("cherimoya uses brackets for an array's length instead of an argument as follows: 'arr[" + textOf(first.span) + ", " + handle.element->toString() + "](fill)'", first.span, {},
+            engine.printError(codes::lengthInBrackets, "cherimoya uses brackets for an array's length instead of an argument as follows: 'arr[" + textOf(first.span) + ", " + handle.element->toString() + "](fill)'", first.span, {},
                 {{"Move the length into brackets", {insertion(after, textOf(first.span) + ", "), {{first.span.start, end}, ""}}}});
             return context.semaError;
         }
         if (args.size() == 2) checkExpr(*args[1].value);
-        engine.printError("cherimoya expected a fixed array or another kind of string in the call to '" + made + "', got '" + source->toString() + "' instead", first.span);
+        engine.printError(codes::makeSource, "cherimoya expected a fixed array or another kind of string in the call to '" + made + "', got '" + source->toString() + "' instead", first.span);
         return context.semaError;
     }
 
@@ -1875,7 +1875,7 @@ class Sema {
 
     // reports a call with the wrong number of arguments, where bound is "at least " or "at most " when the function's defaults leave a range
     void countMismatch(const std::string& name, size_t expected, const std::string& bound, size_t got, Span span, const std::vector<Note>& notes) {
-        engine.printError("cherimoya expected " + bound + std::to_string(expected) + " argument" + (expected == 1 ? "" : "s") + " in the call to '" + name + "', got " + std::to_string(got) + " instead", span, notes);
+        engine.printError(codes::argumentCount, "cherimoya expected " + bound + std::to_string(expected) + " argument" + (expected == 1 ? "" : "s") + " in the call to '" + name + "', got " + std::to_string(got) + " instead", span, notes);
     }
 
     // works out which input of a function each argument goes to, unnamed ones in order and then named ones by name, reporting an argument that goes nowhere and every input without a default that gets nothing, where inputs gets the value each input takes, null where it takes its default, and the result is each argument's input, if it has one
@@ -1906,13 +1906,13 @@ class Sema {
                     std::string names;
                     for (size_t j = 0; j < params.size(); j++) names += (j ? ", '" : "'") + std::string(params[j].name.text) + "'";
                     std::string fix = params.empty() ? "please remove it, since it has none" : "please use one of its inputs: " + names;
-                    engine.printError("cherimoya requires a named argument to name an input of '" + name + "', " + fix, tokSpan(*arg.name), declared);
+                    engine.printError(codes::argumentName, "cherimoya requires a named argument to name an input of '" + name + "', " + fix, tokSpan(*arg.name), declared);
                     continue;
                 }
                 slot = found - params.begin();
             } else if (isNamed) {
                 // it still goes to the first input nothing has gone to, so the inputs after it aren't reported as missing too
-                engine.printError("cherimoya requires unnamed arguments to come before named ones, please name this one too", arg.span);
+                engine.printError(codes::argumentOrder, "cherimoya requires unnamed arguments to come before named ones, please name this one too", arg.span);
                 slot = nextFree();
             } else if (position < params.size()) {
                 slot = position++;
@@ -1923,7 +1923,7 @@ class Sema {
             }
             if (!slot) continue;
             if (inputs[*slot] != nullptr) {
-                engine.printError("cherimoya requires each input to get one argument, please remove one of the arguments for '" + std::string(params[*slot].name.text) + "'", arg.span, {{"'" + std::string(params[*slot].name.text) + "' already gets this argument", inputs[*slot]->span}});
+                engine.printError(codes::argumentTwice, "cherimoya requires each input to get one argument, please remove one of the arguments for '" + std::string(params[*slot].name.text) + "'", arg.span, {{"'" + std::string(params[*slot].name.text) + "' already gets this argument", inputs[*slot]->span}});
                 continue;
             }
             inputs[*slot] = arg.value;
@@ -1939,7 +1939,7 @@ class Sema {
         } else if (!missing.empty()) {
             std::string list = missing[0];
             for (size_t i = 1; i < missing.size(); i++) list += (i + 1 == missing.size() ? " and " : ", ") + missing[i];
-            engine.printError("cherimoya requires the call to '" + name + "' to pass " + list + ", please add an argument for " + (missing.size() == 1 ? "it" : "each"), span, declared);
+            engine.printError(codes::argumentMissing, "cherimoya requires the call to '" + name + "' to pass " + list + ", please add an argument for " + (missing.size() == 1 ? "it" : "each"), span, declared);
         }
         return slots;
     }
@@ -1951,7 +1951,7 @@ class Sema {
 
     // reports a method with no object, .len, anywhere but a pipe, which is what gives it one
     SemaType* unpipedMethod(MemberExpr& member) {
-        engine.printError("cherimoya requires a method without its object, '." + std::string(member.field) + "', to be piped into, please write 'x |> ." + std::string(member.field) + "'", member.span);
+        engine.printError(codes::methodUnpiped, "cherimoya requires a method without its object, '." + std::string(member.field) + "', to be piped into, please write 'x |> ." + std::string(member.field) + "'", member.span);
         return context.semaError;
     }
 
@@ -1961,10 +1961,10 @@ class Sema {
         auto type = checkExpr(*member.object);
         if (isPoisoned(type)) return type;
         if (hasMethod(type, member.field)) {
-            engine.printError("cherimoya requires a method to be called, please write '" + textOf(member.span) + "()'", member.span, {}, {{"Call it with '()'", {insertion(member.span.end, "()")}}});
+            engine.printError(codes::methodUncalled, "cherimoya requires a method to be called, please write '" + textOf(member.span) + "()'", member.span, {}, {{"Call it with '()'", {insertion(member.span.end, "()")}}});
             return context.semaError;
         }
-        return unsupported("fields", member.span);
+        return unsupported(codes::fields, "fields", member.span);
     }
 
     // checks whether a name is a method of any protocol, which is what makes a call by that name worth checking as a method first
@@ -1978,11 +1978,11 @@ class Sema {
         for (auto& arg : args) checkExpr(*arg.value);
         if (isPoisoned(type)) return type;
         if (!hasMethod(type, name)) {
-            engine.printError("cherimoya expected a method that '" + type->toString() + "' has, got '" + std::string(name) + "' instead", span);
+            engine.printError(codes::methodUnknown, "cherimoya expected a method that '" + type->toString() + "' has, got '" + std::string(name) + "' instead", span);
             return context.semaError;
         }
         if (!args.empty()) {
-            engine.printError("cherimoya expected 0 arguments in the call to '" + std::string(name) + "', got " + std::to_string(args.size()) + " instead", span);
+            engine.printError(codes::argumentCount, "cherimoya expected 0 arguments in the call to '" + std::string(name) + "', got " + std::to_string(args.size()) + " instead", span);
             return context.semaError;
         }
         return context.intType("i64u");
@@ -1991,14 +1991,14 @@ class Sema {
     // checks an array literal, [1, 2, 3], whose elements share one type, picked the way an operator picks its operands': the element type the context expects, else the first element that isn't a literal, else a float literal's, so [1, 2.5] is floats, where an empty one needs its type from where it goes
     SemaType* checkPack(PackExpr& pack, SemaType* expected) {
         for (auto& e : pack.elems) {
-            if (e.name) return unsupported("named packs", tokSpan(*e.name));
+            if (e.name) return unsupported(codes::namedPacks, "named packs", tokSpan(*e.name));
         }
         // an array on the heap expected where the pack goes, like a borrowed input it's lent to, says the elements' type too
         SemaType* element = asArray(expected) ? asArray(expected)->element : asHeapArray(expected) ? asHeapArray(expected)->element : nullptr;
         bool isExpected = element != nullptr;
         if (pack.elems.empty()) {
             if (isExpected) return context.arrayType(element, 0);
-            engine.printError("cherimoya requires an empty array's type to be known, please annotate it, like '([] :: arr[0, int])'", pack.span);
+            engine.printError(codes::packEmptyType, "cherimoya requires an empty array's type to be known, please annotate it, like '([] :: arr[0, int])'", pack.span);
             return context.semaError;
         }
         for (auto& e : pack.elems) {
@@ -2016,7 +2016,7 @@ class Sema {
             if (isExpected) {
                 mismatch(element, type, e.value->span);
             } else {
-                engine.printError("cherimoya doesn't support packs whose elements have different types yet, which are tuples, please give every element the type '" + element->toString() + "'", e.value->span);
+                engine.printError(codes::packTuple, "cherimoya doesn't support packs whose elements have different types yet, which are tuples, please give every element the type '" + element->toString() + "'", e.value->span);
             }
             return context.semaError;
         }
@@ -2028,12 +2028,12 @@ class Sema {
 
     // checks indexing an array, xs[i], by one unsigned integer, where a literal index is an i64u, and one into a fixed array known when the program compiles has to be below its length, and gives the element's type, or dereferencing a pointer, p[], which gives its value
     SemaType* checkIndex(IndexExpr& index) {
-        if (index.args.size() == 1 && index.args[0]->kind == ExprKind::Range) return unsupported("slicing", index.span);
+        if (index.args.size() == 1 && index.args[0]->kind == ExprKind::Range) return unsupported(codes::slicing, "slicing", index.span);
         auto object = checkExpr(*index.object);
         if (index.args.empty()) {
             if (isPoisoned(object)) return object;
             if (!asPointer(object)) {
-                engine.printError("cherimoya expected a pointer before '[]', got '" + object->toString() + "' instead", index.object->span);
+                engine.printError(codes::derefPointer, "cherimoya expected a pointer before '[]', got '" + object->toString() + "' instead", index.object->span);
                 return context.semaError;
             }
             return asPointer(object)->element;
@@ -2044,11 +2044,11 @@ class Sema {
         auto array = asArray(object);
         auto heap = asHeapArray(object);
         if (!array && !heap) {
-            engine.printError("cherimoya expected an array before '[...]', got '" + object->toString() + "' instead", index.object->span);
+            engine.printError(codes::indexArray, "cherimoya expected an array before '[...]', got '" + object->toString() + "' instead", index.object->span);
             return context.semaError;
         }
         if (index.args.size() != 1) {
-            engine.printError("cherimoya expected 1 index into an array, got " + std::to_string(index.args.size()) + " instead", index.span);
+            engine.printError(codes::indexCount, "cherimoya expected 1 index into an array, got " + std::to_string(index.args.size()) + " instead", index.span);
             return context.semaError;
         }
         auto position = positions[0];
@@ -2056,17 +2056,17 @@ class Sema {
         if (isPoisoned(position)) return position;
         auto integer = asInt(position);
         if (!integer) {
-            engine.printError("cherimoya expected an unsigned integer as an index, got '" + position->toString() + "' instead", at.span);
+            engine.printError(codes::indexInteger, "cherimoya expected an unsigned integer as an index, got '" + position->toString() + "' instead", at.span);
             return context.semaError;
         }
         if (integer->isSigned) {
-            engine.printError("cherimoya requires an index to be unsigned, please convert it, like 'i64u(" + textOf(at.span) + ")'", at.span, {},
+            engine.printError(codes::indexUnsigned, "cherimoya requires an index to be unsigned, please convert it, like 'i64u(" + textOf(at.span) + ")'", at.span, {},
                 {{"Convert it with 'i64u(...)'", {insertion(at.span.start, "i64u("), insertion(at.span.end, ")")}}});
             return context.semaError;
         }
         if (!array) return heap->element;
         if (auto value = fold(at); value && *value >= array->size) {
-            engine.printError("cherimoya expected an index below " + std::to_string(array->size) + " into '" + textOf(index.object->span) + "', got " + std::to_string(*value) + " instead", at.span);
+            engine.printError(codes::indexBounds, "cherimoya expected an index below " + std::to_string(array->size) + " into '" + textOf(index.object->span) + "', got " + std::to_string(*value) + " instead", at.span);
             return context.semaError;
         }
         return array->element;
@@ -2091,7 +2091,7 @@ class Sema {
         } else if (callee.kind == ExprKind::TypeExpr) {
             return checkConversion(static_cast<TypeExprExpr&>(callee), args, span);
         } else {
-            type = unsupported("calling anything but a function's name", callee.span);
+            type = unsupported(codes::calleeName, "calling anything but a function's name", callee.span);
         }
         callee.type = type;
         Symbol* function = callee.kind == ExprKind::Identifier ? static_cast<IdentifierExpr&>(callee).decl : nullptr;
@@ -2131,7 +2131,7 @@ class Sema {
         if (isFunction) passArguments(call, *function, *fnType, args, slots);
         if (type == context.semaError) return context.semaError;
         if (type->kind != SemaTypeKind::Function) {
-            engine.printError("cherimoya requires a call's callee to be a function, please call a function by name", callee.span);
+            engine.printError(codes::calleeFunction, "cherimoya requires a call's callee to be a function, please call a function by name", callee.span);
             return context.semaError;
         }
         bool neverReturns = std::find(actual.begin(), actual.end(), context.semaNever) != actual.end();
@@ -2185,9 +2185,9 @@ class Sema {
                 std::string name = textOf(arg.span);
                 std::string fn(function.name);
                 if (level == 0) {
-                    engine.printError("cherimoya requires '" + name + "' to be mutable to pass it to '" + fn + "', please declare it with 'let " + name + " :: mut <- ...;'", arg.span);
+                    engine.printError(codes::passImmutable, "cherimoya requires '" + name + "' to be mutable to pass it to '" + fn + "', please declare it with 'let " + name + " :: mut <- ...;'", arg.span);
                 } else {
-                    engine.printError("cherimoya requires the elements of '" + name + "' to be mutable to pass it to '" + fn + "', please declare it as '" + writableAt(arg.type, level - 1) + "'", arg.span);
+                    engine.printError(codes::passImmutable, "cherimoya requires the elements of '" + name + "' to be mutable to pass it to '" + fn + "', please declare it as '" + writableAt(arg.type, level - 1) + "'", arg.span);
                 }
                 break;
             }
@@ -2208,21 +2208,6 @@ class Sema {
         viewCalls[&call] = isViewOfPlaces ? std::optional<std::vector<Path>>(viewed) : std::nullopt;
         auto& output = function.function->outputs;
         if (output.size() == 1 && output[0].type) viewLevels[&call] = mutabilityOf(output[0].type.get(), unview(signature.returns));
-    }
-
-    // names the kinds of expression sema doesn't check yet, for their diagnostic
-    std::string_view unsupportedName(const Expr& e) {
-        switch (e.kind) {
-            case ExprKind::OpRef: return "operators as values";
-            case ExprKind::Old: return "'old'";
-            case ExprKind::Construct: return "construction";
-            case ExprKind::Range: return "ranges";
-            case ExprKind::Compr: return "comprehensions";
-            case ExprKind::Fold: return "folds";
-            case ExprKind::TypeExpr: return "types as values";
-            case ExprKind::Closure: return "closures";
-            default: return "this expression";
-        }
     }
 
     // gives an expression its type and returns it, where expected is the type the context wants, if it knows, which literals adapt to
@@ -2265,7 +2250,7 @@ class Sema {
             case ExprKind::Identifier:
                 return checkIdentifier(static_cast<IdentifierExpr&>(e), false);
             case ExprKind::Wildcard:
-                engine.printError("cherimoya requires '_' to be a place or an initializer, please use a value here", e.span);
+                engine.printError(codes::wildcardValue, "cherimoya requires '_' to be a place or an initializer, please use a value here", e.span);
                 return context.semaError;
             case ExprKind::Addr:
                 return checkAddress(static_cast<AddrExpr&>(e));
@@ -2320,7 +2305,7 @@ class Sema {
                 auto& extra = static_cast<ExtraBinaryExpr&>(e);
                 checkExpr(*extra.lhs);
                 checkExpr(*extra.rhs);
-                return unsupported("extra operators", tokSpan(extra.op));
+                return unsupported(codes::extraOperators, "extra operators", tokSpan(extra.op));
             }
             case ExprKind::Pack:
                 return checkPack(static_cast<PackExpr&>(e), expected);
@@ -2370,8 +2355,25 @@ class Sema {
                 return checkChunk(static_cast<ChunkExpr&>(e));
             case ExprKind::Error:
                 return context.semaError;
+            // the kinds of expression sema doesn't check yet, where an operator alone is only ever a fold's reducer
+            case ExprKind::OpRef:
+                return unsupported(codes::folds, "operators as values", e.span);
+            case ExprKind::Old:
+                return unsupported(codes::oldValues, "'old'", e.span);
+            case ExprKind::Construct:
+                return unsupported(codes::construction, "construction", e.span);
+            case ExprKind::Range:
+                return unsupported(codes::ranges, "ranges", e.span);
+            case ExprKind::Compr:
+                return unsupported(codes::comprehensions, "comprehensions", e.span);
+            case ExprKind::Fold:
+                return unsupported(codes::folds, "folds", e.span);
+            case ExprKind::TypeExpr:
+                return unsupported(codes::typeValues, "types as values", e.span);
+            case ExprKind::Closure:
+                return unsupported(codes::closures, "closures", e.span);
             default:
-                return unsupported(unsupportedName(e), e.span);
+                return context.semaError;
         }
     }
     // checks the entry point of a program that will run: a top-level start, declared the way the runtime calls it
@@ -2380,13 +2382,13 @@ class Sema {
         if (entry == nullptr) {
             std::string_view text = engine.getManager().text();
             std::string lead = text.empty() ? "" : text.back() == '\n' ? "\n" : "\n\n";
-            engine.printError("cherimoya requires a program to have a 'start' function, please add 'let () -> start -> (code :: int) { 0 -| }'", Span{0, 0}, {},
+            engine.printError(codes::startMissing, "cherimoya requires a program to have a 'start' function, please add 'let () -> start -> (code :: int) { 0 -| }'", Span{0, 0}, {},
                 {{"Add a 'start' function", {insertion(text.size(), lead + "let () -> start -> (code :: int) { 0 -| }\n")}}});
             return;
         }
         if (isPoisoned(entry->type)) return;
         if (entry->kind != SymbolKind::Function || entry->type != context.functionType({context.semaInt})) {
-            engine.printError("cherimoya requires 'start' to be declared as 'let () -> start -> (code :: int)', please change its inputs and outputs", entry->span);
+            engine.printError(codes::startSignature, "cherimoya requires 'start' to be declared as 'let () -> start -> (code :: int)', please change its inputs and outputs", entry->span);
         }
     }
 public:
@@ -2415,9 +2417,9 @@ public:
         }
         if (role == Role::Tests) {
             if (Symbol* entry = global.lookup("start")) {
-                engine.printError("cherimoya requires a .toya file to have no 'start', since cheri test runs its tests instead, please rename it", entry->span);
+                engine.printError(codes::testsStart, "cherimoya requires a .toya file to have no 'start', since cheri test runs its tests instead, please rename it", entry->span);
             }
-            if (tests.empty()) engine.printWarning("cherimoya found no tests in this file, please mark one with '@test'", Span{0, 0});
+            if (tests.empty()) engine.printWarning(codes::testsMissing, "cherimoya never runs a test in this file, since none is marked '@test', please mark one", Span{0, 0});
             // a nested test is found when the function around it is checked, after the top-level ones, so they're put back in the order they're written
             std::sort(tests.begin(), tests.end(), [](const Test& a, const Test& b) { return a.fn->span.start < b.fn->span.start; });
         }

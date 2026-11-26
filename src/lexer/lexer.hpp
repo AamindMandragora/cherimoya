@@ -3,7 +3,7 @@
 #include <cctype>
 #include <string>
 #include <vector>
-#include "diagnostics.hpp"
+#include "codes.hpp"
 #include "escape.hpp"
 #include "keywords.hpp"
 #include "operators.hpp"
@@ -101,7 +101,7 @@ class Lexer {
             std::string after = seenDigit ? "" : " after '" + std::string(code.substr(start, 2)) + "'";
             std::string got = describe(pos);
             while (isWordChar(pos)) pos++;
-            engine.printError("cherimoya expected " + name + after + ", got " + got + " instead", {start, pos});
+            engine.printError(codes::numberDigit, "cherimoya expected " + name + after + ", got " + got + " instead", {start, pos});
             tokens.push_back({TokenKind::Error, code.substr(start, pos - start), start});
             return;
         }
@@ -119,7 +119,7 @@ class Lexer {
         if (pos >= code.size()) {
             pos = code.size();
             std::string spelling = isString ? "'\"'" : "'\\''";
-            engine.printError("cherimoya expected " + spelling + " to close the " + (isString ? "string" : "char") + " literal, got the end of the file instead", {start, start + 1});
+            engine.printError(codes::unclosedLiteral, "cherimoya expected " + spelling + " to close the " + (isString ? "string" : "char") + " literal, got the end of the file instead", {start, start + 1});
             tokens.push_back({TokenKind::Error, code.substr(start, pos - start), start});
             return;
         }
@@ -131,13 +131,13 @@ class Lexer {
         for (size_t at = 0; at < contents.size(); count++) {
             Decoded decoded = decodeCharacter(contents.substr(at));
             if (!decoded.error.empty()) {
-                engine.printError(decoded.error, {start + 1 + at, start + 1 + at + decoded.length});
+                engine.printError(decoded.code, decoded.error, {start + 1 + at, start + 1 + at + decoded.length});
                 isValid = false;
             }
             at += decoded.length;
         }
         if (!isString && isValid && count != 1) {
-            engine.printError("cherimoya expected one character in a char literal, got " + (count == 0 ? std::string("none") : std::to_string(count)) + " instead", {start, pos});
+            engine.printError(codes::charLiteralLength, "cherimoya expected one character in a char literal, got " + (count == 0 ? std::string("none") : std::to_string(count)) + " instead", {start, pos});
             isValid = false;
         }
         auto kind = !isValid ? TokenKind::Error : isString ? TokenKind::StringLiteral : TokenKind::CharLiteral;
@@ -187,7 +187,7 @@ class Lexer {
                     while (pos + length < code.size() && (static_cast<unsigned char>(code[pos + length]) & 0xC0) == 0x80) length++;
                 }
                 std::string got = length == 1 ? describe(start) : "'" + std::string(code.substr(start, length)) + "'";
-                engine.printError("cherimoya expected a name, a literal, an operator, or punctuation, got " + got + " instead", {start, start + length});
+                engine.printError(codes::unknownCharacter, "cherimoya expected a name, a literal, an operator, or punctuation, got " + got + " instead", {start, start + length});
                 emit(TokenKind::Error, length);
             }
         }
@@ -202,7 +202,7 @@ class Lexer {
             if (a.loc + a.text.size() != b.loc) continue;
             if (!needsSpacing(*a.op) && !needsSpacing(*b.op)) continue;
             std::string first(a.text), second(b.text);
-            engine.printError("cherimoya requires whitespace between the operators '" + first + "' and '" + second
+            engine.printError(codes::operatorSpacing, "cherimoya requires whitespace between the operators '" + first + "' and '" + second
                 + "', please write '" + first + " " + second + "'", {a.loc, b.loc + b.text.size()}, {}, {{"Write '" + first + " " + second + "'", {insertion(b.loc, " ")}}});
         }
     }

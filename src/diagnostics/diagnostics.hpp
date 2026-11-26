@@ -54,8 +54,16 @@ inline std::string applyEdits(std::string text, std::vector<Edit> edits) {
     return text;
 }
 
-// a diagnostic has a message, a location, any notes that go with it, the fixes that would resolve it, and whether it's only a warning
+// a rule's stable code, a letter for where it's reported and a number, never reused, which cheri guide explains
+struct Code {
+    std::string_view id;
+    // the section of the reference that explains the rule
+    std::string_view topic;
+};
+
+// a diagnostic has the rule it reports, a message, a location, any notes that go with it, the fixes that would resolve it, and whether it's only a warning
 struct Diagnostic {
+    Code code;
     std::string message;
     Span span;
     std::vector<Note> notes;
@@ -70,8 +78,8 @@ class DiagnosticEngine {
     std::ostream* output;
 
     // records a diagnostic, then prints it formatted, if there's anywhere to print it
-    void report(std::string_view message, Span span, std::vector<Note> notes, std::vector<Fix> fixes, bool isWarning) {
-        diagnostics.push_back({std::string(message), span, std::move(notes), std::move(fixes), isWarning});
+    void report(Code code, std::string_view message, Span span, std::vector<Note> notes, std::vector<Fix> fixes, bool isWarning) {
+        diagnostics.push_back({code, std::string(message), span, std::move(notes), std::move(fixes), isWarning});
         if (output) *output << getErrorN(diagnostics.size() - 1) << std::endl;
     }
 public:
@@ -119,25 +127,33 @@ public:
     std::string getErrorN(size_t n) {
         if (n >= diagnostics.size()) return "";
         auto& diagnostic = diagnostics[n];
-        std::string out = render(diagnostic.isWarning ? "warning" : "error", diagnostic.message, diagnostic.span);
+        // the label carries the code, error[S017], so it can be looked up
+        std::string label = std::string(diagnostic.isWarning ? "warning" : "error") + "[" + std::string(diagnostic.code.id) + "]";
+        std::string out = render(label, diagnostic.message, diagnostic.span);
         for (auto& note : diagnostic.notes) out += render("note", note.message, note.span);
         return out;
     }
 
     // records an error with any notes that explain it and any fixes that resolve it, then prints it
-    void printError(std::string_view message, Span span, std::vector<Note> notes = {}, std::vector<Fix> fixes = {}) {
-        report(message, span, std::move(notes), std::move(fixes), false);
+    void printError(Code code, std::string_view message, Span span, std::vector<Note> notes = {}, std::vector<Fix> fixes = {}) {
+        report(code, message, span, std::move(notes), std::move(fixes), false);
     }
 
     // records a warning, which is reported like an error but doesn't stop compilation
-    void printWarning(std::string_view message, Span span, std::vector<Note> notes = {}, std::vector<Fix> fixes = {}) {
-        report(message, span, std::move(notes), std::move(fixes), true);
+    void printWarning(Code code, std::string_view message, Span span, std::vector<Note> notes = {}, std::vector<Fix> fixes = {}) {
+        report(code, message, span, std::move(notes), std::move(fixes), true);
     }
 
     // every diagnostic reported so far, in order
     const std::vector<Diagnostic>& all() const { return diagnostics; }
 
     bool hadErrors() const { return errorCount() > 0; }
+
+    // the code of the first error, which the driver points cheri guide at, or nothing when there was none
+    std::string_view firstErrorCode() const {
+        auto first = std::find_if(diagnostics.begin(), diagnostics.end(), [](const Diagnostic& d) { return !d.isWarning; });
+        return first == diagnostics.end() ? std::string_view() : first->code.id;
+    }
     size_t errorCount() const { return std::count_if(diagnostics.begin(), diagnostics.end(), [](const Diagnostic& d) { return !d.isWarning; }); }
     size_t warningCount() const { return diagnostics.size() - errorCount(); }
 };

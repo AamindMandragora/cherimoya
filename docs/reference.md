@@ -1262,13 +1262,17 @@ tests/test/outcomes.toya
 
 ## 13. Diagnostics
 
-Every diagnostic uses one of three forms:
+Every diagnostic uses one of five forms:
 
 | Form | For | Example |
 |---|---|---|
 | `cherimoya expected <what> <where>, got <other> instead` | the wrong thing in a place, naming the construct's shape where it helps | `cherimoya expected ')' after the arguments in 'f(a, b)', got ';' instead` |
 | `cherimoya uses <x> for <y> instead of <z> as follows: <example>` | habits from other languages (`if`, tuples in parentheses, map arrows, nested functions capturing) | `cherimoya uses closures to capture 'n' instead of nested functions as follows: let f <- [n] (...) -> { ... };` |
 | `cherimoya requires <rule>, please <fix>` | broken rules | `cherimoya requires whitespace between the operators '**' and '-', please write '** -'` |
+| `cherimoya doesn't support <x> yet[, which <what will bring it>][, please <workaround>]` | features that are planned but not built | `cherimoya doesn't support closures yet` |
+| `cherimoya never <does x>, since <why>[, please <fix>]` | warnings, code that runs but does nothing useful | `cherimoya never runs this statement, since every path before it yields` |
+
+**Codes.** Every rule has a stable code, a letter and a number: `L` for the lexer, `P` the parser, `S` sema, `W` a warning, `N` a feature not built yet. Codes are never reused. The terminal shows one in the label, `error[S001] at line 3:`, the language server sends it as the diagnostic's code, and `cheri guide <code>` explains the rule with a program that breaks it and the same program fixed.
 
 **Severity.** A diagnostic is an error if and only if the problem is, or can cause, real harm: a leak, an unhandled error, a segfault, an out-of-bounds access, a value used before it's set, an ownership violation, a dropped value, an incomplete match. It's a warning if and only if it's just bad code that runs correctly: unreachable statements and arms, unused bindings, shadowing, a `.toya` file without tests. Warnings never stop a build.
 

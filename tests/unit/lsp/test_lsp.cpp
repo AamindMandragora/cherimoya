@@ -62,13 +62,14 @@ TEST_CASE("LSP: positions", "[lsp]") {
     CHECK(lines.offset({9, 0}) == text.size());
 }
 
-// checks that each diagnostic carries its range, its severity, and its notes
+// checks that each diagnostic carries its range, its severity, its code, and its notes
 TEST_CASE("LSP: diagnostics", "[lsp]") {
     Document document("file:///t.moya", "let x <- 1; let x <- 2;\nlet y <- z;");
     auto result = diagnostics(document);
     REQUIRE(result.size() == 2);
     auto& clash = *result[0].getAsObject();
     CHECK(clash.getInteger("severity") == 1);
+    CHECK(clash.getString("code")->str() == codes::namesDistinct.id);
     CHECK(clash.getArray("relatedInformation")->size() == 1);
     auto& undeclared = *result[1].getAsObject();
     CHECK(undeclared.getObject("range")->getObject("start")->getInteger("line") == 1);

@@ -210,13 +210,13 @@ inline Value docValue(const Document& document, const Symbol& symbol) {
     return Object{{"kind", "markdown"}, {"value", doc}};
 }
 
-// one diagnostic as the editor's, where a warning is severity 2, an error is 1, and each note is related information pointing at its own span
+// one diagnostic as the editor's, where a warning is severity 2, an error is 1, the code shows beside the message, and each note is related information pointing at its own span
 inline Value diagnosticOf(const Document& document, const Diagnostic& diagnostic) {
     Array related;
     for (auto& note : diagnostic.notes) {
         related.push_back(Object{{"location", locationOf(document, note.span)}, {"message", note.message}});
     }
-    return Object{{"range", rangeOf(document, diagnostic.span)}, {"severity", diagnostic.isWarning ? 2 : 1}, {"source", "cheri"}, {"message", diagnostic.message}, {"relatedInformation", std::move(related)}};
+    return Object{{"range", rangeOf(document, diagnostic.span)}, {"severity", diagnostic.isWarning ? 2 : 1}, {"code", std::string(diagnostic.code.id)}, {"source", "cheri"}, {"message", diagnostic.message}, {"relatedInformation", std::move(related)}};
 }
 
 // every diagnostic in a document as the editor's

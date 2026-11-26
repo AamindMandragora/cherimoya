@@ -40,15 +40,15 @@ class Parser {
     }
 
     // consumes the token if it's what we expected, and otherwise reports it, where what names the token and where it belongs
-    Token expect(TokenKind kind, std::string_view what) {
+    Token expect(Code code, TokenKind kind, std::string_view what) {
         if (peek().kind == kind) return advance();
-        expected(what, peek());
+        expected(code, what, peek());
         return isBoundary(peek().kind) ? peek() : advance();
     }
 
     // reports that something else belonged where tok is
-    void expected(std::string_view what, const Token& tok) {
-        engine.printError("cherimoya expected " + std::string(what) + ", got " + describe(tok) + " instead", tokSpan(tok));
+    void expected(Code code, std::string_view what, const Token& tok) {
+        engine.printError(code, "cherimoya expected " + std::string(what) + ", got " + describe(tok) + " instead", tokSpan(tok));
     }
 
     // names a token for a diagnostic: its text up to the end of its first line, or the end of the file, where a keyword says it's one, since it looks like a name that should have worked
@@ -217,7 +217,7 @@ class Parser {
                 args.push_back(parseArg());
             }
         }
-        expect(TokenKind::RParen, "')' after the arguments in 'f(a, b)'");
+        expect(codes::argumentList, TokenKind::RParen, "')' after the arguments in 'f(a, b)'");
         return args;
     }
 
@@ -228,9 +228,9 @@ class Parser {
         auto after = at(close + 1).kind;
         bool closed = tokens[close].kind == TokenKind::RParen;
         // skips the whole parenthesized list after reporting an error about it
-        auto skip = [&](std::string_view error, std::vector<Fix> fixes = {}) -> std::unique_ptr<Expr> {
+        auto skip = [&](Code code, std::string_view error, std::vector<Fix> fixes = {}) -> std::unique_ptr<Expr> {
             auto span = Span{open.loc, tokSpan(tokens[close]).end};
-            engine.printError(error, span, {}, std::move(fixes));
+            engine.printError(code, error, span, {}, std::move(fixes));
             cursor = closed ? close + 1 : close;
             return std::make_unique<ErrorExpr>(span);
         };
@@ -241,25 +241,25 @@ class Parser {
         // the parentheses of an empty pack or a tuple become a pack's brackets
         auto brackets = [&](std::string title) { return std::vector<Fix>{{std::move(title), {{tokSpan(open), "["}, {tokSpan(tokens[close]), "]"}}}}; };
         if (closed && close == openIdx + 1) {
-            return skip("cherimoya uses '[]' for an empty pack instead of '()' as follows: let empty <- [];", brackets("Write '[]'"));
+            return skip(codes::emptyPack, "cherimoya uses '[]' for an empty pack instead of '()' as follows: let empty <- [];", brackets("Write '[]'"));
         }
         if (closed && close == openIdx + 2 && tokens[openIdx + 1].op != nullptr) {
             std::string op(tokens[openIdx + 1].text);
-            return skip("cherimoya requires a bare operator to be a fold's reducer, please write '(" + op + ", seed)[xs]' since '(" + op + ")' on its own is reserved");
+            return skip(codes::bareOperator, "cherimoya requires a bare operator to be a fold's reducer, please write '(" + op + ", seed)[xs]' since '(" + op + ")' on its own is reserved");
         }
         if (hasTopLevelComma(openIdx, close)) {
             if (closed && after == TokenKind::LBracket) return parseFold(open, close);
-            return skip("cherimoya uses packs for tuples instead of parentheses as follows: [a, b]", closed ? brackets("Write it as a pack, '[...]'") : std::vector<Fix>{});
+            return skip(codes::tupleParens, "cherimoya uses packs for tuples instead of parentheses as follows: [a, b]", closed ? brackets("Write it as a pack, '[...]'") : std::vector<Fix>{});
         }
         // a grouping, or an annotation if :: follows, whose span takes in its parentheses
         auto inner = parseNested();
         if (peek().kind == TokenKind::ColonColon) {
             advance();
             auto type = parseType();
-            auto end = expect(TokenKind::RParen, "')' after the annotation in '(value :: Type)'");
+            auto end = expect(codes::annotationShape, TokenKind::RParen, "')' after the annotation in '(value :: Type)'");
             return std::make_unique<AnnExpr>(std::move(inner), std::move(type), Span{open.loc, end.loc + end.text.length()});
         }
-        auto end = expect(TokenKind::RParen, "')' to close the parenthesized expression");
+        auto end = expect(codes::groupingShape, TokenKind::RParen, "')' to close the parenthesized expression");
         inner->span = {open.loc, tokSpan(end).end};
         return inner;
     }
@@ -273,14 +273,14 @@ class Parser {
         } else {
             reducer = parseNested();
         }
-        expect(TokenKind::Comma, "',' after the fold's reducer in '(reducer, seed)[xs]'");
+        expect(codes::foldShape, TokenKind::Comma, "',' after the fold's reducer in '(reducer, seed)[xs]'");
         auto seed = parseNested();
         if (peek().kind != TokenKind::RParen) {
-            engine.printError("cherimoya requires a fold to take exactly a reducer and a seed, please write '(reducer, seed)[xs]'", tokSpan(peek()));
+            engine.printError(codes::foldShape, "cherimoya requires a fold to take exactly a reducer and a seed, please write '(reducer, seed)[xs]'", tokSpan(peek()));
             if (close > cursor) cursor = close;
         }
         advance();
-        auto bracket = expect(TokenKind::LBracket, "'[' after the fold's seed in '(reducer, seed)[xs]'");
+        auto bracket = expect(codes::foldShape, TokenKind::LBracket, "'[' after the fold's seed in '(reducer, seed)[xs]'");
         auto sequence = parsePack(bracket);
         if (sequence->kind == ExprKind::Pack) {
             auto& pack = static_cast<PackExpr&>(*sequence);
@@ -310,7 +310,7 @@ class Parser {
             elem.marker = advance();
             elem.value = parseNested();
         } else if (peek().kind == TokenKind::LArrow) {
-            engine.printError("cherimoya uses '< -' for an exclusivity marker on a negative bound instead of '<-' as follows: [5, ..., < -1]", tokSpan(peek()));
+            engine.printError(codes::negativeMarker, "cherimoya uses '< -' for an exclusivity marker on a negative bound instead of '<-' as follows: [5, ..., < -1]", tokSpan(peek()));
             advance();
             elem.value = parseNested();
         } else if (peek().kind == TokenKind::Identifier && peekAt(1).kind == TokenKind::LArrow) {
@@ -321,7 +321,7 @@ class Parser {
             elem.value = parseNested();
         }
         if (peek().kind == TokenKind::RArrow) {
-            engine.printError("cherimoya uses a pack of pairs for a map instead of '->' as follows: [[key, value], [key, value]]", tokSpan(peek()));
+            engine.printError(codes::mapArrow, "cherimoya uses a pack of pairs for a map instead of '->' as follows: [[key, value], [key, value]]", tokSpan(peek()));
             advance();
             parseNested();
         }
@@ -342,7 +342,7 @@ class Parser {
                 clauses.push_back({nullptr, std::move(expr)});
             }
             if (peek().kind == TokenKind::BarBar) {
-                engine.printError("cherimoya requires a comprehension's clauses to be joined with '&&', please wrap the '||' in parentheses, as in [x : x <- xs && (a || b)]", tokSpan(peek()));
+                engine.printError(codes::clauseJoin, "cherimoya requires a comprehension's clauses to be joined with '&&', please wrap the '||' in parentheses, as in [x : x <- xs && (a || b)]", tokSpan(peek()));
             } else if (peek().kind != TokenKind::AmpAmp) {
                 break;
             }
@@ -362,11 +362,11 @@ class Parser {
                 advance();
                 auto& head = elems[0];
                 if (head.name || head.marker || head.hasEllipsis) {
-                    engine.printError("cherimoya requires a comprehension's head to be a plain expression, please remove the name, exclusivity marker, or '...' before ':'", head.span);
+                    engine.printError(codes::comprehensionHead, "cherimoya requires a comprehension's head to be a plain expression, please remove the name, exclusivity marker, or '...' before ':'", head.span);
                 }
                 auto clauses = parseClauses();
                 if (peek().kind != TokenKind::RBracket) {
-                    expected("']' after the clauses in '[head : clauses]'", peek());
+                    expected(codes::comprehensionShape, "']' after the clauses in '[head : clauses]'", peek());
                     if (close > cursor) cursor = close;
                 }
                 advance();
@@ -379,7 +379,7 @@ class Parser {
             }
         }
         if (peek().kind != TokenKind::RBracket) {
-            expected("']' after the last element in '[a, b]'", peek());
+            expected(codes::packShape, "']' after the last element in '[a, b]'", peek());
             if (close > cursor) cursor = close;
         }
         advance();
@@ -393,18 +393,18 @@ class Parser {
         }
         if (ellipses > 0) {
             if (ellipses > 1) {
-                engine.printError("cherimoya requires a range to have exactly one '...', please write '[first, ..., last]'", span);
+                engine.printError(codes::rangeShape, "cherimoya requires a range to have exactly one '...', please write '[first, ..., last]'", span);
             } else if (at > 2 || elems.size() - at - 1 > 1) {
-                engine.printError("cherimoya requires a range to have at most two values before '...' and one after, please write '[first, second, ..., last]'", span);
+                engine.printError(codes::rangeShape, "cherimoya requires a range to have at most two values before '...' and one after, please write '[first, second, ..., last]'", span);
             } else if (elems.size() == 1) {
-                engine.printError("cherimoya requires a range to have at least one bound, please write '[first, ...]' or '[..., last]'", span);
+                engine.printError(codes::rangeShape, "cherimoya requires a range to have at least one bound, please write '[first, ...]' or '[..., last]'", span);
             }
             std::vector<RangeElem> range;
             for (size_t i = 0; i < elems.size(); i++) {
                 auto& e = elems[i];
-                if (e.name) engine.printError("cherimoya requires range elements to be unnamed, please remove '" + std::string(e.name->text) + " <-'", e.span, {}, {unnaming(e)});
+                if (e.name) engine.printError(codes::rangeUnnamed, "cherimoya requires range elements to be unnamed, please remove '" + std::string(e.name->text) + " <-'", e.span, {}, {unnaming(e)});
                 if (e.marker && i != 0 && i != elems.size() - 1) {
-                    engine.printError("cherimoya requires exclusivity markers to be on a range's endpoints, please move it to the first or last value", e.span);
+                    engine.printError(codes::markerPlacement, "cherimoya requires exclusivity markers to be on a range's endpoints, please move it to the first or last value", e.span);
                 }
                 range.push_back({std::move(e.value), e.marker});
             }
@@ -414,7 +414,7 @@ class Parser {
         // anything else is a pack
         std::vector<Elem> pack;
         for (auto& e : elems) {
-            if (e.marker) engine.printError("cherimoya requires exclusivity markers to be inside a range, please add '...' or remove the marker", e.span);
+            if (e.marker) engine.printError(codes::markerPlacement, "cherimoya requires exclusivity markers to be inside a range, please add '...' or remove the marker", e.span);
             pack.push_back({e.name, std::move(e.value)});
         }
         return std::make_unique<PackExpr>(std::move(pack), span);
@@ -478,7 +478,7 @@ class Parser {
                     args.push_back(parseGenericArg());
                 }
             }
-            expect(TokenKind::RBracket, "']' after the generic arguments in 'Name[A, B]'");
+            expect(codes::genericArguments, TokenKind::RBracket, "']' after the generic arguments in 'Name[A, B]'");
         }
         return std::make_unique<NamedType>(std::move(path), std::move(args), Span{start, prevEnd()});
     }
@@ -486,14 +486,14 @@ class Parser {
     // parses a refinement after its base type, naming the binder in type definitions: {p : 0 <= p}, or not on parameters: {a >= 0}
     std::unique_ptr<Type> parseRefinement(std::unique_ptr<Type> inner) {
         auto start = inner->span.start;
-        expect(TokenKind::LBrace, "'{' to start the refinement in 'T {predicate}'");
+        expect(codes::refinementShape, TokenKind::LBrace, "'{' to start the refinement in 'T {predicate}'");
         std::optional<Token> binder = std::nullopt;
         if (peek().kind == TokenKind::Identifier && peekAt(1).kind == TokenKind::Colon) {
             binder = advance();
             advance();
         }
         auto predicate = parseNested();
-        expect(TokenKind::RBrace, "'}' after the refinement's predicate in 'T {predicate}'");
+        expect(codes::refinementShape, TokenKind::RBrace, "'}' after the refinement's predicate in 'T {predicate}'");
         return std::make_unique<RefinedType>(std::move(inner), binder, std::move(predicate), Span{start, prevEnd()});
     }
 
@@ -501,7 +501,7 @@ class Parser {
     std::vector<Param> parseParamList() {
         std::vector<Param> params = {};
         while (peek().kind != TokenKind::RParen && peek().kind != TokenKind::Eof) {
-            auto name = expect(TokenKind::Identifier, "a parameter name in '(name :: Type)'");
+            auto name = expect(codes::parameterList, TokenKind::Identifier, "a parameter name in '(name :: Type)'");
             std::unique_ptr<Type> type = nullptr;
             if (peek().kind == TokenKind::ColonColon) {
                 advance();
@@ -516,14 +516,14 @@ class Parser {
             if (peek().kind != TokenKind::Comma) break;
             advance();
         }
-        expect(TokenKind::RParen, "')' after the parameters in '(name :: Type, name :: Type)'");
+        expect(codes::parameterList, TokenKind::RParen, "')' after the parameters in '(name :: Type, name :: Type)'");
         return params;
     }
 
     // parses (params) -> (outputs) { body } after the (, with outputs optional and captures already parsed
     std::unique_ptr<Expr> parseClosure(SourceLoc start, std::vector<std::unique_ptr<Expr>> captures) {
         auto params = parseParamList();
-        expect(TokenKind::RArrow, "'->' after the closure's parameters in '(params) -> (outputs) { body }'");
+        expect(codes::closureShape, TokenKind::RArrow, "'->' after the closure's parameters in '(params) -> (outputs) { body }'");
         std::optional<std::vector<Param>> outputs = std::nullopt;
         if (peek().kind == TokenKind::LParen) {
             advance();
@@ -591,7 +591,7 @@ class Parser {
             default:
                 break;
         }
-        engine.printError("cherimoya expected a pattern (a literal, a name, _, Variant[p], a pack, a range, or a set-builder), got " + describe(*e) + " instead", span);
+        engine.printError(codes::patternShape, "cherimoya expected a pattern (a literal, a name, _, Variant[p], a pack, a range, or a set-builder), got " + describe(*e) + " instead", span);
         return std::make_unique<ErrorPattern>(span);
     }
 
@@ -614,7 +614,7 @@ class Parser {
             return;
         }
         if (expr != nullptr && expr->kind == ExprKind::Error) return;
-        expected("';' after the statement", peek());
+        expected(codes::statementEnd, "';' after the statement", peek());
     }
 
     // checks if an expression can be assigned to: names, fields, indexes, dereferences, and _
@@ -659,7 +659,7 @@ class Parser {
         } else {
             std::vector<Fix> fixes;
             if (peek().kind == TokenKind::Semi) fixes.push_back({"Leave it uninitialized with '<- _'", {insertion(peek().loc, " <- _")}});
-            engine.printError("cherimoya requires a binding to have an initializer, please write '<- _' to leave it uninitialized", tokSpan(peek()), {}, std::move(fixes));
+            engine.printError(codes::bindingInitializer, "cherimoya requires a binding to have an initializer, please write '<- _' to leave it uninitialized", tokSpan(peek()), {}, std::move(fixes));
             init = std::make_unique<ErrorExpr>(tokSpan(peek()));
         }
         expectSemi(init.get());
@@ -669,14 +669,14 @@ class Parser {
     // parses wit {predicate}; or wit {T :: Protocol};
     std::unique_ptr<Stmt> parseWit() {
         auto start = advance();
-        expect(TokenKind::LBrace, "'{' after 'wit' in 'wit {predicate};'");
+        expect(codes::witShape, TokenKind::LBrace, "'{' after 'wit' in 'wit {predicate};'");
         auto predicate = parseNested();
         std::unique_ptr<Type> bound = nullptr;
         if (peek().kind == TokenKind::ColonColon) {
             advance();
             bound = parseType();
         }
-        expect(TokenKind::RBrace, "'}' after the obligation in 'wit {predicate};'");
+        expect(codes::witShape, TokenKind::RBrace, "'}' after the obligation in 'wit {predicate};'");
         expectSemi(nullptr);
         return std::make_unique<WitStmt>(std::move(predicate), std::move(bound), Span{start.loc, prevEnd()});
     }
@@ -684,9 +684,9 @@ class Parser {
     // parses assert (cond);
     std::unique_ptr<Stmt> parseAssert() {
         auto start = advance();
-        expect(TokenKind::LParen, "'(' after 'assert' in 'assert (condition);'");
+        expect(codes::assertShape, TokenKind::LParen, "'(' after 'assert' in 'assert (condition);'");
         auto cond = parseNested();
-        expect(TokenKind::RParen, "')' after the condition in 'assert (condition);'");
+        expect(codes::assertShape, TokenKind::RParen, "')' after the condition in 'assert (condition);'");
         expectSemi(nullptr);
         return std::make_unique<AssertStmt>(std::move(cond), Span{start.loc, prevEnd()});
     }
@@ -708,13 +708,13 @@ class Parser {
                 equality = advance();
                 advance();
                 if (equality->kind != TokenKind::Eq && equality->kind != TokenKind::EqEq) {
-                    engine.printError("cherimoya requires a match's equality to be '=' or '==', please write 'match (=, subject)' or 'match (==, subject)'", tokSpan(*equality));
+                    engine.printError(codes::matchEquality, "cherimoya requires a match's equality to be '=' or '==', please write 'match (=, subject)' or 'match (==, subject)'", tokSpan(*equality));
                 }
             }
             subject = parseNested();
-            expect(TokenKind::RParen, "')' after the subject in 'match (subject) { arms }'");
+            expect(codes::matchShape, TokenKind::RParen, "')' after the subject in 'match (subject) { arms }'");
         }
-        expect(TokenKind::LBrace, "'{' before the arms in 'match (subject) { arms }'");
+        expect(codes::matchShape, TokenKind::LBrace, "'{' before the arms in 'match (subject) { arms }'");
         std::vector<MatchArm> arms = {};
         while (peek().kind != TokenKind::RBrace && peek().kind != TokenKind::Eof) {
             auto armStart = peek().loc;
@@ -722,19 +722,19 @@ class Parser {
             if (subject == nullptr && peek().kind == TokenKind::LParen) {
                 advance();
                 auto cond = parseNested();
-                expect(TokenKind::RParen, "')' after the guard in '(condition) -> { body }'");
+                expect(codes::matchArm, TokenKind::RParen, "')' after the guard in '(condition) -> { body }'");
                 pattern = std::make_unique<GuardPattern>(std::move(cond), Span{armStart, prevEnd()});
             } else {
                 pattern = parsePattern();
                 if (subject == nullptr && pattern->kind != PatternKind::Wildcard && pattern->kind != PatternKind::Error) {
-                    engine.printError("cherimoya requires a subjectless match's arms to be '(condition)' or '_', please write '(condition) -> { body }'", pattern->span);
+                    engine.printError(codes::subjectlessArm, "cherimoya requires a subjectless match's arms to be '(condition)' or '_', please write '(condition) -> { body }'", pattern->span);
                 }
             }
-            expect(TokenKind::RArrow, "'->' after the pattern in 'pattern -> { body }'");
+            expect(codes::matchArm, TokenKind::RArrow, "'->' after the pattern in 'pattern -> { body }'");
             auto body = parseBlock(std::nullopt);
             arms.push_back(MatchArm{std::move(pattern), std::move(body), Span{armStart, prevEnd()}});
         }
-        expect(TokenKind::RBrace, "'}' after the arms in 'match (subject) { arms }'");
+        expect(codes::matchShape, TokenKind::RBrace, "'}' after the arms in 'match (subject) { arms }'");
         return std::make_unique<MatchExpr>(name, equality, std::move(subject), std::move(arms), Span{start.loc, prevEnd()});
     }
 
@@ -747,7 +747,7 @@ class Parser {
         if (peek().kind == TokenKind::LParen) {
             advance();
             auto inner = parseNested();
-            expect(TokenKind::RParen, "')' after the loop header in 'repeat (binder) <- source { body }'");
+            expect(codes::repeatShape, TokenKind::RParen, "')' after the loop header in 'repeat (binder) <- source { body }'");
             if (peek().kind == TokenKind::LArrow) {
                 advance();
                 binder = toPattern(std::move(inner));
@@ -759,9 +759,9 @@ class Parser {
         std::unique_ptr<Expr> invariant = nullptr;
         if (peek().kind == TokenKind::KwWit) {
             advance();
-            expect(TokenKind::LBrace, "'{' after 'wit' in 'wit {invariant}'");
+            expect(codes::repeatShape, TokenKind::LBrace, "'{' after 'wit' in 'wit {invariant}'");
             invariant = parseNested();
-            expect(TokenKind::RBrace, "'}' after the invariant in 'wit {invariant}'");
+            expect(codes::repeatShape, TokenKind::RBrace, "'}' after the invariant in 'wit {invariant}'");
         }
         auto body = parseBlock(std::nullopt);
         return std::make_unique<RepeatExpr>(name, std::move(binder), std::move(source), std::move(cond), std::move(invariant), std::move(body), Span{start.loc, prevEnd()});
@@ -777,9 +777,9 @@ class Parser {
     // parses [name :: bound & bound <- fallback, ...] after a function's let or a type's name
     std::vector<GenericParam> parseGenericParams() {
         std::vector<GenericParam> params;
-        expect(TokenKind::LBracket, "'[' to start the generic parameters in '[T :: Bound <- Fallback]'");
+        expect(codes::genericParameters, TokenKind::LBracket, "'[' to start the generic parameters in '[T :: Bound <- Fallback]'");
         while (peek().kind != TokenKind::RBracket && peek().kind != TokenKind::Eof) {
-            auto name = expect(TokenKind::Identifier, "a generic parameter name in '[T :: Bound <- Fallback]'");
+            auto name = expect(codes::genericParameters, TokenKind::Identifier, "a generic parameter name in '[T :: Bound <- Fallback]'");
             std::vector<std::unique_ptr<Type>> bounds;
             if (peek().kind == TokenKind::ColonColon) {
                 advance();
@@ -798,7 +798,7 @@ class Parser {
             if (peek().kind != TokenKind::Comma) break;
             advance();
         }
-        expect(TokenKind::RBracket, "']' after the generic parameters in '[T :: Bound <- Fallback]'");
+        expect(codes::genericParameters, TokenKind::RBracket, "']' after the generic parameters in '[T :: Bound <- Fallback]'");
         return params;
     }
 
@@ -811,22 +811,22 @@ class Parser {
     std::unique_ptr<FnDecl> parseFnDecl(const Token& start, bool member) {
         std::vector<GenericParam> generics;
         if (peek().kind == TokenKind::LBracket) generics = parseGenericParams();
-        expect(TokenKind::LParen, "'(' before the inputs in 'let (inputs) -> name -> (outputs) { body }'");
+        expect(codes::signatureShape, TokenKind::LParen, "'(' before the inputs in 'let (inputs) -> name -> (outputs) { body }'");
         auto inputs = parseParamList();
-        expect(TokenKind::RArrow, "'->' after the inputs in 'let (inputs) -> name -> (outputs) { body }'");
+        expect(codes::signatureShape, TokenKind::RArrow, "'->' after the inputs in 'let (inputs) -> name -> (outputs) { body }'");
         // a token that isn't a name stands in for one, unless it's the -> after a name that's missing
         auto name = peek();
-        if (!isFnName(name)) expected("a function name (an identifier or an overloadable operator) in 'let (inputs) -> name -> (outputs) { body }'", name);
+        if (!isFnName(name)) expected(codes::signatureShape, "a function name (an identifier or an overloadable operator) in 'let (inputs) -> name -> (outputs) { body }'", name);
         if (name.kind != TokenKind::RArrow) advance();
-        expect(TokenKind::RArrow, "'->' after the function's name in 'let (inputs) -> name -> (outputs) { body }'");
-        expect(TokenKind::LParen, "'(' before the outputs in 'let (inputs) -> name -> (outputs) { body }'");
+        expect(codes::signatureShape, TokenKind::RArrow, "'->' after the function's name in 'let (inputs) -> name -> (outputs) { body }'");
+        expect(codes::signatureShape, TokenKind::LParen, "'(' before the outputs in 'let (inputs) -> name -> (outputs) { body }'");
         auto outputs = parseParamList();
         std::unique_ptr<Expr> obligations = nullptr;
         if (peek().kind == TokenKind::KwWit) {
             advance();
-            expect(TokenKind::LBrace, "'{' after 'wit' in 'wit {obligations}'");
+            expect(codes::signatureShape, TokenKind::LBrace, "'{' after 'wit' in 'wit {obligations}'");
             obligations = parseNested();
-            expect(TokenKind::RBrace, "'}' after the obligations in 'wit {obligations}'");
+            expect(codes::signatureShape, TokenKind::RBrace, "'}' after the obligations in 'wit {obligations}'");
         }
         std::unique_ptr<BlockExpr> body = nullptr;
         if (!member) {
@@ -850,17 +850,17 @@ class Parser {
                 return Variant{named.path[0], std::move(payload)};
             }
         }
-        engine.printError("cherimoya requires each variant of a sum to be a name with an optional payload, please write 'Name' or 'Name[T, U]'", type->span);
+        engine.printError(codes::sumVariant, "cherimoya requires each variant of a sum to be a name with an optional payload, please write 'Name' or 'Name[T, U]'", type->span);
         return Variant{Token(TokenKind::Error, "", type->span.start), {}};
     }
 
     // parses type name[generics] <- rhs; and decides the form from the right side
     std::unique_ptr<Decl> parseTypeDecl() {
         auto start = advance();
-        auto name = expect(TokenKind::Identifier, "the type's name in 'type Name <- definition;'");
+        auto name = expect(codes::typeDefinition, TokenKind::Identifier, "the type's name in 'type Name <- definition;'");
         std::vector<GenericParam> generics;
         if (peek().kind == TokenKind::LBracket) generics = parseGenericParams();
-        expect(TokenKind::LArrow, "'<-' after the type's name in 'type Name <- definition;'");
+        expect(codes::typeDefinition, TokenKind::LArrow, "'<-' after the type's name in 'type Name <- definition;'");
         auto form = TypeForm::Newtype;
         std::unique_ptr<Type> rhs = nullptr;
         std::vector<Variant> variants;
@@ -875,7 +875,7 @@ class Parser {
                 if (peek().kind != TokenKind::Comma) break;
                 advance();
             }
-            expect(TokenKind::RBracket, "']' after the protocol's signatures in 'type Name <- [let ..., let ...];'");
+            expect(codes::protocolShape, TokenKind::RBracket, "']' after the protocol's signatures in 'type Name <- [let ..., let ...];'");
         } else {
             rhs = parseType();
             // a sum or an enum: more than one alternative
@@ -901,10 +901,10 @@ class Parser {
     // parses [name, name[field, field], ...] for export and import lists
     std::vector<ModuleItem> parseModuleItems() {
         std::vector<ModuleItem> items;
-        expect(TokenKind::LBracket, "'[' before the items in 'export [items];' or 'import [items] <- module;'");
+        expect(codes::moduleItems, TokenKind::LBracket, "'[' before the items in 'export [items];' or 'import [items] <- module;'");
         while (peek().kind != TokenKind::RBracket && peek().kind != TokenKind::Eof) {
             auto name = advance();
-            if (!isFnName(name) && name.kind != TokenKind::TypeName) expected("a name to export or import", name);
+            if (!isFnName(name) && name.kind != TokenKind::TypeName) expected(codes::moduleItems, "a name to export or import", name);
             std::vector<Token> fields;
             if (peek().kind == TokenKind::LBracket) {
                 advance();
@@ -913,13 +913,13 @@ class Parser {
                     if (peek().kind != TokenKind::Comma) break;
                     advance();
                 }
-                expect(TokenKind::RBracket, "']' after the fields in 'Name[field, field]'");
+                expect(codes::moduleItems, TokenKind::RBracket, "']' after the fields in 'Name[field, field]'");
             }
             items.push_back(ModuleItem{name, std::move(fields)});
             if (peek().kind != TokenKind::Comma) break;
             advance();
         }
-        expect(TokenKind::RBracket, "']' after the items in '[Name, Name[field]]'");
+        expect(codes::moduleItems, TokenKind::RBracket, "']' after the items in '[Name, Name[field]]'");
         return items;
     }
 
@@ -935,11 +935,11 @@ class Parser {
     std::unique_ptr<Decl> parseImport() {
         auto start = advance();
         auto items = parseModuleItems();
-        expect(TokenKind::LArrow, "'<-' before the module in 'import [items] <- module.path;'");
-        std::vector<Token> path{expect(TokenKind::Identifier, "a module name in 'import [items] <- module.path;'")};
+        expect(codes::importPath, TokenKind::LArrow, "'<-' before the module in 'import [items] <- module.path;'");
+        std::vector<Token> path{expect(codes::importPath, TokenKind::Identifier, "a module name in 'import [items] <- module.path;'")};
         while (peek().kind == TokenKind::Dot) {
             advance();
-            path.push_back(expect(TokenKind::Identifier, "a module name after '.' in 'module.path'"));
+            path.push_back(expect(codes::importPath, TokenKind::Identifier, "a module name after '.' in 'module.path'"));
         }
         expectSemi(nullptr);
         return std::make_unique<ImportDecl>(std::move(items), std::move(path), Span{start.loc, prevEnd()});
@@ -954,7 +954,7 @@ class Parser {
     // parses @name(args) and the statement it applies to, or ; when it applies to the whole file
     std::unique_ptr<Stmt> parseAttr() {
         auto start = advance();
-        auto name = expect(TokenKind::Identifier, "an attribute name after '@' in '@name(args)'");
+        auto name = expect(codes::attributeShape, TokenKind::Identifier, "an attribute name after '@' in '@name(args)'");
         std::vector<Elem> args;
         if (peek().kind == TokenKind::LParen) {
             advance();
@@ -1014,7 +1014,7 @@ public:
                 // an address takes only what it names, addr[int]
                 bool isAddress = handle.kind == TokenKind::KwAddr;
                 std::string shape = handle.kind == TokenKind::KwArr ? "'arr[T]' or 'arr[size, T]'" : "'" + std::string(handle.text) + "[T]'";
-                expect(TokenKind::LBracket, "'[' after '" + std::string(handle.text) + "' in " + shape);
+                expect(codes::handleShape, TokenKind::LBracket, "'[' after '" + std::string(handle.text) + "' in " + shape);
                 std::optional<GenericArg> arg = std::nullopt;
                 std::unique_ptr<Type> inner;
                 auto first = parseGenericArg();
@@ -1024,17 +1024,17 @@ public:
                     inner = parseType(false);
                     // an address names a type and nothing else, which is still read whole, so what's after it parses
                     if (isAddress) {
-                        engine.printError("cherimoya expected only the type the address names in 'addr[T]', got a size or an allocator too", arg->value ? arg->value->span : arg->type->span);
+                        engine.printError(codes::addressShape, "cherimoya expected only the type the address names in 'addr[T]', got a size or an allocator before it instead", arg->value ? arg->value->span : arg->type->span);
                         arg = std::nullopt;
                     }
                 } else if (first.type) {
                     inner = std::move(first.type);
                 } else {
                     Span at = first.value ? first.value->span : Span{start, prevEnd()};
-                    engine.printError("cherimoya expected a type for " + std::string(isAddress ? "the address to name" : "the handle to hold") + " in " + shape + ", got a value instead", at);
+                    engine.printError(codes::handleShape, "cherimoya expected a type for " + std::string(isAddress ? "the address to name" : "the handle to hold") + " in " + shape + ", got a value instead", at);
                     inner = std::make_unique<ErrorType>(at);
                 }
-                expect(TokenKind::RBracket, "']' after " + std::string(isAddress ? "what the address names" : "what the handle holds") + " in " + shape);
+                expect(codes::handleShape, TokenKind::RBracket, "']' after " + std::string(isAddress ? "what the address names" : "what the handle holds") + " in " + shape);
                 if (inner->kind == TypeKind::Qualified) static_cast<QualifiedType&>(*inner).position = QualPosition::Elements;
                 type = std::make_unique<HandleType>(handle, std::move(arg), std::move(inner), Span{start, prevEnd()});
                 break;
@@ -1046,13 +1046,13 @@ public:
                 if (peek().kind == TokenKind::Identifier && peekAt(1).kind == TokenKind::ColonColon) {
                     std::vector<Param> fields;
                     while (true) {
-                        auto name = expect(TokenKind::Identifier, "a field name in '[name :: Type]'");
-                        expect(TokenKind::ColonColon, "'::' after the field name in '[name :: Type]'");
+                        auto name = expect(codes::recordType, TokenKind::Identifier, "a field name in '[name :: Type]'");
+                        expect(codes::recordType, TokenKind::ColonColon, "'::' after the field name in '[name :: Type]'");
                         fields.push_back(Param{name, parseType(), nullptr});
                         if (peek().kind != TokenKind::Comma) break;
                         advance();
                     }
-                    expect(TokenKind::RBracket, "']' after the record's fields in '[name :: Type, name :: Type]'");
+                    expect(codes::recordType, TokenKind::RBracket, "']' after the record's fields in '[name :: Type, name :: Type]'");
                     type = std::make_unique<RecordType>(std::move(fields), Span{start, prevEnd()});
                 } else {
                     std::vector<std::unique_ptr<Type>> elems;
@@ -1061,7 +1061,7 @@ public:
                         if (peek().kind != TokenKind::Comma) break;
                         advance();
                     }
-                    expect(TokenKind::RBracket, "']' after the tuple's types in '[A, B]'");
+                    expect(codes::tupleType, TokenKind::RBracket, "']' after the tuple's types in '[A, B]'");
                     type = std::make_unique<TupleType>(std::move(elems), Span{start, prevEnd()});
                 }
                 break;
@@ -1075,7 +1075,7 @@ public:
             default: {
                 // what follows a type, a <- or a comma or a closing bracket, is left for the code around it
                 auto tok = peek();
-                expected("a type", tok);
+                expected(codes::typeExpected, "a type", tok);
                 if (!isBoundary(tok.kind) && tok.kind != TokenKind::LArrow && tok.kind != TokenKind::Comma) advance();
                 return std::make_unique<ErrorType>(tokSpan(tok));
             }
@@ -1103,9 +1103,9 @@ public:
     // parses the sequence of statements in between {}
     std::unique_ptr<BlockExpr> parseBlock(std::optional<Token> name) {
         auto start = name ? name->loc : peek().loc;
-        expect(TokenKind::LBrace, "'{' to start a block in '{ statements }'");
+        expect(codes::blockShape, TokenKind::LBrace, "'{' to start a block in '{ statements }'");
         auto stmts = parseStmts(TokenKind::RBrace);
-        expect(TokenKind::RBrace, "'}' after the statements in '{ statements }'");
+        expect(codes::blockShape, TokenKind::RBrace, "'}' after the statements in '{ statements }'");
         return std::make_unique<BlockExpr>(name, std::move(stmts), Span{start, prevEnd()});
     }
 
@@ -1159,7 +1159,7 @@ public:
             auto arrow = advance();
             std::optional<Token> op = std::nullopt;
             if (arrow.kind == TokenKind::CompoundAssign) op = arrow;
-            if (!isPlace(*expr)) engine.printError("cherimoya requires the left side of an assignment to be a place, please assign to a name, field, index, dereference, or _", expr->span);
+            if (!isPlace(*expr)) engine.printError(codes::assignmentPlace, "cherimoya requires the left side of an assignment to be a place, please assign to a name, field, index, dereference, or _", expr->span);
             auto value = parseNested();
             expectSemi(value.get());
             return std::make_unique<AssignStmt>(std::move(expr), op, std::move(value), Span{start, prevEnd()});
@@ -1204,7 +1204,7 @@ public:
             // a name, where if ( gets pointed at match since there is no if
             case TokenKind::Identifier:
                 if (tok.text == "if" && peek().kind == TokenKind::LParen) {
-                    engine.printError("cherimoya uses 'match' for conditional flow instead of 'if' as follows: match { (condition) -> { ... } _ -> { ... } }", tokSpan(tok));
+                    engine.printError(codes::noIf, "cherimoya uses 'match' for conditional flow instead of 'if' as follows: match { (condition) -> { ... } _ -> { ... } }", tokSpan(tok));
                     // skips the condition and the block after it so they don't report errors of their own
                     size_t close = findClose(cursor);
                     if (tokens[close].kind == TokenKind::RParen) cursor = close + 1;
@@ -1231,8 +1231,10 @@ public:
 
             // a method with no object, which is what a pipe gives one: the .len in xs |> .len
             case TokenKind::Dot: {
-                auto name = expect(TokenKind::Identifier, "a method name after '.' in 'x |> .method'");
-                left = std::make_unique<MemberExpr>(nullptr, name.text, Span{tok.loc, tokSpan(name).end});
+                auto name = expect(codes::pipedMethod, TokenKind::Identifier, "a method name after '.' in 'x |> .method'");
+                // a name that isn't one is already reported, so sema doesn't look it up as a method too
+                if (name.kind != TokenKind::Identifier) left = std::make_unique<ErrorExpr>(Span{tok.loc, tokSpan(name).end});
+                else left = std::make_unique<MemberExpr>(nullptr, name.text, Span{tok.loc, tokSpan(name).end});
                 break;
             }
 
@@ -1299,7 +1301,7 @@ public:
                     left = std::make_unique<UnaryExpr>(tok, std::move(operand), span);
                     break;
                 }
-                expected("an expression", tok);
+                expected(codes::expressionExpected, "an expression", tok);
                 left = std::make_unique<ErrorExpr>(tokSpan(tok));
                 // a closing bracket or semicolon is left for the code around this to find
                 if (isBoundary(tok.kind) && tok.kind != TokenKind::Eof) cursor--;
@@ -1324,7 +1326,7 @@ public:
                     if (left->kind == ExprKind::Pack && arrow) {
                         std::vector<std::unique_ptr<Expr>> captures;
                         for (auto& e : static_cast<PackExpr&>(*left).elems) {
-                            if (e.name) engine.printError("cherimoya requires captures to be unnamed, please remove '" + std::string(e.name->text) + " <-'", tokSpan(*e.name), {}, {unnaming(e)});
+                            if (e.name) engine.printError(codes::captureUnnamed, "cherimoya requires captures to be unnamed, please remove '" + std::string(e.name->text) + " <-'", tokSpan(*e.name), {}, {unnaming(e)});
                             captures.push_back(std::move(e.value));
                         }
                         left = parseClosure(start, std::move(captures));
@@ -1341,7 +1343,7 @@ public:
                     std::vector<std::unique_ptr<Expr>> args;
                     if (contents->kind == ExprKind::Pack) {
                         for (auto& e : static_cast<PackExpr&>(*contents).elems) {
-                            if (e.name) engine.printError("cherimoya requires index arguments to be unnamed, please remove '" + std::string(e.name->text) + " <-'", tokSpan(*e.name), {}, {unnaming(e)});
+                            if (e.name) engine.printError(codes::indexUnnamed, "cherimoya requires index arguments to be unnamed, please remove '" + std::string(e.name->text) + " <-'", tokSpan(*e.name), {}, {unnaming(e)});
                             args.push_back(std::move(e.value));
                         }
                     } else {
@@ -1352,8 +1354,10 @@ public:
                 }
 
                 case TokenKind::Dot: {
-                    auto name = expect(TokenKind::Identifier, "a field name after '.' in 'value.field'");
-                    left = std::make_unique<MemberExpr>(std::move(left), name.text, Span{start, tokSpan(name).end});
+                    auto name = expect(codes::fieldAccess, TokenKind::Identifier, "a field name after '.' in 'value.field'");
+                    // a name that isn't one is already reported, so sema doesn't look the field up too
+                    if (name.kind != TokenKind::Identifier) left = std::make_unique<ErrorExpr>(Span{start, tokSpan(name).end});
+                    else left = std::make_unique<MemberExpr>(std::move(left), name.text, Span{start, tokSpan(name).end});
                     break;
                 }
 
@@ -1364,7 +1368,7 @@ public:
                         auto bracket = advance();
                         pack = parsePack(bracket);
                     } else {
-                        engine.printError("cherimoya requires construction to build from a pack, please write 'T <- [...]'", tokSpan(op));
+                        engine.printError(codes::constructionPack, "cherimoya requires construction to build from a pack, please write 'T <- [...]'", tokSpan(op));
                         pack = parseExpr(bindingPower(1));
                     }
                     left = std::make_unique<ConstructExpr>(std::move(left), std::move(pack), Span{start, prevEnd()});
@@ -1381,7 +1385,7 @@ public:
                     auto reportMixed = [&]() {
                         if (!mixed) return;
                         std::string a = mixed->spelling, b(op.text);
-                        engine.printError("cherimoya requires parentheses to mix '" + a + "' and '" + b + "', please write '(x " + a + " y) " + b + " z' or 'x " + a + " (y " + b + " z)'",
+                        engine.printError(codes::operatorMixing, "cherimoya requires parentheses to mix '" + a + "' and '" + b + "', please write '(x " + a + " y) " + b + " z' or 'x " + a + " (y " + b + " z)'",
                             tokSpan(op), {}, groupings(a, b, before, lastOperand, prevEnd()));
                     };
                     prev = op.op;
@@ -1394,7 +1398,7 @@ public:
                         auto rhs = parseExpr(nextBP, op.op, start);
                         left = std::make_unique<PipeExpr>(op, std::move(left), std::move(rhs), Span{start, prevEnd()});
                         if (other) {
-                            engine.printError("cherimoya requires parentheses to mix '|>' and '<|', please write '(x |> f) <| y' or 'x |> (f <| y)'",
+                            engine.printError(codes::pipeMixing, "cherimoya requires parentheses to mix '|>' and '<|', please write '(x |> f) <| y' or 'x |> (f <| y)'",
                                 tokSpan(op), {}, groupings(other->spelling, std::string(op.text), before, lastOperand, prevEnd()));
                         }
                         reportMixed();

@@ -30,6 +30,20 @@ endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS src/codegen/printers.py)
 configure_file(src/codegen/printers.hpp.in ${CMAKE_CURRENT_BINARY_DIR}/generated/printers.hpp @ONLY)
 
+# every file in docs/errors explains one code, and they're embedded as raw strings keyed by the file's name, so cheri guide works offline
+file(GLOB CHERI_ERROR_DOCS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/docs/errors/*.md)
+set(CHERI_EXPLANATIONS "")
+foreach(doc ${CHERI_ERROR_DOCS})
+  get_filename_component(code ${doc} NAME_WE)
+  file(READ ${doc} text)
+  if(text MATCHES "\\)md\"")
+    message(FATAL_ERROR "${doc} can't contain )md\", which ends the raw string it's embedded in")
+  endif()
+  string(APPEND CHERI_EXPLANATIONS "    {\"${code}\", R\"md(${text})md\"},\n")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${doc})
+endforeach()
+configure_file(src/diagnostics/explanations.hpp.in ${CMAKE_CURRENT_BINARY_DIR}/generated/explanations.hpp @ONLY)
+
 add_library(cheri INTERFACE)
 target_include_directories(cheri INTERFACE
     ${CMAKE_CURRENT_BINARY_DIR}/generated
@@ -120,6 +134,21 @@ if(CHERI_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/scripts/debug_test.sh
     $<TARGET_FILE:cheri_bin> ${test}
     ${CMAKE_CURRENT_BINARY_DIR}/debug ${LLVM_DWARFDUMP})
+  endforeach()
+
+  # every code has an explanation, every explanation a code, and the list of codes names them all
+  add_test(NAME "Errors: every code explained"
+           COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/codes_test.sh
+           WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+  # every code's explanation in docs/errors has a wrong program, which has to report exactly that code, and a fixed one, which has to check clean
+  foreach(doc ${CHERI_ERROR_DOCS})
+    get_filename_component(code ${doc} NAME_WE)
+    if(NOT code STREQUAL "README")
+      add_test(NAME "Error: ${code}"
+               COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/error_test.sh $<TARGET_FILE:cheri_bin> ${doc} ${CMAKE_CURRENT_BINARY_DIR}/errors)
+      set_tests_properties("Error: ${code}" PROPERTIES FIXTURES_REQUIRED basics)
+    endif()
   endforeach()
 
   # the tree-sitter grammar in tree-sitter has to parse every program under tests without an error and pass its corpus tests, which is skipped when its node_modules isn't installed

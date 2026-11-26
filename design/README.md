@@ -133,7 +133,8 @@ The pipeline itself, from tokens to the first executable.
 - [12.10](commit_12.10.md) cheri test
 - [12.11](commit_12.11.md) Feature Tests
 - [12.12](commit_12.12.md) The Spec, the Reference and the Book
-- 12.13 Agent tooling: `cheri guide`, printing sections of the book and the reference, and `--diagnostics=json` with fixes
+- [12.13](commit_12.13.md) Error Codes
+- 12.14 Agent tooling: `--diagnostics=json` and SARIF, test results as JSON, and `cheri guide` by topic or reference section
 - Planned: `cheri fmt`, `cheri doc`, `cheri bench`, a REPL with a JIT, custard (the package manager), hot reload
 
 ### Not Placed Yet

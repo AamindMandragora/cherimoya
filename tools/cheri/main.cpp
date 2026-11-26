@@ -23,6 +23,7 @@
 #include "parser.hpp"
 #include "codegen.hpp"
 #include "server.hpp"
+#include "explanations.hpp"
 
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/LegacyPassManager.h>
@@ -134,6 +135,7 @@ static void usage(std::ostream& out) {
            "  test <path> [name]    run the tests in a .toya file, or in every one under a directory, or only those whose names hold name\n"
            "  test ... --exact      run only the test named exactly name\n"
            "  test ... --runner <command>  run each test binary under command, like 'valgrind -q', split at its spaces\n"
+           "  guide [code]          explain an error's code, like S001, or list every code\n"
            "  lsp                   run the language server, which an editor starts and talks to over stdin and stdout\n"
            "  help                  print this message\n"
            "\n"
@@ -162,6 +164,27 @@ static void usage(std::ostream& out) {
            "  --static              link a static executable\n"
            "  -L<dir> -l<lib>       search a directory for libraries, and link one\n"
            "  --link-arg <arg>      pass an argument straight to the linker\n";
+}
+
+// prints a code's explanation, or the list of every code when there's no code
+static int guide(int argc, char** argv) {
+    std::string_view code = argc >= 3 ? argv[2] : "README";
+    for (auto& [id, text] : explanations) {
+        if (id == code) {
+            std::cout << text;
+            return 0;
+        }
+    }
+    std::cerr << "cheri: no rule has the code '" << code << "', see 'cheri guide' for every code" << std::endl;
+    return 1;
+}
+
+// points at cheri guide for the first error, once in a run, so a run with many errors doesn't repeat it
+static void pointAtGuide(const DiagnosticEngine& engine) {
+    static bool isPointed = false;
+    if (isPointed || !engine.hadErrors()) return;
+    isPointed = true;
+    std::cout << "run 'cheri guide " << engine.firstErrorCode() << "' for more about this error" << std::endl;
 }
 
 // reports a bad command line and points at the help
@@ -522,6 +545,7 @@ static void testFile(const Options& options, const std::string& path, Tally& tal
         return;
     }
     if (checked.engine->hadErrors()) {
+        pointAtGuide(*checked.engine);
         tally.unbuilt++;
         return;
     }
@@ -608,6 +632,8 @@ int main(int argc, char** argv) {
             platform::binaryStdio();
             return Server(std::cin, std::cout).run();
         }
+        // the guide reads nothing but the explanations built into cheri
+        if (first == "guide") return guide(argc, argv);
     }
     if (argc < 2) {
         usage(std::cerr);
@@ -626,7 +652,10 @@ int main(int argc, char** argv) {
         std::cerr << "cheri: '" << options.input << "' is empty or can't be read" << std::endl;
         return 1;
     }
-    if (checked.engine->hadErrors()) return 1;
+    if (checked.engine->hadErrors()) {
+        pointAtGuide(*checked.engine);
+        return 1;
+    }
     if (options.command == "check") return 0;
 
     std::string stem = std::filesystem::path(options.input).stem().string();

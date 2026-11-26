@@ -97,6 +97,7 @@ cheri build prog.moya            # an executable named prog
 cheri run prog.moya              # build, run, and exit with the program's exit code
 cheri check prog.moya            # check without building
 cheri test tests/                # run the tests in every .toya file under tests/
+cheri guide S001                 # explain an error by its code, or list every code
 cheri lsp                        # the language server, which an editor starts
 cheri help                       # every command and option
 ```
@@ -115,6 +116,8 @@ The most useful options:
 | `-L<dir>`, `-l<lib>`, `--link-arg <arg>` | passed straight to the linker |
 
 `cheri build prog.moya --emit-llvm -O0` prints the IR exactly as the compiler wrote it, before any optimization.
+
+Every error and warning has a code, like `error[S001]`, and `cheri guide S001` explains the rule behind it with a program that breaks it and the same program fixed. The explanations are in [`docs/errors/`](docs/errors/).
 
 ## Writing Tests
 

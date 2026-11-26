@@ -4,7 +4,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
-#include "diagnostics.hpp"
+#include "codes.hpp"
 #include "type.hpp"
 
 class FnDecl;
@@ -72,7 +72,7 @@ public:
         auto it = symbols.find(symbol->name);
         if (it != symbols.end()) {
             std::string name(symbol->name);
-            engine.printError("cherimoya requires names in one scope to be distinct, please rename this '" + name + "' or remove the first one",
+            engine.printError(codes::namesDistinct, "cherimoya requires names in one scope to be distinct, please rename this '" + name + "' or remove the first one",
                 symbol->span, {{"'" + name + "' was first declared here", it->second->span}});
         } else {
             symbols[symbol->name] = symbol;

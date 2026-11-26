@@ -1,0 +1,9 @@
+#pragma once
+
+#include <string_view>
+#include <utility>
+
+// every code's explanation from docs/errors, by its code, with the list of every code under README, which CMake fills in so cheri guide always matches the compiler
+inline constexpr std::pair<std::string_view, std::string_view> explanations[] = {
+@CHERI_EXPLANATIONS@
+};

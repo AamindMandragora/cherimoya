@@ -8,7 +8,7 @@
 #include <unordered_set>
 #include <vector>
 #include "ast.hpp"
-#include "diagnostics.hpp"
+#include "codes.hpp"
 #include "scope.hpp"
 #include "target.hpp"
 
@@ -400,14 +400,14 @@ class Ownership {
 
     void usedAfterMove(const Symbol& symbol, Span use, Span moved) {
         std::string name(symbol.name);
-        engine.printError("cherimoya requires '" + name + "' to hold a value to use it, please assign it again after moving it on line " + lineOf(moved), use, {{"'" + name + "' moved here", moved}});
+        engine.printError(codes::useAfterMove, "cherimoya requires '" + name + "' to hold a value to use it, please assign it again after moving it on line " + lineOf(moved), use, {{"'" + name + "' moved here", moved}});
     }
 
     // reports an owner that has to be moved still holding its value where control leaves its scope, an unscoped input at the end of its function or an unscoped binding at the end of its scope
     void unmoved(const Symbol& symbol, Span span) {
         std::string name(symbol.name);
         std::string what = symbol.kind == SymbolKind::Param ? "before '" + std::string(function) + "' ends" : "before its scope ends";
-        engine.printError("cherimoya requires '" + name + "' to be moved " + what + ", please yield it or pass it to an unscoped input", span, {{"'" + name + "' is declared here", symbol.span}});
+        engine.printError(codes::unscopedUnmoved, "cherimoya requires '" + name + "' to be moved " + what + ", please yield it or pass it to an unscoped input", span, {{"'" + name + "' is declared here", symbol.span}});
     }
 
     // what a step does to the owners: a use of one that moved is an error, reported once, a move leaves it holding nothing, binding or replacing gives it a value, where replacing one that still held a value frees that first, and leaving scopes frees their owners still holding values, which an owner that has to be moved can't be left with
@@ -520,7 +520,7 @@ class Ownership {
                     if (now == out[from]->end()) continue;
                     if (!before && now->second) {
                         std::string name(symbol->name);
-                        engine.printError("cherimoya requires '" + name + "' to hold a value at the end of every iteration, please assign it again after moving it on line " + lineOf(*now->second), *now->second, {{"'" + name + "' is declared here, outside the loop", symbol->span}});
+                        engine.printError(codes::loopMove, "cherimoya requires '" + name + "' to hold a value at the end of every iteration, please assign it again after moving it on line " + lineOf(*now->second), *now->second, {{"'" + name + "' is declared here, outside the loop", symbol->span}});
                     } else if (before && !now->second) {
                         if (facts.mustMove.count(symbol)) {
                             unmoved(*symbol, edge->span);
@@ -575,7 +575,7 @@ class Ownership {
                             std::string root(viewed.root->name);
                             std::string name(view->name);
                             std::string how = view->isView ? "views it" : "holds its address";
-                            engine.printError("cherimoya requires '" + root + "' to stay where it is while '" + name + "' " + how + ", please use '" + name + "' for the last time before this", step.span, {{"'" + name + "' is used here, after it", use}});
+                            engine.printError(codes::viewedMoved, "cherimoya requires '" + root + "' to stay where it is while '" + name + "' " + how + ", please use '" + name + "' for the last time before this", step.span, {{"'" + name + "' is used here, after it", use}});
                             break;
                         }
                     }
